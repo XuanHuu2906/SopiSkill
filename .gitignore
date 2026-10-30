@@ -10,6 +10,14 @@ venv/
 node_modules/
 .next/
 out/
+*.tsbuildinfo
+
+# Goi y cua coding agent (tai lieu ca nhan, khong phai source san pham)
+.agents/
+.opencode/node_modules/
+SKILLS_SETUP.md
+skills-lock.json
+validate_skills.py
 
 # Environment
 .env
@@ -24,6 +32,15 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+# Office lock files
+~$*
+# Bao cao phan tich ben ngoai / tai lieu ca nhan (khong phai source san pham)
+Bao_cao_*.docx
+*.docx
 
 # Logs
 *.log
+
+# Database backups (chứa dữ liệu người dùng thật — không commit)
+backup_*.sql
+*.dump

@@ -2,6 +2,9 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "deploy/deepseek-ai/deepseek-v4.1-flash-1017",
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git"
+  ],
   "provider": {
     "deploy": {
       "npm": "@ai-sdk/openai-compatible",
