@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Index, Integer, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -112,6 +112,7 @@ class CourseProposal(Base):
 
 class GenerationJob(Base):
     __tablename__ = "generation_jobs"
+    __table_args__ = (Index("ix_generation_jobs_status_created", "status", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), index=True)
@@ -120,7 +121,16 @@ class GenerationJob(Base):
     lessons_done: Mapped[int] = mapped_column(Integer, default=0)
     lessons_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
-    attempts_count: Mapped[int] = mapped_column(Integer, default=1)
+    # Số lần worker đã claim job (bắt đầu từ 0). Bounded bởi `max_attempts`.
+    attempts_count: Mapped[int] = mapped_column(Integer, default=0)
+    # P1.2 reliability
+    proposal_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatch_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    last_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -186,6 +196,7 @@ class LessonAttempt(Base):
     score_total: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     results: Mapped[list] = mapped_column(JSONVariant, default=list)
+    xp_awarded: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -193,12 +204,14 @@ class LessonAttempt(Base):
 
 class XpEvent(Base):
     __tablename__ = "xp_events"
+    __table_args__ = (Index("ix_xp_events_lesson_version", "user_id", "lesson_id", "content_version"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     lesson_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("lessons.id"), nullable=True)
     amount: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
+    content_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

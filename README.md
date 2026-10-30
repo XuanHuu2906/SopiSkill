@@ -72,7 +72,7 @@ pytest -v
 E2E_BASE=http://127.0.0.1:8001 python e2e_acceptance.py
 ```
 
-Kết quả hiện tại: **33/33 unit+integration tests pass; 21/21 E2E acceptance pass trên Docker Compose stack** (auth + CSRF + ownership + generation + quiz). Chi tiết: `docs/development-progress.md`.
+Kết quả hiện tại: **119 unit+integration tests pass (+6 PostgreSQL race tests riêng); 35/35 E2E acceptance pass trên Docker Compose stack**. Mock provider vẫn là mặc định. Adapter LLM thật (OpenAI-compatible) có **28 mocked tests** và đã smoke test thật 3 request qua Deploy.com/DeepSeek (xem `docs/llm-provider.md`); tự động hoá real-provider trong CI vẫn **BLOCKED**. Chi tiết: `docs/development-progress.md`, `docs/llm-provider.md`.
 
 ## Alembic migration
 
@@ -94,9 +94,10 @@ Kết quả hiện tại: **33/33 unit+integration tests pass; 21/21 E2E accepta
 | POST | `/v1/courses/{id}/approve` | Duyệt → tạo generation job |
 | GET | `/v1/courses/{id}/generation` | Trạng thái job (poll 2s) |
 | POST | `/v1/courses/{id}/retry` | Thử sinh lại |
+| GET | `/v1/courses` | **Dashboard**: danh sách course của chính user (limit/offset, tiến độ, resume) |
 | GET | `/v1/courses/{id}` | Course + path |
-| GET | `/v1/lessons/{id}` | Blocks đầy đủ |
-| POST | `/v1/lessons/{id}/attempts` | Nộp kết quả quiz (chấm server-side) |
+| GET | `/v1/lessons/{id}` | **Public blocks** (không có answer key; order/match trả id đã shuffle) |
+| POST | `/v1/lessons/{id}/attempts` | Nộp quiz — chấm deterministic từ private key trong DB; idempotent theo `clientAttemptId` |
 
 ## Trạng thái triển khai
 
@@ -109,3 +110,4 @@ Xem `docs/development-progress.md`. Tóm tắt: Course Generator + Lesson Engine
 - `docs/migration-runbook.md` — runbook chuyển DB cũ sang Alembic
 - `docs/implementation-plan.md` — kế hoạch slice
 - `docs/development-progress.md` — nhật ký tiến độ + giới hạn
+- `docs/llm-provider.md` — cấu hình provider LLM, taxonomy lỗi, rollback về mock

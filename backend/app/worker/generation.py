@@ -1,18 +1,35 @@
-"""Celery app + generation task.
+"""Generation task — atomic claim, lease heartbeat, bounded retry.
 
-Có 2 chế độ:
-1. Redis khả dụng: task chạy qua Celery worker (bất đồng bộ thật).
-2. Fallback: chạy task inline ngay trong request (khi REDIS_URL rỗng hoặc
-   không kết nối được) — vẫn giữ trạng thái job trong DB để client poll.
+Luồng (P1.2):
+  1. `claim_job` nguyên tử (UPDATE ... WHERE queued | lease hết hạn RETURNING).
+     Không claim được ⇒ no-op (redelivery, worker khác đang chạy, hoặc đã xong).
+  2. Mỗi lesson: `renew_lease` + kiểm tra `is_superseded` trước khi ghi.
+  3. Lỗi phân loại: transient → requeue có backoff (bounded); fatal → failed.
+  4. Kết thúc chỉ ghi khi vẫn giữ lease (guard ở mỗi UPDATE).
+
+Dispatch tách ra `job_service` để route approve/retry không phải tự biết Celery.
 """
 
 import asyncio
+import json
+import logging
 import uuid
+from datetime import UTC, datetime
 
 from app.core.config import get_settings
-from app.models import Course, CourseProposal, CourseStatus, GenerationJob, JobStatus, Lesson, LessonStatus, Unit
+from app.models import (
+    Course,
+    CourseProposal,
+    GenerationJob,
+    JobStatus,
+    Lesson,
+    LessonStatus,
+    Unit,
+)
 from app.providers import SchemaInvalidError, get_provider
 from app.schemas.schemas import ProposalPayload
+
+logger = logging.getLogger(__name__)
 
 _settings = get_settings()
 
@@ -26,7 +43,7 @@ if _settings.redis_url:
         if _configured_app is not None:
             _celery_app = _configured_app
             _use_celery = True
-    except Exception:
+    except Exception:  # pragma: no cover — thiếu celery/redis không được làm sập app
         _celery_app = None
         _use_celery = False
 
@@ -35,166 +52,197 @@ def get_celery_app():
     return _celery_app
 
 
-def dispatch_generation(job_id: str) -> None:
-    """Gửi job tới worker hoặc chạy inline fallback."""
-    if _use_celery and _celery_app is not None:
-        _celery_app.send_task("app.worker.generation.run_generation_task", args=[job_id])
-        return
-    # Fallback inline — chạy background task nếu đang trong event loop
-    # (request handler); nếu không, tạo loop mới (worker thread / script).
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(_run_generation_async(job_id))
-    else:
-        loop.create_task(_run_generation_async(job_id))
+def _content_signature(blocks) -> str:
+    """Chữ ký nội dung ổn định (JSON round-trip giống cách lưu JSONB/JSON).
+
+    Pydantic model_dump() giữ tuple cho `pairs`, còn DB trả về list → so sánh
+    trực tiếp sẽ luôn "khác". Chuẩn hoá qua JSON trước khi so.
+    """
+    return json.dumps(blocks or [], sort_keys=True, ensure_ascii=False)
 
 
 async def _run_generation_async(job_id: str) -> None:
-    """Thân task generation — idempotent theo job_id.
+    """Thân task generation — idempotent + lease-safe.
 
     Dùng engine RIÊNG tạo trong task này (mỗi asyncio.run tạo event loop mới;
     dùng chung engine/pool module-level gây lỗi asyncpg cross-loop với Celery).
     """
-    from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     from app.db.session import engine as app_engine
 
-    # Dùng engine của app nếu URL trùng (tránh tạo bảng mới trên sqlite :memory:);
-    # Celery worker sẽ có engine riêng theo settings của process đó.
     settings = get_settings()
-    engine = app_engine if settings.database_url.startswith("sqlite") else create_async_engine(
-        settings.database_url, pool_pre_ping=True
+    engine = (
+        app_engine
+        if settings.database_url.startswith("sqlite")
+        else create_async_engine(settings.database_url, pool_pre_ping=True)
     )
     WorkerSession = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
     try:
-        await _generate(WorkerSession, select, job_id)
+        await _generate(WorkerSession, job_id)
     finally:
         if engine is not app_engine:
             await engine.dispose()
 
 
-async def _generate(WorkerSession, select, job_id: str) -> None:
+async def _generate(WorkerSession, job_id: str) -> None:
+    from sqlalchemy import select
+
+    from app.services import job_service
+
+    try:
+        jid = uuid.UUID(job_id)
+    except (ValueError, TypeError):
+        return
+
     async with WorkerSession() as db:
-        try:
-            jid = uuid.UUID(job_id)
-        except (ValueError, TypeError):
+        job = await job_service.claim_job(db, jid)
+        if job is None:
+            logger.info("generation job not claimed (done/claimed/exhausted) job_id=%s", jid)
             return
 
-        result = await db.execute(select(GenerationJob).where(GenerationJob.id == jid))
-        job = result.scalar_one_or_none()
-        if job is None or job.status in (JobStatus.ready,):
-            return  # đã hoàn tất — no-op (idempotency khi redeliver)
-
-        course_result = await db.execute(select(Course).where(Course.id == job.course_id))
-        course = course_result.scalar_one_or_none()
+        # Giữ khóa ngoại dạng scalar: sau rollback các attribute của ORM object bị
+        # hết hạn, đọc `course.id` sẽ ném MissingGreenlet.
+        course_id = job.course_id
+        course = (
+            await db.execute(select(Course).where(Course.id == course_id))
+        ).scalar_one_or_none()
         if course is None:
-            job.status = JobStatus.failed
-            job.error = {"code": "COURSE_MISSING", "message": "Course không tồn tại"}
-            await db.commit()
+            await job_service.fail_or_requeue(db, jid, course_id, RuntimeError("COURSE_MISSING"))
             return
 
         try:
-            job.status = JobStatus.running
-            job.stage = "reading_answers"
-            await db.commit()
-
-            # Lấy proposal
-            prop_result = await db.execute(
-                select(CourseProposal)
-                .where(CourseProposal.course_id == course.id)
-                .order_by(CourseProposal.version.desc())
-                .limit(1)
-            )
-            proposal_row = prop_result.scalars().first()
-            if proposal_row is None:
-                raise RuntimeError("NO_PROPOSAL")
-            proposal = ProposalPayload.model_validate(proposal_row.payload)
-
-            provider = get_provider()
-
-            job.stage = "outline"
-            await db.commit()
-
-            # Sinh units + lessons (upsert theo order_index — không trùng khi retry)
-            lesson_total = sum(len(u.lessonTitles) for u in proposal.units)
-            job.lessons_total = lesson_total
-            job.stage = "lessons"
-            await db.commit()
-
-            existing_units = (
-                await db.execute(select(Unit).where(Unit.course_id == course.id))
-            ).scalars().all()
-            unit_by_order = {u.order_index: u for u in existing_units}
-
-            previous_titles: list[str] = []
-            lesson_index = 0
-            for u_idx, proposal_unit in enumerate(proposal.units):
-                unit = unit_by_order.get(u_idx)
-                if unit is None:
-                    unit = Unit(course_id=course.id, order_index=u_idx, title=proposal_unit.title, blurb=proposal_unit.blurb)
-                    db.add(unit)
-                    await db.flush()
-                else:
-                    unit.title = proposal_unit.title
-                    unit.blurb = proposal_unit.blurb
-
-                existing_lessons = (
-                    await db.execute(
-                        select(Lesson).where(Lesson.unit_id == unit.id)
-                    )
-                ).scalars().all()
-                lesson_by_order = {l.order_index: l for l in existing_lessons}
-
-                for l_idx, lesson_title in enumerate(proposal_unit.lessonTitles):
-                    lesson_index += 1
-                    content = await provider.generate_lesson(
-                        course.topic, proposal, proposal_unit.title, lesson_title, previous_titles
-                    )
-                    if content is None or not content.blocks:
-                        raise SchemaInvalidError(f"Lesson không hợp lệ: '{lesson_title}'")
-
-                    if lesson_by_order.get(l_idx) is None:
-                        lesson_row = Lesson(
-                            unit_id=unit.id,
-                            course_id=course.id,
-                            order_index=l_idx,
-                            title=content.title,
-                            content=content.model_dump()["blocks"],
-                            content_version=1,
-                            status=LessonStatus.ready,
-                        )
-                        db.add(lesson_row)
-                    else:
-                        lesson_row = lesson_by_order[l_idx]
-                        lesson_row.title = content.title
-                        lesson_row.content = content.model_dump()["blocks"]
-                        lesson_row.content_version += 1
-                        lesson_row.status = LessonStatus.ready
-
-                    previous_titles.append(content.title)
-                    job.lessons_done = lesson_index
-                    await db.commit()
-
-            course.status = CourseStatus.ready
-            job.status = JobStatus.ready
-            job.stage = "done"
-            await db.commit()
-
-        except (SchemaInvalidError, Exception) as exc:  # noqa: BLE001
+            await _generate_lessons(db, job, course)
+        except Exception as exc:  # noqa: BLE001 — mọi lỗi phải phân loại rõ ràng
             await db.rollback()
-            # Reload sau rollback
-            job = (await db.execute(select(GenerationJob).where(GenerationJob.id == jid))).scalar_one_or_none()
-            course = (await db.execute(select(Course).where(Course.id == course.id))).scalar_one_or_none()
-            if job is not None:
-                job.status = JobStatus.failed
-                job.error = {"code": "GENERATION_FAILED", "message": str(exc)[:500]}
-                await db.commit()
-            if course is not None:
-                course.status = CourseStatus.failed
-                await db.commit()
+            outcome = await job_service.fail_or_requeue(db, jid, course_id, exc)
+            if outcome == "queued":
+                fresh = (
+                    await db.execute(select(GenerationJob).where(GenerationJob.id == jid))
+                ).scalar_one()
+                await job_service.dispatch_job(db, jid, countdown=job_service.retry_countdown(fresh))
+            logger.warning(
+                "generation job failed job_id=%s outcome=%s error=%s",
+                jid,
+                outcome,
+                type(exc).__name__,
+            )
+
+
+async def _generate_lessons(db, job: GenerationJob, course: Course) -> None:
+    from sqlalchemy import select
+
+    from app.services import job_service
+
+    settings = get_settings()
+    job.stage = "reading_answers"
+    await db.commit()
+
+    # Pin proposal: dùng đúng version đã snapshot cho job (nếu có), tránh sinh từ
+    # proposal mới hơn trong khi job cũ đang chạy.
+    proposal_query = select(CourseProposal).where(CourseProposal.course_id == course.id)
+    if job.proposal_version is not None:
+        proposal_query = proposal_query.where(CourseProposal.version == job.proposal_version)
+    else:
+        proposal_query = proposal_query.order_by(CourseProposal.version.desc())
+    proposal_row = (await db.execute(proposal_query.limit(1))).scalars().first()
+    if proposal_row is None:
+        raise RuntimeError("NO_PROPOSAL")
+    proposal = ProposalPayload.model_validate(proposal_row.payload)
+
+    provider = get_provider()
+
+    job.stage = "outline"
+    lesson_total = sum(len(u.lessonTitles) for u in proposal.units)
+    job.lessons_total = lesson_total
+    job.stage = "lessons"
+    await db.commit()
+
+    existing_units = (
+        await db.execute(select(Unit).where(Unit.course_id == course.id))
+    ).scalars().all()
+    unit_by_order = {u.order_index: u for u in existing_units}
+
+    previous_titles: list[str] = []
+    lesson_index = 0
+    for u_idx, proposal_unit in enumerate(proposal.units):
+        unit = unit_by_order.get(u_idx)
+        if unit is None:
+            unit = Unit(
+                course_id=course.id,
+                order_index=u_idx,
+                title=proposal_unit.title,
+                blurb=proposal_unit.blurb,
+            )
+            db.add(unit)
+            await db.flush()
+        else:
+            unit.title = proposal_unit.title
+            unit.blurb = proposal_unit.blurb
+
+        existing_lessons = (
+            await db.execute(select(Lesson).where(Lesson.unit_id == unit.id))
+        ).scalars().all()
+        lesson_by_order = {l.order_index: l for l in existing_lessons}
+
+        for l_idx, lesson_title in enumerate(proposal_unit.lessonTitles):
+            if not await job_service.renew_lease(db, job.id):
+                raise RuntimeError("LEASE_LOST")
+            if await job_service.is_superseded(db, job):
+                raise RuntimeError("SUPERSEDED")
+
+            lesson_index += 1
+            try:
+                content = await asyncio.wait_for(
+                    provider.generate_lesson(
+                        course.topic, proposal, proposal_unit.title, lesson_title, previous_titles
+                    ),
+                    timeout=settings.generation_lesson_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                # Provider không xong trong budget ⇒ lỗi tạm thời, job sẽ requeue.
+                from app.providers import ProviderTimeoutError
+
+                raise ProviderTimeoutError(
+                    f"Provider vượt {settings.generation_lesson_timeout_seconds}s cho bài '{lesson_title}'."
+                ) from None
+            if content is None or not content.blocks:
+                raise SchemaInvalidError(f"Lesson không hợp lệ: '{lesson_title}'")
+
+            new_blocks = content.model_dump()["blocks"]
+            if lesson_by_order.get(l_idx) is None:
+                lesson_row = Lesson(
+                    unit_id=unit.id,
+                    course_id=course.id,
+                    order_index=l_idx,
+                    title=content.title,
+                    content=new_blocks,
+                    content_version=1,
+                    status=LessonStatus.ready,
+                )
+                db.add(lesson_row)
+            else:
+                lesson_row = lesson_by_order[l_idx]
+                # P1.1.7: chỉ tăng contentVersion khi nội dung thực sự đổi.
+                changed = (
+                    lesson_row.title != content.title
+                    or _content_signature(lesson_row.content) != _content_signature(new_blocks)
+                )
+                if changed:
+                    lesson_row.content_version += 1
+                    lesson_row.title = content.title
+                    lesson_row.content = new_blocks
+                lesson_row.status = LessonStatus.ready
+
+            previous_titles.append(content.title)
+            job.lessons_done = lesson_index
+            job.heartbeat_at = datetime.now(UTC)
+            await db.commit()
+
+    if await job_service.is_superseded(db, job):
+        raise RuntimeError("SUPERSEDED")
+    await job_service.finish_ready(db, job.id, course.id)
 
 
 if _use_celery and _celery_app is not None:

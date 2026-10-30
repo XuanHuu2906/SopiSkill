@@ -11,9 +11,18 @@ from sqlalchemy import create_engine, pool
 
 from app.db.base import Base
 
+# Import models để Base.metadata được populate. Không có import này thì
+# autogenerate coi DB là "thừa toàn bộ bảng" và sinh migration drop hết.
+import app.models  # noqa: E402,F401  (side-effect: đăng ký mapper)
+
 config = context.config
 
 target_metadata = Base.metadata
+
+# Ghi chú: model dùng JSON().with_variant(JSONB, "postgresql") và Enum native,
+# nên autogenerate trên PostgreSQL so sánh được trực tiếp. Các server_default
+# viết tay trong revision cũ (vd. 'Learner') có thể hiện khác biệt cosmetic —
+# review trước khi tạo revision mới, không tin autogenerate mù quáng.
 
 
 def _sync_url() -> str:

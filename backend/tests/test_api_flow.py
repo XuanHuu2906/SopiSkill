@@ -8,6 +8,8 @@ import uuid
 
 import pytest
 
+from tests.support import correct_answers, wrong_answers, load_private_blocks
+
 pytestmark = pytest.mark.asyncio
 
 PASSWORD = "Passw0rd!123"
@@ -85,30 +87,22 @@ async def test_quiz_attempt_and_persistence(client):
     lesson = rl.json()
     assert lesson["contentVersion"] >= 1
 
-    # Trả lời đúng hết: mc chọn đúng index, blank... dùng knowledge về mock
-    blocks = lesson["blocks"]
-    answers = []
-    for idx, b in enumerate(blocks):
-        t = b["type"]
-        if t == "mc":
-            answers.append({"index": idx, "answer": b["answerIndex"]})
-        elif t == "blank":
-            answers.append({"index": idx, "answer": b["answer"]})
-        elif t == "order":
-            answers.append({"index": idx, "answer": list(range(len(b["items"])))})
-        elif t == "match":
-            answers.append({"index": idx, "answer": {p[0]: p[1] for p in b["pairs"]}})
-        elif t == "short":
-            answers.append({"index": idx, "answer": b["acceptedAnswers"][0]})
-        else:
-            answers.append({"index": idx, "answer": None})
+    # Public payload KHÔNG được chứa answer key.
+    for block in lesson["blocks"]:
+        assert "answerIndex" not in block
+        assert "answer" not in block
+        assert "acceptedAnswers" not in block
+        assert "pairs" not in block
+
+    version, answers = await correct_answers(lesson_id)
+    assert version == lesson["contentVersion"]
 
     client_attempt_id = uuid.uuid4().hex[:16]
     ra = await client.post(
         f"/v1/lessons/{lesson_id}/attempts",
         json={
             "clientAttemptId": client_attempt_id,
-            "contentVersion": lesson["contentVersion"],
+            "contentVersion": version,
             "durationMs": 30000,
             "answers": answers,
         },
@@ -119,13 +113,14 @@ async def test_quiz_attempt_and_persistence(client):
     assert body["duplicate"] is False
     assert body["score"]["correct"] == body["score"]["total"]
     assert body["score"]["total"] > 0
+    assert body["rewards"]["xpEarned"] > 0
 
-    # Idempotency: nộp lại cùng clientAttemptId → duplicate=True, không cộng điểm lần 2
+    # Idempotency: nộp lại cùng clientAttemptId → duplicate=True, không cộng XP lần 2
     ra2 = await client.post(
         f"/v1/lessons/{lesson_id}/attempts",
         json={
             "clientAttemptId": client_attempt_id,
-            "contentVersion": lesson["contentVersion"],
+            "contentVersion": version,
             "durationMs": 30000,
             "answers": answers,
         },
@@ -134,24 +129,39 @@ async def test_quiz_attempt_and_persistence(client):
     assert ra2.status_code == 201
     assert ra2.json()["duplicate"] is True
     assert ra2.json()["score"] == body["score"]
+    assert ra2.json()["rewards"]["xpEarned"] == body["rewards"]["xpEarned"]
+    assert ra2.json()["rewards"]["xp"] == body["rewards"]["xp"]
 
-    # Nộp sai → điểm thấp
-    wrong = [
-        {"index": idx, "answer": 999 if b["type"] == "mc" else "zzz-sai"}
-        for idx, b in enumerate(blocks)
-        if b["type"] != "teach"
-    ]
+    # Nộp lại với id mới cùng đáp án đúng → không farm thêm XP.
+    ra_new = await client.post(
+        f"/v1/lessons/{lesson_id}/attempts",
+        json={
+            "clientAttemptId": uuid.uuid4().hex[:16],
+            "contentVersion": version,
+            "answers": answers,
+        },
+        headers=csrf_headers(client),
+    )
+    assert ra_new.status_code == 201
+    assert ra_new.json()["score"]["correct"] == ra_new.json()["score"]["total"]
+    assert ra_new.json()["rewards"]["xpEarned"] == 0
+    assert ra_new.json()["rewards"]["xp"] == body["rewards"]["xp"]
+
+    # Nộp sai → điểm thấp, không tăng XP.
+    _, _, blocks = await load_private_blocks(lesson_id)
+    wrong = wrong_answers(blocks)
     ra3 = await client.post(
         f"/v1/lessons/{lesson_id}/attempts",
         json={
             "clientAttemptId": uuid.uuid4().hex[:16],
-            "contentVersion": lesson["contentVersion"],
+            "contentVersion": version,
             "answers": wrong,
         },
         headers=csrf_headers(client),
     )
     assert ra3.status_code == 201
     assert ra3.json()["score"]["correct"] < ra3.json()["score"]["total"]
+    assert ra3.json()["rewards"]["xpEarned"] == 0
 
 
 async def test_duplicate_course_creation_idempotent(client):

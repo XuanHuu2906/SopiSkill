@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -6,12 +6,13 @@ from app.core.csrf import verify_csrf
 from app.core.limits import rate_limit
 from app.db.session import get_db
 from app.models import User
-from app.providers import get_provider
+from app.providers import ProviderConfigError, ProviderError, get_provider
 from app.schemas.schemas import (
     AttemptOut,
     AttemptRequest,
     CourseCreateRequest,
     CourseDetailOut,
+    CourseListOut,
     CourseOut,
     GenerationOut,
     InterviewAnswerRequest,
@@ -19,10 +20,29 @@ from app.schemas.schemas import (
     LessonOut,
     ProposalOut,
 )
-from app.services import course_service, lesson_service
-from app.worker.generation import dispatch_generation
+from app.services import course_service, job_service, lesson_service
+from app.services.lesson_content import public_blocks
 
 router = APIRouter(prefix="/v1")
+
+
+_CONFIG_ERROR_DETAIL = {
+    "code": "PROVIDER_NOT_CONFIGURED",
+    "message": "LLM provider chưa được cấu hình hợp lệ trên server.",
+}
+
+_RUNTIME_ERROR_DETAIL = {
+    "code": "PROVIDER_UNAVAILABLE",
+    "message": "Dịch vụ AI tạm thời không sẵn sàng, vui lòng thử lại sau.",
+}
+
+
+def _provider() -> object:
+    """Fail-fast: provider lạ/thiếu key trả 503 cấu hình, KHÔNG fallback mock."""
+    try:
+        return get_provider()
+    except ProviderConfigError as exc:
+        raise HTTPException(status_code=503, detail=_CONFIG_ERROR_DETAIL) from exc
 
 
 @router.post("/courses", response_model=CourseOut, status_code=201)
@@ -35,7 +55,7 @@ async def create_course(
     verify_csrf(request)
     rate_limit(request, "create_course", limit=30, window_seconds=60)
     course, created = await course_service.create_course(
-        db, user.id, body.topic, body.clientCourseId, get_provider()
+        db, user.id, body.topic, body.clientCourseId, _provider()  # type: ignore[arg-type]
     )
     return CourseOut(
         id=f"crs_{course.id}",
@@ -56,7 +76,9 @@ async def answer_interview(
     verify_csrf(request)
     rate_limit(request, "interview", limit=60, window_seconds=60)
     course = await course_service.get_owned_course(db, course_id, user.id)
-    interview = await course_service.answer_interview(db, course, body.position, body.answer, get_provider())
+    interview = await course_service.answer_interview(
+        db, course, body.position, body.answer, _provider()  # type: ignore[arg-type]
+    )
     return InterviewOut(
         questions=interview.questions or [],
         completedCount=interview.completed_count,
@@ -102,7 +124,10 @@ async def approve_course(
     rate_limit(request, "approve", limit=20, window_seconds=60)
     course = await course_service.get_owned_course(db, course_id, user.id)
     job = await course_service.approve_course(db, course)
-    dispatch_generation(str(job.id))
+    # Dispatch sau khi commit; nếu broker lỗi, `dispatched_at` vẫn NULL và
+    # reconciler sẽ gửi lại — response vẫn 202 để client poll được.
+    await job_service.dispatch_job(db, job.id)
+    await db.refresh(job)
     return {"jobId": f"job_{job.id}", "status": job.status.value}
 
 
@@ -117,7 +142,8 @@ async def retry_course(
     rate_limit(request, "retry", limit=10, window_seconds=60)
     course = await course_service.get_owned_course(db, course_id, user.id)
     job = await course_service.retry_course(db, course)
-    dispatch_generation(str(job.id))
+    await job_service.dispatch_job(db, job.id)
+    await db.refresh(job)
     return {"jobId": f"job_{job.id}", "status": job.status.value}
 
 
@@ -138,7 +164,21 @@ async def get_generation(
         lessonsDone=job.lessons_done,
         lessonsTotal=job.lessons_total,
         error=job.error,
+        attempts=job.attempts_count,
+        dispatched=job.dispatched_at is not None,
+        lastErrorCode=job.last_error_code,
     )
+
+
+@router.get("/courses", response_model=CourseListOut)
+async def list_courses(
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0, le=10000),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Client không truyền userId — danh sách luôn scope theo identity đã xác thực.
+    return await course_service.list_courses(db, user.id, limit=limit, offset=offset)
 
 
 @router.get("/courses/{course_id}", response_model=CourseDetailOut)
@@ -148,7 +188,7 @@ async def get_course(
     db: AsyncSession = Depends(get_db),
 ):
     course = await course_service.get_owned_course(db, course_id, user.id)
-    return await course_service.get_course_detail(db, course)
+    return await course_service.get_course_detail(db, course, user.id)
 
 
 @router.get("/lessons/{lesson_id}", response_model=LessonOut)
@@ -158,13 +198,14 @@ async def get_lesson(
     db: AsyncSession = Depends(get_db),
 ):
     lesson = await lesson_service.get_owned_lesson(db, lesson_id, user.id)
+    # Chỉ trả public blocks — answer key nằm trong private `lesson.content` ở server.
     return LessonOut(
         id=f"lsn_{lesson.id}",
         title=lesson.title,
         orderIndex=lesson.order_index,
         contentVersion=lesson.content_version,
         status=lesson.status.value,
-        blocks=lesson.content or [],
+        blocks=public_blocks(lesson.id, lesson.content_version, lesson.content or []),
     )
 
 
@@ -185,14 +226,13 @@ async def submit_attempt(
             detail={"code": "CONTENT_VERSION_MISMATCH", "message": "Nội dung bài học đã đổi, hãy tải lại."},
         )
     attempt, duplicate = await lesson_service.submit_attempt(db, lesson, user, body)
+    # XP trả về là giá trị đã ghi cho chính attempt này (0 khi retry/nộp lại),
+    # không tính lại từ score — tránh hiển thị reward không hề được cộng.
+    await db.refresh(user)
     return AttemptOut(
         attemptId=f"att_{attempt.id}",
         duplicate=duplicate,
         score={"correct": attempt.score_correct, "total": attempt.score_total},
-        rewards={
-            "xp": user.xp,
-            "xpEarned": attempt.score_correct * 10
-            + (20 if attempt.score_total > 0 and attempt.score_correct == attempt.score_total else 0),
-        },
+        rewards={"xp": user.xp, "xpEarned": attempt.xp_awarded},
         results=attempt.results or [],
     )

@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------- Proposal structured output (provider → DB) ----------
@@ -103,6 +103,10 @@ class GenerationOut(BaseModel):
     lessonsDone: int
     lessonsTotal: int | None
     error: dict | None
+    # P1.2 observability — không chứa prompt/nội dung người dùng
+    attempts: int = 0
+    dispatched: bool = True
+    lastErrorCode: str | None = None
 
 
 class UnitOut(BaseModel):
@@ -119,6 +123,27 @@ class LessonSummaryOut(BaseModel):
     title: str
     status: str
     contentVersion: int
+    completed: bool = False
+
+
+class CourseListItemOut(BaseModel):
+    id: str
+    topic: str
+    status: str
+    createdAt: str | None = None
+    updatedAt: str | None = None
+    progress: dict
+    resumeLessonId: str | None = None
+    resumeLessonTitle: str | None = None
+    lastCompletedLessonTitle: str | None = None
+
+
+class CourseListOut(BaseModel):
+    items: list[CourseListItemOut]
+    total: int
+    limit: int
+    offset: int
+    hasMore: bool
 
 
 class CourseDetailOut(BaseModel):
@@ -142,6 +167,8 @@ class AttemptResultOut(BaseModel):
     index: int
     type: str
     correct: bool
+    # Đáp án chỉ xuất hiện trong response sau khi nộp (post-submit policy).
+    solution: dict = Field(default_factory=dict)
 
 
 class AttemptRequest(BaseModel):
@@ -154,6 +181,16 @@ class AttemptRequest(BaseModel):
 class AttemptAnswer(BaseModel):
     index: int = Field(ge=0)
     answer: str | int | list | dict | None = None
+    model_config = {"extra": "forbid"}
+
+    @field_validator("answer", mode="before")
+    @classmethod
+    def _reject_bool(cls, value):
+        # Pydantic smart-union coerce `true` → 1; bool là int trong Python và sẽ
+        # vô tình khớp answerIndex. Từ chối sớm để client không "đoán đúng" rẻ.
+        if isinstance(value, bool):
+            raise ValueError("answer không chấp nhận boolean")
+        return value
 
 
 class AttemptOut(BaseModel):

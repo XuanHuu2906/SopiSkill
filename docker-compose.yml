@@ -31,11 +31,16 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ailp}:${POSTGRES_PASSWORD:-ailp_password}@db:5432/${POSTGRES_DB:-ailp}
       REDIS_URL: redis://redis:6379/0
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENV: development
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (copy .env.example)}
       ALLOW_DEMO_HEADER: ${ALLOW_DEMO_HEADER:-false}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Có broker Redis → không chạy generation inline trong process API.
+      GENERATION_ALLOW_INLINE_FALLBACK: "false"
     ports:
       - "${BACKEND_HOST_PORT:-8001}:8000"
     depends_on:
@@ -51,6 +56,29 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ailp}:${POSTGRES_PASSWORD:-ailp_password}@db:5432/${POSTGRES_DB:-ailp}
       REDIS_URL: redis://redis:6379/0
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      # Worker thật: không fallback chạy generation inline trong request API.
+      GENERATION_ALLOW_INLINE_FALLBACK: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Reconciler/outbox: gửi lại job kẹt queued + requeue job có lease hết hạn.
+  beat:
+    build: ./backend
+    command: celery -A app.worker.celery_app:celery_app beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ailp}:${POSTGRES_PASSWORD:-ailp_password}@db:5432/${POSTGRES_DB:-ailp}
+      REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      GENERATION_ALLOW_INLINE_FALLBACK: "false"
     depends_on:
       db:
         condition: service_healthy
