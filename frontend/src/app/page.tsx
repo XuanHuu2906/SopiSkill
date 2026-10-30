@@ -1,15 +1,18 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { getUserId } from "@/lib/api";
+import { useAuth } from "./providers";
 
 export default function HomePage() {
+  const { data: user, isLoading } = useAuth();
+
   return (
     <div className="container">
       <div className="topbar">
         <h1>AI Learning Platform</h1>
-        <span className="badge">user: {getUserId()}</span>
+        <span className="badge">
+          {isLoading ? "..." : user ? `xin chào, ${user.displayName}` : "chưa đăng nhập"}
+        </span>
       </div>
 
       <div className="card">
@@ -18,9 +21,15 @@ export default function HomePage() {
           Nhập một chủ đề — trả lời 5 câu phỏng vấn — nhận lộ trình cá nhân hóa
           với bài học và quiz tương tác.
         </p>
-        <Link href="/new">
-          <button>Tạo khóa học mới</button>
-        </Link>
+        {user ? (
+          <Link href="/new">
+            <button>Tạo khóa học mới</button>
+          </Link>
+        ) : (
+          <Link href="/login">
+            <button>Đăng nhập để bắt đầu</button>
+          </Link>
+        )}
       </div>
 
       <div className="card">

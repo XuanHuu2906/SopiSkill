@@ -43,6 +43,8 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     external_id: Mapped[str] = mapped_column(Text, unique=True)
+    email: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     display_name: Mapped[str] = mapped_column(Text, default="Learner")
     xp: Mapped[int] = mapped_column(Integer, default=0)
     streak_days: Mapped[int] = mapped_column(Integer, default=0)

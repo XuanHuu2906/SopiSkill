@@ -1,6 +1,7 @@
 """E2E acceptance verification — chạy thật qua HTTP với uvicorn server đang chạy.
 
 Kịch bản theo Acceptance Criteria:
+0. Đăng ký + đăng nhập hợp lệ (cookie auth) — bắt buộc trước mọi API call
 1. Nhập chủ đề "Python cho người mới"
 2. Trả lời 5 câu phỏng vấn
 3. Nhận proposal có cấu trúc hợp lệ
@@ -10,36 +11,51 @@ Kịch bản theo Acceptance Criteria:
 7. Mở và học một bài
 8. Làm quiz và lưu kết quả
 9. Tải lại trang mà không mất dữ liệu (GET lại lesson + attempts tồn tại)
++ Case lỗi: unauthenticated 401, cross-user 404, CSRF 403, token giả 401
 """
 
 import io
-import os
 import json
+import os
 import sys
 import time
 import urllib.request
 import uuid
+from http.cookiejar import CookieJar
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 BASE = os.environ.get("E2E_BASE", "http://127.0.0.1:8001")
-USER = f"e2e-user-{uuid.uuid4().hex[:8]}"
+EMAIL = os.environ.get("E2E_EMAIL") or f"e2e-{uuid.uuid4().hex[:8]}@test.dev"
+PASSWORD = "E2ePassw0rd!2026"
+
+# Cookie jar giữ session (HttpOnly access_token + csrf_token)
+_jar = CookieJar()
+_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_jar))
 
 
-def call(method: str, path: str, body: dict | None = None, expect: int | None = None):
+def call(method: str, path: str, body: dict | None = None, expect: int | None = None, use_auth: bool = True):
+    headers = {"Content-Type": "application/json"}
+    if use_auth and method not in ("GET", "HEAD"):
+        csrf = next((c.value for c in _jar if c.name == "csrf_token"), "")
+        if csrf:
+            headers["X-CSRF-Token"] = csrf
     req = urllib.request.Request(
         f"{BASE}{path}",
         method=method,
-        headers={"Content-Type": "application/json", "X-User-Id": USER},
+        headers=headers,
         data=json.dumps(body).encode() if body is not None else None,
     )
+    opener = _opener if use_auth else urllib.request.build_opener()
     try:
-        with urllib.request.urlopen(req) as res:
+        with opener.open(req) as res:
             status = res.status
-            data = json.loads(res.read().decode())
+            raw = res.read().decode()
+            data = json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
         status = e.code
-        data = json.loads(e.read().decode())
+        raw = e.read().decode()
+        data = json.loads(raw) if raw else {}
     if expect is not None:
         assert status == expect, f"{method} {path} -> {status} (expect {expect}): {data}"
     return status, data
@@ -52,6 +68,33 @@ def step(name: str, ok: bool, detail: str = ""):
     results.append((name, ok, detail))
     print(f"[{'PASS' if ok else 'FAIL'}] {name} {detail}")
 
+
+# 0. AUTH — đăng ký (nếu đã có thì đăng nhập)
+st, user = call("POST", "/v1/auth/register", {"email": EMAIL, "password": PASSWORD})
+if st == 409:
+    st, user = call("POST", "/v1/auth/login", {"email": EMAIL, "password": PASSWORD})
+step("0. Dang ky/dang nhap hop le", st in (201, 200) and user.get("email") == EMAIL, f"status={st} user={user.get('email', '?')}")
+
+st, me = call("GET", "/v1/auth/me")
+step("0b. Session ton tai (/me)", st == 200 and me.get("email") == EMAIL, f"email={me.get('email', '?')}")
+
+# 0c. Unauthenticated request → 401
+st, _ = call("GET", "/v1/courses/crs_00000000-0000-0000-0000-000000000000", use_auth=False)
+step("0c. Khong auth -> 401", st == 401, f"status={st}")
+
+# 0d. CSRF thiếu → 403 (đã đăng nhập nhưng không header)
+req = urllib.request.Request(
+    f"{BASE}/v1/courses",
+    method="POST",
+    headers={"Content-Type": "application/json"},
+    data=json.dumps({"topic": "x", "clientCourseId": uuid.uuid4().hex[:20]}).encode(),
+)
+try:
+    with _opener.open(req) as res:
+        csrf_status = res.status
+except urllib.error.HTTPError as e:
+    csrf_status = e.code
+step("0d. POST thieu CSRF -> 403", csrf_status == 403, f"status={csrf_status}")
 
 # 1. Tạo course
 st, course = call("POST", "/v1/courses", {"topic": "Python cho người mới", "clientCourseId": uuid.uuid4().hex[:20]}, 201)
@@ -148,41 +191,53 @@ data_persisted = (
 step("9. Reload khong mat du lieu", data_persisted, f"lessons sau reload={len(lessons_reload)}")
 
 # ---- Case lỗi ----
-# A. Request trùng course (đã test 1b)
 
-# B. Người dùng khác truy cập course không thuộc quyền
-OTHER = f"other-user-{uuid.uuid4().hex[:8]}"
-req = urllib.request.Request(
-    f"{BASE}{course_id and '/v1/courses/' + course_id}",
-    headers={"Content-Type": "application/json", "X-User-Id": OTHER},
-)
-try:
-    with urllib.request.urlopen(req) as res:
-        other_status = res.status
-except urllib.error.HTTPError as e:
-    other_status = e.code
-step("B. User khac truy cap course -> 404", other_status == 404, f"status={other_status}")
+# B. User khác (đăng nhập riêng) truy cập course không thuộc quyền → 404
+OTHER_EMAIL = f"e2e-other-{uuid.uuid4().hex[:8]}@test.dev"
+other_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
 
-# Lesson cũng vậy
-req = urllib.request.Request(
-    f"{BASE}/v1/lessons/{lesson_id}",
-    headers={"Content-Type": "application/json", "X-User-Id": OTHER},
-)
-try:
-    with urllib.request.urlopen(req) as res:
-        other_status = res.status
-except urllib.error.HTTPError as e:
-    other_status = e.code
-step("B2. User khac truy cap lesson -> 404", other_status == 404, f"status={other_status}")
 
-# C. Dữ liệu AI sai schema → provider fail → job failed (dùng topic quá dài gây lỗi? Mock không lỗi)
-# Thay bằng: interview answer position sai → 422
+def other_call(method, path, body=None):
+    headers = {"Content-Type": "application/json"}
+    req = urllib.request.Request(f"{BASE}{path}", method=method, headers=headers,
+                                 data=json.dumps(body).encode() if body is not None else None)
+    try:
+        with other_opener.open(req) as res:
+            return res.status, json.loads(res.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode() or "{}")
+
+
+st, _ = other_call("POST", "/v1/auth/register", {"email": OTHER_EMAIL, "password": PASSWORD})
+st, _ = other_call("GET", f"/v1/courses/{course_id}")
+step("B. User khac truy cap course -> 404", st == 404, f"status={st}")
+st, _ = other_call("GET", f"/v1/lessons/{lesson_id}")
+step("B2. User khac truy cap lesson -> 404", st == 404, f"status={st}")
+
+# C. interview answer position sai → 422
 st, _ = call("POST", f"/v1/courses/{course_id}/interview/answer", {"position": 99, "answer": "x"})
 step("C. Vi tri interview sai -> 422", st == 422, f"status={st}")
 
 # D. Course id không tồn tại
 st, _ = call("GET", "/v1/courses/crs_00000000-0000-0000-0000-000000000000")
 step("D. Course khong ton tai -> 404", st == 404, f"status={st}")
+
+# E. Token giả mạo (cookie forged) → 401
+forged_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
+req = urllib.request.Request(f"{BASE}/v1/auth/me")
+# thêm cookie giả thủ công
+from http.cookiejar import Cookie
+
+forged_cookie = Cookie(0, "access_token", "forged.token.value", None, False, "127.0.0.1", False, False, "/", True, False, None, False, None, None, {})
+forged_jar = CookieJar()
+forged_jar.set_cookie(forged_cookie)
+forged_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(forged_jar))
+try:
+    with forged_opener.open(req) as res:
+        forged_status = res.status
+except urllib.error.HTTPError as e:
+    forged_status = e.code
+step("E. Token gia mao -> 401", forged_status == 401, f"status={forged_status}")
 
 print()
 passed = sum(1 for _, ok, _ in results if ok)

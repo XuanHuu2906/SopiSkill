@@ -6,6 +6,8 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("LLM_PROVIDER", "mock")
 os.environ.setdefault("REDIS_URL", "")
+os.environ.setdefault("JWT_SECRET", "test-secret-key-for-pytest-only-not-production")
+os.environ.setdefault("ALLOW_DEMO_HEADER", "false")
 
 import pytest
 import pytest_asyncio

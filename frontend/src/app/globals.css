@@ -149,3 +149,47 @@ textarea {
   color: #4f46e5;
   text-decoration: none;
 }
+
+/* Auth */
+.topbar-auth {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.auth-form input {
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #cdd2e1;
+}
+
+.error-text {
+  color: #dc2626;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #4f46e5;
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: inherit;
+  padding: 0;
+}

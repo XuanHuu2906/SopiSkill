@@ -33,6 +33,9 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENV: development
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (copy .env.example)}
+      ALLOW_DEMO_HEADER: ${ALLOW_DEMO_HEADER:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     ports:
       - "${BACKEND_HOST_PORT:-8001}:8000"
     depends_on:

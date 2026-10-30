@@ -21,9 +21,22 @@ class Settings(BaseSettings):
 
     generation_max_schema_retries: int = 2
 
+    # Auth
+    jwt_secret: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "sopiskill"
+    jwt_audience: str = "sopiskill-web"
+    access_token_ttl_minutes: int = 60 * 24 * 7
+    allow_demo_header: bool = False
+    cookie_secure: bool = False
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.jwt_secret)
 
 
 @lru_cache

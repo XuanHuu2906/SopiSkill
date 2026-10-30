@@ -18,13 +18,16 @@ Chi tiết: `docs/architecture.md`, `docs/database-design.md`.
 
 ```bash
 cp .env.example .env
-docker compose up --build
+# BẮT BUỘC: sinh JWT secret
+python -c "import secrets; print(secrets.token_urlsafe(48))"   # dán vào JWT_SECRET trong .env
+docker compose up --build -d
 ```
 
 - Frontend: http://localhost:3000 (truy cập bằng `127.0.0.1` nếu `localhost` chậm trên Windows)
 - Backend API: http://localhost:8001 (docs: `/docs`)
 - PostgreSQL host: port **5433** (tránh xung đột PostgreSQL local), Redis: 6379
-- Demo user: frontend tự sinh `X-User-Id` và lưu localStorage.
+- **Auth bắt buộc:** mở `/login` để đăng ký/đăng nhập (email + mật khẩu ≥ 8 ký tự). Session bằng HttpOnly cookie.
+- Demo header `X-User-Id` **mặc định tắt** — chỉ bật bằng `ALLOW_DEMO_HEADER=true` + `ENV=development` cho local.
 
 > Lưu ý Windows: `localhost` có thể ưu tiên IPv6 `[::1]` gây chậm ~8s/request khi truy cập port do Docker publish. Dùng `http://127.0.0.1:8001` / `http://127.0.0.1:3000`.
 
@@ -51,12 +54,13 @@ Backend có **fallback mode**: nếu `REDIS_URL` không cấu hình/không kết
 
 ## Luồng dùng thử
 
-1. Mở http://localhost:3000 → nhập chủ đề, ví dụ "Python cho người mới".
-2. Trả lời 5 câu phỏng vấn.
-3. Xem proposal → Approve.
-4. Màn hình generating tự poll mỗi 2s → khóa học sẵn sàng.
-5. Mở bài học → làm quiz → xem điểm + XP.
-6. Tải lại trang — dữ liệu vẫn còn (lưu DB).
+1. Mở http://localhost:3000/login → đăng ký tài khoản (email + mật khẩu).
+2. Nhập chủ đề, ví dụ "Python cho người mới".
+3. Trả lời 5 câu phỏng vấn.
+4. Xem proposal → Approve.
+5. Màn hình generating tự poll mỗi 2s → khóa học sẵn sàng.
+6. Mở bài học → làm quiz → xem điểm + XP.
+7. Tải lại trang / đăng nhập lại — dữ liệu vẫn còn (lưu DB theo user).
 
 ## Kiểm thử
 
@@ -64,17 +68,27 @@ Backend có **fallback mode**: nếu `REDIS_URL` không cấu hình/không kết
 cd backend
 pytest -v
 
-# E2E acceptance (cần backend đang chạy; mặc định http://127.0.0.1:8001)
+# E2E acceptance (cần Docker stack đang chạy; mặc định http://127.0.0.1:8001)
 E2E_BASE=http://127.0.0.1:8001 python e2e_acceptance.py
 ```
 
-Kết quả hiện tại: **20/20 unit+integration tests pass; 16/16 E2E acceptance pass** (cả local uvicorn lẫn Docker Compose stack với Celery). Chi tiết: `docs/development-progress.md`.
+Kết quả hiện tại: **33/33 unit+integration tests pass; 21/21 E2E acceptance pass trên Docker Compose stack** (auth + CSRF + ownership + generation + quiz). Chi tiết: `docs/development-progress.md`.
+
+## Alembic migration
+
+- Backend container tự chạy `alembic upgrade head` trước khi start (idempotent).
+- DB cũ tạo bằng `create_all()`: xem runbook `docs/migration-runbook.md` (backup → so khớp schema → stamp → upgrade, không mất dữ liệu).
+- Tạo migration mới: `cd backend && alembic revision --autogenerate -m "..."` (kiểm tra lại trước khi chạy).
 
 ## API chính (v1)
 
 | Method | Path | Mô tả |
 |---|---|---|
-| POST | `/v1/courses` | Tạo course `{topic, clientCourseId}` (idempotent) |
+| POST | `/v1/auth/register` | Đăng ký `{email, password}` → 201 + session cookie |
+| POST | `/v1/auth/login` | Đăng nhập → session cookie (HttpOnly) |
+| POST | `/v1/auth/logout` | Đăng xuất (cần CSRF) |
+| GET | `/v1/auth/me` | User hiện tại (401 nếu chưa đăng nhập) |
+| POST | `/v1/courses` | Tạo course `{topic, clientCourseId}` (idempotent, cần CSRF) |
 | POST | `/v1/courses/{id}/interview/answer` | Trả lời câu `{position, answer}` (0..4) |
 | GET | `/v1/courses/{id}/proposal` | Proposal hiện tại |
 | POST | `/v1/courses/{id}/approve` | Duyệt → tạo generation job |
@@ -86,11 +100,12 @@ Kết quả hiện tại: **20/20 unit+integration tests pass; 16/16 E2E accepta
 
 ## Trạng thái triển khai
 
-Xem `docs/development-progress.md`. Tóm tắt: Course Generator + Lesson Engine **IMPLEMENTED**; Tutor/RAG **NOT IMPLEMENTED** (thiết kế có); Mock provider **không phải AI thật**.
+Xem `docs/development-progress.md`. Tóm tắt: Course Generator + Lesson Engine + **Auth (JWT/Argon2id/CSRF)** + **Alembic migration** **IMPLEMENTED + TESTED**; Tutor/RAG **NOT IMPLEMENTED** (thiết kế có); Mock provider **không phải AI thật**.
 
 ## Tài liệu
 
 - `docs/architecture.md` — kiến trúc và luồng nghiệp vụ
 - `docs/database-design.md` — schema PostgreSQL
+- `docs/migration-runbook.md` — runbook chuyển DB cũ sang Alembic
 - `docs/implementation-plan.md` — kế hoạch slice
 - `docs/development-progress.md` — nhật ký tiến độ + giới hạn

@@ -10,7 +10,10 @@ _buckets: dict[str, list[float]] = defaultdict(list)
 
 def rate_limit(request: Request, key: str, limit: int, window_seconds: int) -> None:
     now = time.monotonic()
-    identity = request.headers.get("x-user-id", "anon")
+    # Ưu tiên user đã xác thực (đặt bởi dependency auth); fallback client host.
+    identity = getattr(request.state, "user_id", None)
+    if not identity:
+        identity = request.client.host if request.client else "anon"
     bucket_key = f"{key}:{identity}"
     bucket = _buckets[bucket_key]
     cutoff = now - window_seconds
