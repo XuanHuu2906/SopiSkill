@@ -1,0 +1,22 @@
+
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "deploy/deepseek-ai/deepseek-v4.1-flash-1017",
+  "provider": {
+    "deploy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Deploy.com",
+      "options": {
+        "baseURL": "https://api-cdn.deploy.com/api/v1"
+      },
+      "models": {
+        "deepseek-ai/deepseek-v4.1-flash-1017": {
+          "name": "DeepSeek V4.1 Flash"
+        },
+        "zai-org/glm-5.3-flash": {
+          "name": "GLM-5.3 Flash"
+        }
+      }
+    }
+  }
+}
