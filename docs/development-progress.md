@@ -2,6 +2,43 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-10-30 (buổi 3) — P0.5.1 Auth & Migration Stabilization
+
+### Sửa lỗi + hardening
+| Thành phần | Trạng thái | Bằng chứng |
+|---|---|---|
+| Hằng số HTTP sai `HTTP_422_UNAUTHORIZED` → `HTTP_422_UNPROCESSABLE_ENTITY` | IMPLEMENTED + TESTED | user_service.py; test_invalid_email_returns_422_not_401 (422 + không có WWW-Authenticate header) |
+| **Bug rate limit dead-code:** `bucket.append(now)` nằm trong nhánh `if` sau `raise` → request hợp lệ không bao giờ được ghi bucket → rate limit không bao giờ block | IMPLEMENTED + TESTED | limits.py fix; test_login_rate_limited: 10× 401 rồi lần 11 → 429; test_register_rate_limited tương tự |
+| Rate limit cho /auth/login (10/phút), /auth/register (10/phút), /auth/logout (30/phút) | IMPLEMENTED + TESTED | auth.py; 2 test trên |
+| Rate-limit buckets clear giữa tests (fixture) | IMPLEMENTED + TESTED | conftest.py client fixture; test_rate_limit_buckets_reset_between_tests → 401 (không 429) |
+| Auth resolution: deleted user + token hợp lệ → 401 USER_NOT_FOUND (không crash) | TESTED | test_valid_token_with_deleted_user_returns_401 |
+| User scope trong session: /me trả đúng user đăng nhập, không leak giữa users | TESTED | test_me_after_login_same_user_no_crossuser_leak |
+
+### Kiểm chứng migration/rollback (không đụng dữ liệu chính)
+| Kiểm chứng | Kết quả |
+|---|---|
+| SQLite: upgrade head → downgrade base → upgrade head → current | 0002_auth_columns (head) — pass |
+| PostgreSQL **temp DB riêng** `alembic_verify_tmp` (trong container db, KHÔNG phải DB chính): upgrade head → \d users có email+password_hash+uq_users_email → downgrade base → chỉ còn alembic_version | pass; temp DB đã DROP sau verify |
+| DB chính `ailp`: 20 users giữ nguyên, không volume bị xóa | XÁC MINH sau verify |
+
+### Regression P0.5.1 (Docker stack, code mới)
+1. `pytest -q` → **40/40 passed** (33 cũ + 7 mới).
+2. `npm run build` → ✓ Compiled successfully, 9 static pages.
+3. `docker compose up -d --build backend worker` → started; `/health` → ok.
+4. `e2e_acceptance.py` → **21/21 PASS**.
+
+### Ràng buộc đã tôn trọng
+- Migration 0001/0002 đã deploy **không bị sửa hash/content** — chỉ verify.
+- Không xóa volume `reverseengineer_pgdata`, không mất dữ liệu (backup vẫn còn từ P0.5).
+- Không tích hợp LLM thật / Tutor / RAG.
+
+### Giới hạn còn lại
+- Rate limit vẫn in-memory per-process (restart mất bucket) — distributed Redis để sau.
+- `HTTP_422_UNPROCESSABLE_ENTITY` là deprecated alias trong Starlette mới (vẫn hoạt động); cân nhắc đổi sang `HTTP_422_UNPROCESSABLE_CONTENT` khi bump dependency.
+- WEAK_PASSWORD của service layer hiện không thể trigger qua HTTP (Pydantic schema chặn trước với cùng điều kiện) — được test trực tiếp ở service level.
+
+---
+
 ## 2026-10-30 (buổi 2) — P0.5 Authentication + Alembic Migration
 
 ### Backend — Auth (JWT HttpOnly cookie + Argon2id + CSRF)

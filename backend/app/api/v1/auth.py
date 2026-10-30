@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import ACCESS_COOKIE, get_current_user
 from app.core.config import get_settings
 from app.core.csrf import CSRF_COOKIE, new_csrf_token, verify_csrf
+from app.core.limits import rate_limit
 from app.core.security import create_access_token
 from app.db.session import get_db
 from app.models import User
@@ -69,6 +70,7 @@ def _user_out(user: User) -> UserOut:
 
 @router.post("/register", response_model=UserOut, status_code=201)
 async def register(body: RegisterRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    rate_limit(request, "auth_register", limit=10, window_seconds=60)
     user = await user_service.register_user(db, body.email, body.password)
     _set_session_cookies(response, request, user)
     return _user_out(user)
@@ -76,6 +78,7 @@ async def register(body: RegisterRequest, request: Request, response: Response, 
 
 @router.post("/login", response_model=UserOut)
 async def login(body: LoginRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    rate_limit(request, "auth_login", limit=10, window_seconds=60)
     user = await user_service.authenticate(db, body.email, body.password)
     _set_session_cookies(response, request, user)
     return _user_out(user)
@@ -84,6 +87,7 @@ async def login(body: LoginRequest, request: Request, response: Response, db: As
 @router.post("/logout", status_code=204)
 async def logout(request: Request, response: Response):
     verify_csrf(request)
+    rate_limit(request, "auth_logout", limit=30, window_seconds=60)
     response.delete_cookie(ACCESS_COOKIE, path="/")
     response.delete_cookie(CSRF_COOKIE, path="/")
 

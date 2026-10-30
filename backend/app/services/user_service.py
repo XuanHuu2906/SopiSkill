@@ -21,7 +21,7 @@ def normalize_email(email: str) -> str:
     email = email.strip().lower()
     if not EMAIL_RE.match(email) or len(email) > 254:
         raise HTTPException(
-            status_code=status.HTTP_422_UNAUTHORIZED,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "INVALID_EMAIL", "message": "Email không hợp lệ."},
         )
     return email
@@ -30,7 +30,7 @@ def normalize_email(email: str) -> str:
 def validate_password(password: str) -> str:
     if len(password) < 8 or len(password) > 128:
         raise HTTPException(
-            status_code=status.HTTP_422_UNAUTHORIZED,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "WEAK_PASSWORD", "message": "Mật khẩu phải từ 8 đến 128 ký tự."},
         )
     return password

@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from app.core.limits import clear_rate_limits
 from app.db.session import create_all, engine
 from app.main import app
 
@@ -32,6 +33,8 @@ async def _setup_db():
 
 @pytest_asyncio.fixture
 async def client():
+    clear_rate_limits()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+    clear_rate_limits()

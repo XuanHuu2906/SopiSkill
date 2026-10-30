@@ -24,3 +24,8 @@ def rate_limit(request: Request, key: str, limit: int, window_seconds: int) -> N
             detail={"code": "RATE_LIMITED", "message": "Quá nhiều request, thử lại sau."},
         )
     bucket.append(now)
+
+
+def clear_rate_limits() -> None:
+    """Reset mọi bucket — dùng cho tests."""
+    _buckets.clear()

@@ -300,3 +300,128 @@ async def test_logout_clears_session(client):
     assert lo.status_code == 204
     rm = await client.get("/v1/auth/me")
     assert rm.status_code == 401
+
+
+# ---------- P0.5.1 regression ----------
+
+
+async def test_invalid_email_returns_422_not_401(client):
+    """Bug fix: INVALID_EMAIL phải là 422 (UNPROCESSABLE_ENTITY), không phải hằng số sai."""
+    r = await client.post(
+        "/v1/auth/register",
+        json={"email": "khong-phai-email", "password": "Passw0rd!123"},
+    )
+    assert r.status_code == 422, r.text
+    # 422 chuẩn không được kèm WWW-Authenticate (đó là hành vi 401)
+    assert "www-authenticate" not in {k.lower() for k in r.headers}
+
+
+async def test_weak_password_returns_422_with_code(client):
+    # Password ngắn bị Pydantic schema chặn trước (422 list) — validate_password chỉ là lớp phòng
+    # thứ 2 với cùng điều kiện. Kiểm tra cả 2 tầng:
+    r = await client.post(
+        "/v1/auth/register",
+        json={"email": f"weak-{uuid.uuid4().hex[:6]}@t.dev", "password": "ngan"},
+    )
+    assert r.status_code == 422  # schema-level
+
+    # service-level: gọi trực tiếp validate_password
+    from fastapi import HTTPException
+
+    from app.services.user_service import validate_password
+
+    with pytest.raises(HTTPException) as exc:
+        validate_password("ngan")
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "WEAK_PASSWORD"
+
+
+async def test_login_rate_limited(client):
+    """Rate limit đăng nhập: vượt ngưỡng → 429."""
+    from app.core.limits import clear_rate_limits
+
+    clear_rate_limits()
+    email = f"rl-{uuid.uuid4().hex[:6]}@test.dev"
+    try:
+        for i in range(10):
+            r = await client.post(
+                "/v1/auth/login",
+                json={"email": email, "password": f"wrong-attempt-{i}!"},
+            )
+            # 10 lần đầu không bị chặn (401 do sai mật khẩu)
+            assert r.status_code == 401, f"attempt {i}: {r.status_code}"
+        # Lần 11 → 429
+        r11 = await client.post(
+            "/v1/auth/login",
+            json={"email": email, "password": "wrong-again!"},
+        )
+        assert r11.status_code == 429, r11.text
+        assert r11.json()["detail"]["code"] == "RATE_LIMITED"
+    finally:
+        clear_rate_limits()
+
+
+async def test_register_rate_limited(client):
+    from app.core.limits import clear_rate_limits
+
+    clear_rate_limits()
+    try:
+        for i in range(10):
+            r = await client.post(
+                "/v1/auth/register",
+                json={"email": f"rl-reg-{uuid.uuid4().hex[:6]}@t.dev", "password": "Passw0rd!123"},
+            )
+            assert r.status_code == 201, f"attempt {i}: {r.status_code}"
+        r11 = await client.post(
+            "/v1/auth/register",
+            json={"email": f"rl-reg-{uuid.uuid4().hex[:6]}@t.dev", "password": "Passw0rd!123"},
+        )
+        assert r11.status_code == 429, r11.text
+    finally:
+        clear_rate_limits()
+
+
+async def test_valid_token_with_deleted_user_returns_401(client):
+    """Token còn hợp lệ nhưng user đã bị xóa khỏi DB → 401 (không crash)."""
+    from sqlalchemy import delete, select
+
+    from app.db.session import SessionLocal
+    from app.models import User
+
+    email = f"del-{uuid.uuid4().hex[:8]}@test.dev"
+    r = await client.post("/v1/auth/register", json={"email": email, "password": "Passw0rd!123"})
+    assert r.status_code == 201
+    # session cookie đang hợp lệ — xác nhận /me OK trước khi xóa
+    assert (await client.get("/v1/auth/me")).status_code == 200
+
+    async with SessionLocal() as db:
+        u = (await db.execute(select(User).where(User.email == email))).scalar_one()
+        await db.execute(delete(User).where(User.id == u.id))
+        await db.commit()
+
+    rm = await client.get("/v1/auth/me")
+    assert rm.status_code == 401
+    assert rm.json()["detail"]["code"] == "USER_NOT_FOUND"
+
+
+async def test_rate_limit_buckets_reset_between_tests(client):
+    """Fixture client phải clear buckets — test này chạy ngay sau test rate limit mà không bị 429."""
+    r = await client.post(
+        "/v1/auth/login",
+        json={"email": "fresh-after-rl@test.dev", "password": "whatever1"},
+    )
+    assert r.status_code == 401  # 401 (sai credentials), KHÔNG phải 429
+
+
+async def test_me_after_login_same_user_no_crossuser_leak(client):
+    """Auth resolution trong cùng request scope: /me trả đúng user đang đăng nhập."""
+    email_a = f"scope-a-{uuid.uuid4().hex[:6]}@test.dev"
+    await client.post("/v1/auth/register", json={"email": email_a, "password": "Passw0rd!123"})
+    me_a = (await client.get("/v1/auth/me")).json()
+
+    email_b = f"scope-b-{uuid.uuid4().hex[:6]}@test.dev"
+    await client.post("/v1/auth/register", json={"email": email_b, "password": "Passw0rd!123"})
+    me_b = (await client.get("/v1/auth/me")).json()
+
+    assert me_a["id"] != me_b["id"]
+    assert me_b["email"] == email_b
