@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api, newClientId } from "@/lib/api";
+import { useRequireAuth } from "../providers";
 
 interface CourseOut {
   id: string;
@@ -12,6 +13,7 @@ interface CourseOut {
 
 export default function NewCoursePage() {
   const router = useRouter();
+  const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
   const [topic, setTopic] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +35,9 @@ export default function NewCoursePage() {
     }
   }
 
+  if (authLoading) return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;
+  if (!isAuthenticated) return <div className="container">Đang chuyển tới trang đăng nhập…</div>;
+
   return (
     <div className="container">
       <div className="topbar">
@@ -42,7 +47,11 @@ export default function NewCoursePage() {
       <div className="card">
         <h2>Bạn muốn học gì?</h2>
         <p>Nhập một chủ đề — hệ thống sẽ phỏng vấn bạn rồi đề xuất lộ trình.</p>
+        <label htmlFor="topic-input" className="sr-only">
+          Chủ đề khóa học
+        </label>
         <input
+          id="topic-input"
           type="text"
           placeholder="Ví dụ: Python cho người mới"
           value={topic}
@@ -52,7 +61,7 @@ export default function NewCoursePage() {
         />
         {error && <div className="error-box">{error}</div>}
         <div style={{ marginTop: 12 }}>
-          <button onClick={start} disabled={loading || !topic.trim()}>
+          <button type="button" onClick={start} disabled={loading || !topic.trim()}>
             {loading ? "Đang tạo..." : "Bắt đầu"}
           </button>
         </div>

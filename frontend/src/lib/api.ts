@@ -37,6 +37,8 @@ export async function api<T>(
   });
 
   if (!res.ok) {
+    // 401 ở bất kỳ call nào nghĩa là phiên đã hết — các trang có guard UX sẽ
+    // điều hướng sang /login; không cache/giữ dữ liệu cũ của user trước đó.
     let code = "HTTP_ERROR";
     let message = res.statusText;
     try {
@@ -98,6 +100,30 @@ export async function registerRequest(
     method: "POST",
     body: { email, password },
   });
+}
+
+export interface CourseListItem {
+  id: string;
+  topic: string;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  progress: { completed: number; total: number; percent: number };
+  resumeLessonId: string | null;
+  resumeLessonTitle: string | null;
+  lastCompletedLessonTitle: string | null;
+}
+
+export interface CourseList {
+  items: CourseListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
+export function fetchCourses(limit = 20, offset = 0): Promise<CourseList> {
+  return api<CourseList>(`/v1/courses?limit=${limit}&offset=${offset}`);
 }
 
 export async function logoutRequest(): Promise<void> {

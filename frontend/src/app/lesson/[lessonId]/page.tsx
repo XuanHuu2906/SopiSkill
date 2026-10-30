@@ -1,10 +1,25 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { api, newClientId } from "@/lib/api";
+import { useRequireAuth, useSessionQueryKey } from "../../providers";
+
+interface IdText {
+  id: number;
+  text: string;
+}
+
+// Public blocks từ server — KHÔNG có answer key.
+type Block =
+  | { type: "teach"; title: string; paragraphs: string[] }
+  | { type: "mc"; question: string; options: string[] }
+  | { type: "blank"; sentence: string }
+  | { type: "order"; prompt: string; items: IdText[] }
+  | { type: "match"; prompt: string; lefts: IdText[]; rights: IdText[] }
+  | { type: "short"; question: string };
 
 interface LessonOut {
   id: string;
@@ -15,101 +30,151 @@ interface LessonOut {
   blocks: Block[];
 }
 
-type Block =
-  | { type: "teach"; title: string; paragraphs: string[] }
-  | { type: "mc"; question: string; options: string[]; answerIndex: number }
-  | { type: "blank"; sentence: string; answer: string }
-  | { type: "order"; prompt: string; items: string[] }
-  | { type: "match"; prompt: string; pairs: [string, string][] }
-  | { type: "short"; question: string; acceptedAnswers: string[] };
+interface AttemptResult {
+  index: number;
+  type: string;
+  correct: boolean;
+  solution: Record<string, unknown>;
+}
 
 interface AttemptOut {
   attemptId: string;
   duplicate: boolean;
   score: { correct: number; total: number };
   rewards: { xp: number; xpEarned: number };
-  results: { index: number; type: string; correct: boolean }[];
+  results: AttemptResult[];
+}
+
+type AnswerValue = number | string | number[] | Record<string, number> | null;
+
+function buildAnswers(
+  blocks: Block[],
+  state: {
+    mc: Record<number, number>;
+    blank: Record<number, string>;
+    short: Record<number, string>;
+    order: Record<number, number[]>;
+    match: Record<number, Record<number, number>>;
+  }
+): { index: number; answer: AnswerValue }[] {
+  const out: { index: number; answer: AnswerValue }[] = [];
+  blocks.forEach((b, i) => {
+    if (b.type === "teach") return;
+    if (b.type === "mc") out.push({ index: i, answer: state.mc[i] ?? -1 });
+    if (b.type === "blank") out.push({ index: i, answer: state.blank[i] ?? "" });
+    if (b.type === "short") out.push({ index: i, answer: state.short[i] ?? "" });
+    if (b.type === "order") out.push({ index: i, answer: state.order[i] ?? [] });
+    if (b.type === "match") out.push({ index: i, answer: state.match[i] ?? {} });
+  });
+  return out;
 }
 
 export default function LessonPage() {
   const { lessonId } = useParams<{ lessonId: string }>();
+  const queryClient = useQueryClient();
+  const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
+  const lessonKey = useSessionQueryKey("lesson", lessonId);
 
   const lesson = useQuery({
-    queryKey: ["lesson", lessonId],
+    queryKey: lessonKey,
     queryFn: () => api<LessonOut>(`/v1/lessons/${lessonId}`),
-    enabled: !!lessonId,
+    enabled: !!lessonId && isAuthenticated,
   });
 
   const [mcAnswers, setMcAnswers] = useState<Record<number, number>>({});
   const [blankAnswers, setBlankAnswers] = useState<Record<number, string>>({});
   const [shortAnswers, setShortAnswers] = useState<Record<number, string>>({});
-  const [orderAnswers, setOrderAnswers] = useState<Record<number, string[]>>({});
-  const [matchAnswers, setMatchAnswers] = useState<Record<number, Record<string, string>>>({});
-  const [result, setResult] = useState<AttemptOut | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // order: danh sách index trong public `items` theo thứ tự người học sắp.
+  const [orderAnswers, setOrderAnswers] = useState<Record<number, number[]>>({});
+  // match: leftId -> rightId (cả hai là id public).
+  const [matchAnswers, setMatchAnswers] = useState<Record<number, Record<number, number>>>({});
 
-  // Shuffle order items một lần per lesson (client-side hiển thị)
-  const shuffledOrders = useMemo(() => {
-    const map: Record<number, string[]> = {};
+  // clientAttemptId ổn định cho MỘT lần nộp: giữ nguyên qua retry mạng cùng nội dung,
+  // chỉ tạo mới khi người học sửa câu trả lời hoặc nộp lần tiếp theo.
+  const attemptKeyRef = useRef<{ fingerprint: string; id: string } | null>(null);
+
+  const submitMutation = useMutation({
+    mutationFn: async (payload: {
+      clientAttemptId: string;
+      contentVersion: number;
+      answers: { index: number; answer: AnswerValue }[];
+    }) => {
+      return api<AttemptOut>(`/v1/lessons/${lessonId}/attempts`, {
+        method: "POST",
+        body: payload,
+      });
+    },
+    onSuccess: () => {
+      attemptKeyRef.current = null;
+      // Progress/XP nằm ở course detail + auth me → invalidate để UI cập nhật.
+      queryClient.invalidateQueries({ queryKey: ["session"] });
+      queryClient.invalidateQueries({ queryKey: ["me"] });
+    },
+  });
+
+  const result = submitMutation.data ?? null;
+  const error = submitMutation.error ? submitMutation.error.message : null;
+
+  const orderCandidates = useMemo(() => {
+    const map: Record<number, IdText[]> = {};
     lesson.data?.blocks.forEach((b, i) => {
-      if (b.type === "order") {
-        map[i] = [...b.items].sort(() => Math.random() - 0.5);
-      }
+      if (b.type === "order") map[i] = b.items;
     });
     return map;
   }, [lesson.data]);
 
+  function currentOrder(blockIndex: number): number[] {
+    return orderAnswers[blockIndex] ?? orderCandidates[blockIndex]?.map((it) => it.id) ?? [];
+  }
+
   function moveItem(blockIndex: number, from: number, dir: -1 | 1) {
     setOrderAnswers((prev) => {
-      const current =
-        prev[blockIndex] ?? shuffledOrders[blockIndex] ?? [];
-      const next = [...current];
+      const current = prev[blockIndex] ?? orderCandidates[blockIndex]?.map((it) => it.id) ?? [];
       const to = from + dir;
-      if (to < 0 || to >= next.length) return prev;
+      if (to < 0 || to >= current.length) return prev;
+      const next = [...current];
       [next[from], next[to]] = [next[to], next[from]];
       return { ...prev, [blockIndex]: next };
     });
   }
 
-  async function submit() {
+  function submit() {
     if (!lesson.data) return;
-    setSubmitting(true);
-    setError(null);
-    const answers: { index: number; answer: unknown }[] = [];
-    lesson.data.blocks.forEach((b, i) => {
-      if (b.type === "teach") return;
-      if (b.type === "mc") answers.push({ index: i, answer: mcAnswers[i] ?? -1 });
-      if (b.type === "blank") answers.push({ index: i, answer: blankAnswers[i] ?? "" });
-      if (b.type === "short") answers.push({ index: i, answer: shortAnswers[i] ?? "" });
-      if (b.type === "order")
-        answers.push({
-          index: i,
-          answer:
-            orderAnswers[i] ?? shuffledOrders[i] ?? [],
-        });
-      if (b.type === "match")
-        answers.push({ index: i, answer: matchAnswers[i] ?? {} });
+    const answers = buildAnswers(lesson.data.blocks, {
+      mc: mcAnswers,
+      blank: blankAnswers,
+      short: shortAnswers,
+      order: orderAnswers,
+      match: matchAnswers,
     });
-
-    try {
-      const attempt = await api<AttemptOut>(`/v1/lessons/${lessonId}/attempts`, {
-        method: "POST",
-        body: {
-          clientAttemptId: newClientId("att"),
-          contentVersion: lesson.data.contentVersion,
-          answers,
-        },
-      });
-      setResult(attempt);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Lỗi không xác định");
-    } finally {
-      setSubmitting(false);
+    const fingerprint = JSON.stringify({
+      lessonId,
+      contentVersion: lesson.data.contentVersion,
+      answers,
+    });
+    if (!attemptKeyRef.current || attemptKeyRef.current.fingerprint !== fingerprint) {
+      attemptKeyRef.current = { fingerprint, id: newClientId("att") };
     }
+    submitMutation.mutate({
+      clientAttemptId: attemptKeyRef.current.id,
+      contentVersion: lesson.data.contentVersion,
+      answers,
+    });
   }
 
   if (!lessonId) return <div className="container">Thiếu lessonId.</div>;
+  if (authLoading) return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;
+  if (!isAuthenticated) return <div className="container">Đang chuyển tới trang đăng nhập…</div>;
+  if (lesson.isLoading) return <div className="container">Đang tải bài học…</div>;
+  if (lesson.isError)
+    return (
+      <div className="container">
+        <div className="error-box">Không tải được bài học: {lesson.error.message}</div>
+        <button onClick={() => lesson.refetch()}>Thử lại</button>
+      </div>
+    );
+
+  const submitted = !!result;
 
   return (
     <div className="container">
@@ -139,18 +204,12 @@ export default function LessonPage() {
                   key={j}
                   className={`quiz-option ${mcAnswers[i] === j ? "selected" : ""}`}
                   onClick={() => setMcAnswers((p) => ({ ...p, [i]: j }))}
-                  disabled={!!result}
+                  disabled={submitted}
                 >
                   {opt}
                 </button>
               ))}
-              {result && (
-                <p>
-                  {result.results.find((r) => r.index === i)?.correct
-                    ? "✓ Đúng"
-                    : "✗ Sai"}
-                </p>
-              )}
+              {result && <ResultLine result={result} index={i} />}
             </>
           )}
 
@@ -161,93 +220,77 @@ export default function LessonPage() {
               <input
                 type="text"
                 value={blankAnswers[i] ?? ""}
-                onChange={(e) =>
-                  setBlankAnswers((p) => ({ ...p, [i]: e.target.value }))
-                }
-                disabled={!!result}
+                onChange={(e) => setBlankAnswers((p) => ({ ...p, [i]: e.target.value }))}
+                disabled={submitted}
               />
-              {result && (
-                <p>
-                  {result.results.find((r) => r.index === i)?.correct
-                    ? "✓ Đúng"
-                    : `✗ Sai — đáp án: ${b.answer}`}
-                </p>
-              )}
+              {result && <ResultLine result={result} index={i} />}
             </>
           )}
 
           {b.type === "order" && (
             <>
               <h3>{b.prompt}</h3>
-              {(orderAnswers[i] ?? shuffledOrders[i] ?? []).map((item, j, arr) => (
-                <div className="order-item" key={item}>
-                  <span style={{ flex: 1 }}>
-                    {j + 1}. {item}
-                  </span>
-                  {!result && (
-                    <>
-                      <button
-                        style={{ padding: "4px 10px" }}
-                        onClick={() => moveItem(i, j, -1)}
-                        disabled={j === 0}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        style={{ padding: "4px 10px" }}
-                        onClick={() => moveItem(i, j, 1)}
-                        disabled={j === arr.length - 1}
-                      >
-                        ↓
-                      </button>
-                    </>
-                  )}
-                </div>
-              ))}
-              {result && (
-                <p>
-                  {result.results.find((r) => r.index === i)?.correct
-                    ? "✓ Đúng"
-                    : "✗ Sai"}
-                </p>
-              )}
+              {currentOrder(i).map((itemId, j, arr) => {
+                const text = b.items.find((it) => it.id === itemId)?.text ?? "";
+                return (
+                  <div className="order-item" key={itemId}>
+                    <span style={{ flex: 1 }}>
+                      {j + 1}. {text}
+                    </span>
+                    {!submitted && (
+                      <>
+                        <button
+                          style={{ padding: "4px 10px" }}
+                          aria-label={`Đưa "${text}" lên`}
+                          onClick={() => moveItem(i, j, -1)}
+                          disabled={j === 0}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          style={{ padding: "4px 10px" }}
+                          aria-label={`Đưa "${text}" xuống`}
+                          onClick={() => moveItem(i, j, 1)}
+                          disabled={j === arr.length - 1}
+                        >
+                          ↓
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+              {result && <ResultLine result={result} index={i} />}
             </>
           )}
 
           {b.type === "match" && (
             <>
               <h3>{b.prompt}</h3>
-              {b.pairs.map(([left]) => (
-                <div className="match-row" key={left}>
-                  <span style={{ flex: 1, alignSelf: "center" }}>{left}</span>
+              {b.lefts.map((left) => (
+                <div className="match-row" key={left.id}>
+                  <span style={{ flex: 1, alignSelf: "center" }}>{left.text}</span>
                   <select
-                    value={matchAnswers[i]?.[left] ?? ""}
+                    value={matchAnswers[i]?.[left.id] ?? ""}
                     onChange={(e) =>
                       setMatchAnswers((p) => ({
                         ...p,
-                        [i]: { ...p[i], [left]: e.target.value },
+                        [i]: { ...p[i], [left.id]: Number(e.target.value) },
                       }))
                     }
-                    disabled={!!result}
+                    disabled={submitted}
+                    aria-label={`Ghép cho ${left.text}`}
                   >
                     <option value="">-- chọn --</option>
-                    {b.pairs.map(([, right]) => (
-                      <option key={right} value={right}>
-                        {right}
+                    {b.rights.map((right) => (
+                      <option key={right.id} value={right.id}>
+                        {right.text}
                       </option>
                     ))}
                   </select>
                 </div>
               ))}
-              {result && (
-                <p>
-                  {result.results.find((r) => r.index === i)?.correct
-                    ? "✓ Đúng"
-                    : `✗ Sai — đáp án: ${b.pairs
-                        .map(([l, r]) => `${l}→${r}`)
-                        .join(", ")}`}
-                </p>
-              )}
+              {result && <ResultLine result={result} index={i} />}
             </>
           )}
 
@@ -257,18 +300,10 @@ export default function LessonPage() {
               <input
                 type="text"
                 value={shortAnswers[i] ?? ""}
-                onChange={(e) =>
-                  setShortAnswers((p) => ({ ...p, [i]: e.target.value }))
-                }
-                disabled={!!result}
+                onChange={(e) => setShortAnswers((p) => ({ ...p, [i]: e.target.value }))}
+                disabled={submitted}
               />
-              {result && (
-                <p>
-                  {result.results.find((r) => r.index === i)?.correct
-                    ? "✓ Đúng"
-                    : "✗ Sai"}
-                </p>
-              )}
+              {result && <ResultLine result={result} index={i} />}
             </>
           )}
         </div>
@@ -276,9 +311,9 @@ export default function LessonPage() {
 
       {error && <div className="error-box">{error}</div>}
 
-      {!result && lesson.data && (
-        <button onClick={submit} disabled={submitting}>
-          {submitting ? "Đang nộp..." : "Nộp bài"}
+      {!submitted && lesson.data && (
+        <button onClick={submit} disabled={submitMutation.isPending}>
+          {submitMutation.isPending ? "Đang nộp..." : "Nộp bài"}
         </button>
       )}
 
@@ -290,9 +325,17 @@ export default function LessonPage() {
           </h2>
           <p>
             XP: +{result.rewards.xpEarned} (tổng {result.rewards.xp})
+            {result.rewards.xpEarned === 0 && !result.duplicate &&
+              " — bài này đã được cộng XP tối đa, nộp lại không cộng thêm"}
           </p>
         </div>
       )}
     </div>
   );
+}
+
+function ResultLine({ result, index }: { result: AttemptOut; index: number }) {
+  const r = result.results.find((x) => x.index === index);
+  if (!r) return null;
+  return <p>{r.correct ? "✓ Đúng" : "✗ Sai"}</p>;
 }

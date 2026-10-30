@@ -1,11 +1,15 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { ApiError, loginRequest, registerRequest } from "@/lib/api";
+import { useRedirectAfterLogin, useSessionRefresh } from "../providers";
 
-export default function LoginPage() {
-  const router = useRouter();
+function LoginInner() {
+  const params = useSearchParams();
+  const nextPath = params.get("next") || "/";
+  const redirectAfterLogin = useRedirectAfterLogin();
+  const refreshSession = useSessionRefresh();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -27,8 +31,8 @@ export default function LoginPage() {
       } else {
         await registerRequest(email, password);
       }
-      router.push("/");
-      router.refresh();
+      await refreshSession();
+      redirectAfterLogin(nextPath);
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message || `Lỗi ${err.status}`);
@@ -43,11 +47,15 @@ export default function LoginPage() {
   return (
     <div className="container">
       <div className="card" style={{ maxWidth: 420, margin: "0 auto" }}>
+        {nextPath !== "/" && (
+          <p className="badge">Bạn cần đăng nhập để tiếp tục.</p>
+        )}
         <h2>{mode === "login" ? "Đăng nhập" : "Tạo tài khoản"}</h2>
         <form onSubmit={submit} className="auth-form">
-          <label>
+          <label htmlFor="login-email">
             Email
             <input
+              id="login-email"
               type="email"
               required
               value={email}
@@ -56,9 +64,10 @@ export default function LoginPage() {
               autoComplete="email"
             />
           </label>
-          <label>
+          <label htmlFor="login-password">
             Mật khẩu
             <input
+              id="login-password"
               type="password"
               required
               minLength={8}
@@ -69,9 +78,10 @@ export default function LoginPage() {
             />
           </label>
           {mode === "register" && (
-            <label>
+            <label htmlFor="login-password-confirm">
               Nhập lại mật khẩu
               <input
+                id="login-password-confirm"
                 type="password"
                 required
                 value={confirm}
@@ -80,7 +90,11 @@ export default function LoginPage() {
               />
             </label>
           )}
-          {error && <p className="error-text">{error}</p>}
+          {error && (
+            <p className="error-text" role="alert">
+              {error}
+            </p>
+          )}
           <button type="submit" disabled={busy}>
             {busy ? "Đang xử lý..." : mode === "login" ? "Đăng nhập" : "Đăng ký"}
           </button>
@@ -88,6 +102,7 @@ export default function LoginPage() {
         <p>
           {mode === "login" ? "Chưa có tài khoản? " : "Đã có tài khoản? "}
           <button
+            type="button"
             className="link-btn"
             onClick={() => {
               setMode(mode === "login" ? "register" : "login");
@@ -99,5 +114,13 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="container">Đang tải...</div>}>
+      <LoginInner />
+    </Suspense>
   );
 }

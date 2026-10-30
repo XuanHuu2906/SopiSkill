@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { api } from "@/lib/api";
+import { useRequireAuth, useSessionQueryKey } from "../../providers";
 
 interface ProposalOut {
   version: number;
@@ -20,13 +21,15 @@ function ProposalInner() {
   const router = useRouter();
   const params = useSearchParams();
   const courseId = params.get("courseId") ?? "";
+  const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
+  const proposalKey = useSessionQueryKey("proposal", courseId);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const proposal = useQuery({
-    queryKey: ["proposal", courseId],
+    queryKey: proposalKey,
     queryFn: () => api<ProposalOut>(`/v1/courses/${courseId}/proposal`),
-    enabled: !!courseId,
+    enabled: !!courseId && isAuthenticated,
   });
 
   async function approve() {
@@ -42,6 +45,15 @@ function ProposalInner() {
   }
 
   if (!courseId) return <div className="container">Thiếu courseId.</div>;
+  if (authLoading) return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;
+  if (!isAuthenticated) return <div className="container">Đang chuyển tới trang đăng nhập…</div>;
+  if (proposal.isError)
+    return (
+      <div className="container">
+        <div className="error-box">Không tải được đề xuất: {proposal.error.message}</div>
+        <button onClick={() => proposal.refetch()}>Thử lại</button>
+      </div>
+    );
 
   return (
     <div className="container">
@@ -72,9 +84,26 @@ function ProposalInner() {
               </ol>
             </div>
           ))}
-          {error && <div className="error-box">{error}</div>}
-          <button onClick={approve} disabled={approving}>
-            {approving ? "Đang duyệt..." : "Duyệt & sinh khóa học"}
+          {proposal.data.approved && (
+            <div className="success-box">
+              Đề xuất này đã được duyệt (version {proposal.data.version}).
+            </div>
+          )}
+          {error && (
+            <div className="error-box" role="alert">
+              {error}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={approve}
+            disabled={approving || proposal.data.approved}
+          >
+            {proposal.data.approved
+              ? "Đã duyệt"
+              : approving
+                ? "Đang duyệt..."
+                : "Duyệt & sinh khóa học"}
           </button>
         </>
       )}
