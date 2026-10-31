@@ -1,0 +1,26 @@
+{
+  "_note": "PROPOSED EXAMPLE for P2.1; NOT a currently verified API response",
+  "schemaVersion": 2,
+  "title": "Python cho người mới",
+  "objective": "Viết và kiểm thử chương trình Python đơn giản",
+  "difficulty": "beginner",
+  "learningOutcomes": [
+    {"id": "lo-vars", "verb": "explain", "text": "Giải thích biến và kiểu dữ liệu"},
+    {"id": "lo-conditions", "verb": "apply", "text": "Viết câu lệnh điều kiện đơn giản"}
+  ],
+  "units": [
+    {"id": "unit-1", "title": "Cú pháp cơ bản", "lessonTitles": ["Biến và kiểu dữ liệu", "Câu lệnh điều kiện"]},
+    {"id": "unit-2", "title": "Thực hành", "lessonTitles": ["Vòng lặp", "Bài tập tổng hợp"]}
+  ],
+  "curriculumGraph": {
+    "nodes": [
+      {"skillId": "python-vars", "label": "Biến", "bloomLevel": "understand"},
+      {"skillId": "python-conditions", "label": "Điều kiện", "bloomLevel": "apply"},
+      {"skillId": "python-loops", "label": "Vòng lặp", "bloomLevel": "apply"}
+    ],
+    "edges": [
+      {"prerequisiteSkillId": "python-vars", "skillId": "python-conditions"},
+      {"prerequisiteSkillId": "python-conditions", "skillId": "python-loops"}
+    ]
+  }
+}

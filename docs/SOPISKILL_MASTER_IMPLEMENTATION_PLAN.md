@@ -250,7 +250,8 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P2.0 | TODO | High | Adapter real configured fail-fast; offline tests |
 | P2.1 | TODO | High | Generation bằng LLM thật có kiểm chứng nếu có credentials |
 | P2.2 | **DONE 2026-10-31** | High | `0007_p22_eval_cost`; dataset 12 topic + rubric deterministic + LLM-as-judge + cost/budget guard; 270 pytest, 51/51 E2E, real eval 12/12 |
-| P3.0–P3.1 | TODO | High | Tutor grounded, secure, SSE/cancel/quota |
+| P3.0 (Tutor Core) | **DONE 2026-10-31** | High | `0008_p30_tutor_core`; 306 pytest + 2 race + 58/58 E2E (tutor on) / 52/52 (off) |
+| P3.1 (Tools/cancel/quota) | TODO | High | Cần P3.0 làm nền |
 | P3.0b (Source Registry + Evidence Contract) | **DONE 2026-10-31** | High | `0005_p30_source_registry`; 190 pytest + 3 race + 47/47 E2E |
 | P2.SR (Source Research Agent) | **DONE 2026-10-31** | High | `0006_p2sr_source_research`; agent độc lập + registry/idempotency + flag off/on; offline adapter (mock/curated) |
 | P4.0–P4.1 | TODO (nền P3.0b + P2.SR đã sẵn) | High | PDF → hybrid RAG → citations xác thực |
@@ -455,13 +456,13 @@ POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop  (P3.1)
 
 **Công việc:**
 
-- [ ] P3.0.1 DB: `tutor_threads`, `tutor_messages`, user/course owner, message state, clientMessageId unique, timestamps; migration backward compatible.
-- [ ] P3.0.2 Server resolve course + lesson **cùng owner**; blockIndex in bounds; không tin nội dung `lesson`/`contextRef` tự cung cấp để bypass DB.
-- [ ] P3.0.3 Tutor prompt với lesson + selected block + conversation history bounded; có guidance khi không đủ context, không bịa citation.
-- [ ] P3.0.4 SSE response heartbeat/`delta/done/error`, buffering/broken connection và persisted final message; chọn event IDs/ordering rõ ràng.
-- [ ] P3.0.5 Idempotency: double-click/reconnect cùng `clientMessageId` không tạo hai user messages hoặc double billing; xác định replay behavior.
-- [ ] P3.0.6 UI: tutor panel trong lesson, loading/stream/stop state, auto scroll có accessibility, error/retry; CSRF + cookie đúng contract.
-- [ ] P3.0.7 Test output giữa 2 user, invalid block, expired session, malformed stream, disconnect; mock streaming provider cố định, không cần tiền.
+- [x] P3.0.1 DB: `tutor_threads`, `tutor_messages`, user/course owner, message state, clientMessageId unique, timestamps; migration backward compatible. — `0008_p30_tutor_core`, expand-only, rollback + legacy-row đã kiểm chứng.
+- [x] P3.0.2 Server resolve course + lesson **cùng owner**; blockIndex in bounds; không tin nội dung `lesson`/`contextRef` tự cung cấp để bypass DB.
+- [x] P3.0.3 Tutor prompt với lesson + selected block + conversation history bounded; có guidance khi không đủ context, không bịa citation. (chỉ public blocks — không answer key)
+- [x] P3.0.4 SSE response heartbeat/`delta/done/error`, buffering/broken connection và persisted final message; chọn event IDs/ordering rõ ràng. (`id = streamId:seq`, seq đơn điệu từ 0)
+- [x] P3.0.5 Idempotency: double-click/reconnect cùng `clientMessageId` không tạo hai user messages hoặc double billing; xác định replay behavior. (đã xong ⇒ replay; đang chạy ⇒ 409)
+- [x] P3.0.6 UI: tutor panel trong lesson, loading/stream/stop state, auto scroll có accessibility, error/retry; CSRF + cookie đúng contract.
+- [x] P3.0.7 Test output giữa 2 user, invalid block, expired session, malformed stream, disconnect; mock streaming provider cố định, không cần tiền.
 
 **Acceptance / Gate:** stream 1 câu trả lời hoàn chỉnh trong đúng lesson, history sau reload có data đúng, 404 cross-owner, blocked unauthorized context, no duplicate messages, test real streaming chỉ khi provider được phép.  
 **Không làm:** Tutor tool có quyền ghi/cập nhật course chưa được duyệt, RAG citation chưa có source.
@@ -784,6 +785,7 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-10-30 | Embedding model/dimension/index và OCR | **CHƯA CHỐT** | P4 benchmark / use case |
 | 2026-10-30 | BKT/LSTM/Bandit và billing | **CONDITIONAL/FUTURE** | Dữ liệu/metrics/approval |
 | 2026-10-31 | **P3.0 tách khỏi P3 Tutor**: làm Source Registry + Evidence Contract trước, không nhảy sang RAG | **HOÀN THÀNH (IMPLEMENTED+TESTED)** | `docs/development-progress.md` 2026-10-31 P3.0; migration `0005_p30_source_registry` |
+| 2026-10-31 | **P3.0 AI Tutor Core**: SSE + grounding từ public blocks + idempotency theo DB, chưa có tool/cancel/quota đầy đủ | **HOÀN THÀNH (IMPLEMENTED+TESTED MOCK; real streaming NOT TESTED)** | `docs/development-progress.md` 2026-10-31 P3.0 Tutor; migration `0008_p30_tutor_core` |
 | 2026-10-31 | Nguồn mới **luôn** `unverified`; evaluator chỉ **đề xuất** trạng thái, không tự ghi | **CHỌN (bảo mật/trung thực)** | `services/source_service.create_source`, `services/source_evaluation` |
 | 2026-10-31 | Bài học chưa có nguồn ingest ⇒ luôn `general_ai_knowledge`; không tạo `evidence_supported` giả | **CHỌN (trung thực với bằng chứng)** | `services/source_context.lesson_grounding`, `tests/test_p30_source_first.py` |
 | 2026-10-31 | Citation do **server** sinh từ registry; LLM không nhận/không trả `sourceId` | **CHỌN (chống citation giả)** | `services/citation_service`, prompt `p3.0-v1` |

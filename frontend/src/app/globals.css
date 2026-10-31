@@ -305,3 +305,79 @@ textarea {
   color: #4b5563;
   font-size: 0.9rem;
 }
+
+/* P3.0 — AI Tutor panel */
+.tutor-panel {
+  margin-top: 24px;
+}
+
+.tutor-messages {
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid #e3e6ee;
+  border-radius: 12px;
+  padding: 12px;
+  margin: 12px 0;
+  background: #fbfcfe;
+}
+
+.tutor-message {
+  margin-bottom: 14px;
+}
+
+.tutor-message p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tutor-message-user p {
+  color: #1a1d29;
+}
+
+.tutor-message-assistant p {
+  color: #26323f;
+}
+
+.tutor-caret {
+  display: inline-block;
+  margin-left: 2px;
+  animation: tutor-blink 1s step-end infinite;
+}
+
+@keyframes tutor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.tutor-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.tutor-actions .secondary {
+  background: #eef0f8;
+  color: #4f46e5;
+}
+
+.tutor-actions .secondary:hover {
+  background: #e0e4f5;
+}
+
+.tutor-threads {
+  margin: 8px 0;
+}
+
+.tutor-threads select {
+  width: 100%;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #cdd2e1;
+}
+
+.lesson-block-active {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.25);
+}

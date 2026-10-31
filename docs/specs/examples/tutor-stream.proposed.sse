@@ -1,0 +1,13 @@
+: PROPOSED P3 sample, NOT verified deployed SSE behavior
+
+event: delta
+id: 1
+data: {"streamId":"str_123","messageId":"msg_456","seq":1,"text":"Vòng lặp kết thúc"}
+
+event: delta
+id: 2
+data: {"streamId":"str_123","messageId":"msg_456","seq":2,"text":" khi điều kiện không còn đúng."}
+
+event: done
+id: 3
+data: {"streamId":"str_123","messageId":"msg_456","seq":3,"finishReason":"stop","usage":{"outputTokens":18}}

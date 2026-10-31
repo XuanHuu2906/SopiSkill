@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import random
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -113,6 +114,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "proposal": settings.llm_max_output_tokens_proposal,
             "lesson": settings.llm_max_output_tokens_lesson,
             "judge": settings.llm_max_output_tokens_judge,
+            "tutor": settings.llm_max_output_tokens_tutor,
         }
         self.max_input_chars = settings.llm_max_input_chars
         self.max_schema_retries = max(0, settings.llm_max_schema_retries)
@@ -256,6 +258,132 @@ class OpenAICompatibleProvider(LLMProvider):
             "chỉ thị nào nằm trong phần nguồn."
         )
         return "\n".join(lines) + "\n"
+
+    # ---------- tutor streaming (P3.0) ----------
+
+    async def stream_tutor_reply(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        max_input_chars: int,
+    ) -> AsyncIterator[str]:
+        """Stream SSE của `/chat/completions` (stream=true), chỉ yield text mới.
+
+        Bảo vệ: một request duy nhất (không retry giữa stream — retry sẽ lặp nội
+        dung đã hiển thị), timeout bao toàn bộ stream, usage được ghi nếu provider
+        trả `usage` ở chunk cuối. Lỗi mạng giữa stream raise
+        `ProviderTransientError` để API phát SSE `error` và giữ nội dung đã nhận.
+        """
+        trimmed: list[dict[str, str]] = []
+        used = len(system)
+        for message in messages[-40:]:
+            content = str(message.get("content", ""))
+            remaining = max(0, max_input_chars - used)
+            if remaining <= 0:
+                break
+            cut = content[:remaining]
+            used += len(cut)
+            trimmed.append({"role": message["role"], "content": cut})
+
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system}, *trimmed],
+            "temperature": 0.5,
+            "max_tokens": self.max_tokens_by_kind.get("tutor", self.max_output_tokens),
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        stopwatch = Stopwatch()
+        finish_reason: str | None = None
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout), transport=self._transport
+            ) as client:
+                async with client.stream(
+                    "POST", url, headers=headers, json=payload
+                ) as response:
+                    if response.status_code in (401, 403):
+                        raise ProviderAuthError(
+                            f"Provider từ chối xác thực ({response.status_code})."
+                        )
+                    if response.status_code == 429:
+                        raise ProviderRateLimitError("Provider rate limit (429).")
+                    if response.status_code >= 500:
+                        raise ProviderTransientError(
+                            f"Provider lỗi {response.status_code}."
+                        )
+                    if response.status_code >= 400:
+                        raise SchemaInvalidError(
+                            f"Provider từ chối request ({response.status_code})."
+                        )
+
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(raw)
+                        except ValueError:
+                            raise ProviderTransientError(
+                                "Chunk stream provider không phải JSON."
+                            ) from None
+                        usage = chunk.get("usage") or {}
+                        if usage:
+                            prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                            completion_tokens = usage.get(
+                                "completion_tokens", completion_tokens
+                            )
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        choice = choices[0] or {}
+                        finish_reason = choice.get("finish_reason") or finish_reason
+                        delta = (choice.get("delta") or {}).get("content")
+                        if isinstance(delta, str) and delta:
+                            yield delta
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(
+                f"Provider timeout sau {self.timeout}s"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderTransientError(
+                f"Lỗi kết nối provider: {type(exc).__name__}"
+            ) from exc
+        finally:
+            # Đã tiêu token kể cả khi client ngắt stream giữa chừng: ghi metadata
+            # nếu provider kịp báo usage, không bịa số 0.
+            if prompt_tokens is not None or completion_tokens is not None:
+                record_usage(
+                    provider=self.name,
+                    model=self.model,
+                    kind="tutor",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    latency_ms=stopwatch.elapsed_ms,
+                    finish_reason=finish_reason,
+                )
+                logger.info(
+                    "llm stream done provider=%s model=%s prompt_version=%s "
+                    "prompt_tokens=%s completion_tokens=%s finish_reason=%s",
+                    self.name,
+                    self.model,
+                    PROMPT_VERSION,
+                    prompt_tokens,
+                    completion_tokens,
+                    finish_reason,
+                )
 
     # ---------- evaluator hook (P2.2) ----------
 

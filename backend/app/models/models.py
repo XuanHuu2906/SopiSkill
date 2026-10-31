@@ -83,6 +83,28 @@ class LessonGrounding(str, enum.Enum):
     general_ai_knowledge = "general_ai_knowledge"
 
 
+class TutorMessageRole(str, enum.Enum):
+    user = "user"
+    assistant = "assistant"
+
+
+class TutorMessageStatus(str, enum.Enum):
+    """Trạng thái của một message trong thread tutor.
+
+    `pending` chỉ tồn tại trong transaction chuẩn bị stream; khi stream bắt đầu
+    message assistant chuyển `running`, và chỉ được ghi `completed`/`failed`/
+    `cancelled` bởi chính task đang giữ message đó. Nếu tiến trình chết giữa
+    chừng, row có thể còn `running` — client thấy trạng thái thật thay vì bị
+    báo nhầm là đã xong.
+    """
+
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 class SourceResearchStatus(str, enum.Enum):
     """Trạng thái của một lần nghiên cứu nguồn (P2.SR).
 
@@ -442,6 +464,89 @@ class LlmUsageEvent(Base):
     cost_estimate_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class TutorThread(Base):
+    """Một cuộc hội thoại tutor gắn với course + lesson (P3.0).
+
+    Thread thuộc đúng một user và một course. `lesson_id` là ngữ cảnh mặc định
+    để mở thread, nhưng mỗi message vẫn lưu `context_ref` riêng vì người học có
+    thể hỏi ở block khác trong cùng bài. Ownership luôn kiểm tra ở server qua
+    course; không tin `userId`/`courseId` từ client.
+    """
+
+    __tablename__ = "tutor_threads"
+    __table_args__ = (
+        Index("ix_tutor_threads_user_course_updated", "user_id", "course_id", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), index=True)
+    lesson_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("lessons.id"), index=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    # Đếm lượt hỏi đã CHẤP NHẬN (reserve quota P3.1 dùng lại cột này).
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TutorMessage(Base):
+    """Một message trong thread tutor.
+
+    `client_message_id` unique theo thread: retry cùng id không tạo message thứ
+    hai và không gọi provider lần nữa. Nội dung assistant được ghi dần
+    (`content`) trong lúc stream nhưng chỉ được coi là final khi `status` =
+    `completed`.
+    """
+
+    __tablename__ = "tutor_messages"
+    __table_args__ = (
+        # Một lượt hỏi = đúng 1 user message + đúng 1 assistant message cho mỗi
+        # (course, clientMessageId). Khóa theo **course** chứ không chỉ thread để
+        # retry vẫn idempotent kể cả khi request đầu chưa kịp trả `threadId`
+        # (double-click tạo 2 thread song song). `role` cho phép cặp user+assistant
+        # cùng id mà không đụng nhau.
+        UniqueConstraint(
+            "course_id", "client_message_id", "role", name="uq_tutor_message_client_id"
+        ),
+        # `position` là thứ tự logic trong thread (0,1,2,…). Không dùng
+        # `created_at` để sắp xếp vì độ phân giải giây làm user/assistant trùng
+        # timestamp và thứ tự hiển thị sẽ ngẫu nhiên.
+        Index("ix_tutor_messages_thread_position", "thread_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tutor_threads.id"), index=True)
+    # Denormalized để UNIQUE(course_id, client_message_id, role) enforce được ở DB.
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    role: Mapped[TutorMessageRole] = mapped_column(
+        Enum(TutorMessageRole, name="tutor_message_role")
+    )
+    status: Mapped[TutorMessageStatus] = mapped_column(
+        Enum(TutorMessageStatus, name="tutor_message_status"),
+        default=TutorMessageStatus.pending,
+    )
+    content: Mapped[str] = mapped_column(Text, default="")
+    # Snapshot context của lượt hỏi: {lessonId, blockIndex, lessonTitle, blockType}.
+    context_ref: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    # clientMessageId của LƯỢT HỎI (user message) mà assistant này trả lời.
+    client_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    finish_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 

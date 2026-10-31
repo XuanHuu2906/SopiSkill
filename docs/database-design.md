@@ -126,6 +126,37 @@ Block types: `teach` (paragraphs), `mc` (question, options, answerIndex), `blank
 
 Không lưu prompt, câu trả lời người học hay nội dung sinh ra.
 
+### tutor_threads (P3.0 — revision `0008_p30_tutor_core`)
+| cột | kiểu | ghi chú |
+|---|---|---|
+| id | UUID PK | hiển thị `tth_*` |
+| user_id | UUID FK users | owner; truy vấn luôn scoped theo cột này |
+| course_id | UUID FK courses | phải khớp course trong path |
+| lesson_id | UUID FK lessons | ngữ cảnh mặc định của thread |
+| title | text default '' | lấy từ câu hỏi đầu tiên (cắt 120 ký tự) |
+| message_count | int default 0 | số lượt hỏi đã chấp nhận (quota P3.1 dùng lại) |
+| created_at / updated_at | timestamptz | index `(user_id, course_id, updated_at)` |
+
+### tutor_messages (P3.0)
+| cột | kiểu | ghi chú |
+|---|---|---|
+| id | UUID PK | hiển thị `tmsg_*` |
+| thread_id | UUID FK tutor_threads | |
+| course_id | UUID FK courses | denormalized để UNIQUE theo course hoạt động |
+| position | int NOT NULL default 0 | thứ tự logic (user chẵn, assistant lẻ); **không** dựa timestamp |
+| role | enum: user, assistant | |
+| status | enum: pending, running, completed, failed, cancelled | `running` còn lại = tiến trình chết, không phải "đã xong" |
+| content | text default '' | ghi dần trong stream; final khi status terminal |
+| context_ref | jsonb nullable | `{lessonId, lessonTitle, blockIndex, blockType}` do server dựng |
+| client_message_id | text nullable | idempotency; NULL cho dữ liệu legacy |
+| error_code, finish_reason | text nullable | mã lỗi đã chuẩn hoá / stop/… |
+| prompt_tokens, completion_tokens | int nullable | usage nếu provider trả |
+| created_at / updated_at | timestamptz | index `(thread_id, position)` |
+| UNIQUE(course_id, client_message_id, role) | | chống double-send ⇒ không gọi provider lần 2 |
+
+> Không lưu system prompt, đáp án quiz hay nội dung nguồn. `context_ref` chỉ chứa
+> metadata vị trí; nội dung bài học được đọc lại từ `lessons.content` (public projection).
+
 ### lesson_attempts
 | cột | kiểu | ghi chú |
 |---|---|---|

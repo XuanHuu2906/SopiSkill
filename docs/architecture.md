@@ -151,6 +151,31 @@ Topic → Interview → [Source Research Agent] → Source Registry → Proposal
 
 Chi tiết: `docs/source-research-agent.md`.
 
+### 3.8. AI Tutor Core (P3.0 — đã triển khai, mặc định TẮT)
+
+Trợ giảng trong bài học: hỏi đáp stream theo **thread**, ngữ cảnh do server dựng.
+
+```
+POST /v1/courses/{c}/tutor/messages            → SSE (delta/done/error/heartbeat)
+GET  /v1/courses/{c}/tutor/threads             → thread của user trong course
+GET  /v1/courses/{c}/tutor/threads/{t}         → lịch sử đầy đủ, thứ tự ổn định
+```
+
+- **Grounding server-side:** `contextRef.lessonId` được resolve lại với `lesson.course_id == course.id`
+  (và `Course.user_id == user.id`); `blockIndex` phải nằm trong biên **public blocks**. System prompt
+  chỉ chứa public blocks ⇒ tutor **không bao giờ** thấy `answerIndex`/`answer`/`acceptedAnswers`.
+- **Không nhận từ client:** system prompt, lesson content, source content, ownerId, học lực tự khai
+  (`extra=forbid` ⇒ 422). Prompt injection trong câu hỏi chỉ là dữ liệu, được đặt sau system prompt.
+- **Không bịa citation:** P3.0 chưa ingest nguồn ⇒ prompt nói rõ không có đoạn nguồn kiểm chứng;
+  tên nguồn đã liên kết chỉ để định hướng, cấm trích URL/số trang.
+- **Idempotency:** `UNIQUE(course_id, clientMessageId, role)` + row lock per-user; retry đã xong ⇒
+  replay nội dung đã lưu (**không** gọi provider lần 2); đang chạy ⇒ `409 MESSAGE_IN_PROGRESS`.
+- **Trạng thái trung thực:** `pending → running → completed | failed | cancelled`. Client ngắt stream
+  ⇒ server ghi `cancelled` (không tuyên bố đã xong), nội dung một phần được giữ.
+- **Giới hạn đã biết:** không hỗ trợ `Last-Event-ID`/resume từng byte; chưa có endpoint stop
+  server-side (P3.1); quota mới là trần ngày đơn giản, chưa phải allowance đầy đủ.
+- Feature flag `TUTOR_ENABLED=false` ⇒ endpoint trả `503 TUTOR_DISABLED`, flow cũ không đổi.
+
 ## 4. Luồng nghiệp vụ
 
 ### Course Generator (vertical slice này)
@@ -174,6 +199,11 @@ GET  /v1/sources/{id}                         → metadata (private người kh�
 GET  /v1/sources/{id}/evaluation              → đánh giá deterministic metadata-only
 POST /v1/courses/{id}/sources                 → liên kết nguồn với course
 GET  /v1/courses/{id}/sources                 → danh sách nguồn đã liên kết
+
+// P3.0 AI Tutor (flag TUTOR_ENABLED, default off ⇒ 503)
+POST /v1/courses/{id}/tutor/messages          → SSE delta/done/error/heartbeat
+GET  /v1/courses/{id}/tutor/threads           → thread list (owner-scoped)
+GET  /v1/courses/{id}/tutor/threads/{threadId} → lịch sử + replaySupported=false
 
 // P2.SR Source Research Agent (flag SOURCE_RESEARCH_ENABLED, default off ⇒ 503)
 POST /v1/courses/{id}/research-runs           → 201 chạy/trả lại research run (deterministic)

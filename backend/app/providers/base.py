@@ -7,6 +7,7 @@ Mọi adapter phải:
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 from app.schemas.schemas import LessonContent, ProposalPayload, SourceContextEntry
 
@@ -117,3 +118,25 @@ class LLMProvider(ABC):
         raise ProviderConfigError(
             f"Provider '{self.name}' không hỗ trợ lời gọi JSON cho evaluator."
         )
+
+    async def stream_tutor_reply(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        max_input_chars: int,
+    ) -> AsyncIterator[str]:
+        """Stream text trả lời tutor từng đoạn (P3.0).
+
+        Contract:
+          - Chỉ yield phần text mới; tầng trên ghép lại thành nội dung cuối.
+          - Raise lỗi thuộc taxonomy `ProviderError` để API chọn SSE `error` code.
+          - Provider không hỗ trợ streaming phải raise `ProviderConfigError` thay
+            vì giả vờ stream (server sẽ trả lỗi có cấu trúc, không treo stream).
+
+        Mặc định không hỗ trợ để adapter cũ không bị coi nhầm là streaming thật.
+        """
+        raise ProviderConfigError(
+            f"Provider '{self.name}' không hỗ trợ streaming tutor."
+        )
+        yield ""  # pragma: no cover — giữ chữ ký async generator

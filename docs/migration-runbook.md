@@ -160,3 +160,47 @@ và `cost_estimate_usd = NULL` được đọc đúng nghĩa "chưa biết giá"
 DB dev `ailp` đã backup (`backup_pre_p22_*.sql`, 14 COPY) và upgrade lên 0007.
 
 Rollback mất **lịch sử usage/chi phí** (không ảnh hưởng course/lesson/attempt/job/citation).
+
+## P3.0 Tutor — revision `0008_p30_tutor_core`
+
+Thay đổi (expand-only): 2 bảng mới + 2 enum + 4 index; **không** sửa cột/bảng cũ.
+
+```bash
+# throwaway check (đã chạy 2026-10-31)
+docker exec reverseengineer-db-1 psql -U ailp -d postgres   -c "DROP DATABASE IF EXISTS p30_tutor_migration_check"   -c "CREATE DATABASE p30_tutor_migration_check"
+cd backend
+DATABASE_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p30_tutor_migration_check"   python -m alembic upgrade head        # → 0008_p30_tutor_core (head), 17 bảng
+DATABASE_URL=… python -m alembic current
+```
+
+Kết quả introspection `tutor_messages`: `position` NOT NULL default 0, `course_id` NOT NULL
+(cột denormalized để UNIQUE hoạt động), `context_ref jsonb`, `UNIQUE(course_id,
+client_message_id, role)` tên `uq_tutor_message_client_id`, index
+`(thread_id, position)`; FK tới `courses`, `tutor_threads`, `users`, `lessons`.
+
+### Rollback đã kiểm chứng
+
+```bash
+DATABASE_URL=… python -m alembic downgrade 0007_p22_eval_cost   # exit 0
+# → còn 15 bảng, 2 bảng tutor + 2 enum biến mất
+DATABASE_URL=… python -m alembic upgrade head                   # forward recovery OK
+```
+
+### Bài học/khóa học cũ vẫn đọc được (đã kiểm chứng)
+
+Seed user/course/unit/lesson ở revision 0007 (`content_version=3`) → `upgrade head` →
+`title='L'`, `content_version=3`, `status='ready'`, `grounding='general_ai_knowledge'`,
+`tutor_threads` count = 0 ⇒ **không mất dữ liệu**, không backfill giả.
+
+### Giới hạn rollback
+
+- `downgrade` **mất** toàn bộ thread/message tutor. Không khôi phục được từ schema; cần restore
+  backup (`backup_pre_p30_tutor_*.sql`) nếu muốn quay lui có dữ liệu hội thoại.
+- `lessons.content`, attempt, progress, source, citation **không** bị đụng.
+- DB dev `ailp` đã backup trước khi upgrade (xem `docs/development-progress.md`).
+
+### Race test (PostgreSQL throwaway `p30_tutor_race_check`)
+
+```bash
+POSTGRES_TEST_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p30_tutor_race_check"   python -m pytest tests/test_p30_tutor_postgres_concurrency.py -q    # 2 passed
+```

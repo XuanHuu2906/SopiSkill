@@ -1,0 +1,8 @@
+{
+  "_note": "Proposed envelope for new APIs only; check current backend format before adopting",
+  "error": {
+    "code": "TUTOR_LIMIT_REACHED",
+    "message": "Đã hết lượt hỏi trong kỳ này.",
+    "requestId": "req_example"
+  }
+}

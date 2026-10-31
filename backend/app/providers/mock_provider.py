@@ -5,6 +5,7 @@ Dùng cho dev/test và acceptance E2E. Nội dung sinh theo template bám topic
 """
 
 import hashlib
+from collections.abc import AsyncIterator
 
 from app.providers.base import LLMProvider
 from app.schemas.schemas import (
@@ -173,6 +174,40 @@ class MockProvider(LLMProvider):
             title=lesson_title,
             blocks=[teach, mc, blank, order, match, short],
         )
+
+    async def stream_tutor_reply(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        max_input_chars: int,
+    ) -> AsyncIterator[str]:
+        """Stream deterministic — KHÔNG phải AI thật, dùng cho test/dev.
+
+        Nội dung bám câu hỏi cuối + tên bài để luồng UI/SSE có dữ liệu thật để
+        kiểm tra ordering, nhưng không tuyên bố đây là câu trả lời của model.
+        """
+        question = ""
+        for message in reversed(messages):
+            if message.get("role") == "user":
+                question = " ".join(str(message.get("content", "")).split())[:300]
+                break
+        lesson_line = next(
+            (line for line in system.splitlines() if line.startswith("Bài học hiện tại:")),
+            "",
+        )
+        answer = (
+            "Mình là trợ giảng ở chế độ MOCK (không phải AI thật). "
+            f"{lesson_line.strip()} Câu hỏi của bạn: \"{question}\". "
+            "Gợi ý: hãy đọc lại đoạn giảng ngay trên block bạn đang mở, "
+            "rồi tự giải thích bằng lời của mình trước khi xem đáp án quiz. "
+            "Mình chưa có nguồn tài liệu được kiểm chứng để trích dẫn."
+        )
+        # Chia theo từ để mỗi delta có ý nghĩa; không sleep để test nhanh.
+        words = answer.split(" ")
+        for index, word in enumerate(words):
+            yield word if index == 0 else " " + word
+
 
 
 def _rotate_options(options: list[str], answer_index: int, seed: int) -> list[str]:

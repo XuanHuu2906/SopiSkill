@@ -210,3 +210,176 @@ export function isVerifiedStatus(status: string): boolean {
 export async function logoutRequest(): Promise<void> {
   await api<void>("/v1/auth/logout", { method: "POST" });
 }
+
+// ---------- AI Tutor (P3.0) ----------
+
+export interface TutorMessage {
+  id: string;
+  role: "user" | "assistant";
+  status: string;
+  content: string;
+  contextRef: Record<string, unknown> | null;
+  errorCode: string | null;
+  finishReason: string | null;
+  createdAt: string | null;
+}
+
+export interface TutorThread {
+  id: string;
+  courseId: string;
+  lessonId: string;
+  title: string;
+  messageCount: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+  messages: TutorMessage[];
+  replaySupported: boolean;
+  notice: string | null;
+}
+
+export interface TutorThreadSummary {
+  id: string;
+  courseId: string;
+  lessonId: string;
+  title: string;
+  messageCount: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface TutorThreadList {
+  items: TutorThreadSummary[];
+  total: number;
+}
+
+export function fetchTutorThreads(courseId: string): Promise<TutorThreadList> {
+  return api<TutorThreadList>(`/v1/courses/${courseId}/tutor/threads`);
+}
+
+export function fetchTutorThread(
+  courseId: string,
+  threadId: string
+): Promise<TutorThread> {
+  return api<TutorThread>(
+    `/v1/courses/${courseId}/tutor/threads/${threadId}`
+  );
+}
+
+export interface TutorStreamEvent {
+  event: "delta" | "done" | "error" | "heartbeat";
+  data: {
+    streamId?: string;
+    messageId?: string;
+    seq?: number;
+    text?: string;
+    code?: string;
+    message?: string;
+    retryable?: boolean;
+    finishReason?: string;
+    replayed?: boolean;
+  };
+}
+
+export class TutorStreamError extends Error {
+  code: string;
+  status: number;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/**
+ * Mở một lượt hỏi tutor và đọc SSE thật của SopiSkill.
+ *
+ * - Không dùng EventSource: cần POST + CSRF header + cookie session.
+ * - `signal` để client hủy stream (server ghi `cancelled`, KHÔNG cam kết dừng
+ *   tính phí phía provider).
+ * - `onThreadId` nhận thread id từ response header trước delta đầu tiên.
+ * - Parse đúng chuẩn frame (`id:`, `event:`, `data:`) và xử lý data nhiều dòng.
+ */
+export async function streamTutorMessage(
+  courseId: string,
+  body: {
+    clientMessageId: string;
+    threadId: string | null;
+    text: string;
+    contextRef: { lessonId: string; blockIndex: number };
+  },
+  handlers: {
+    signal?: AbortSignal;
+    onThreadId?: (threadId: string) => void;
+    onEvent: (event: TutorStreamEvent) => void;
+  }
+): Promise<void> {
+  const res = await fetch(`${API_URL}/v1/courses/${courseId}/tutor/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      "X-CSRF-Token": getCsrfToken(),
+    },
+    body: JSON.stringify(body),
+    credentials: "include",
+    cache: "no-store",
+    signal: handlers.signal,
+  });
+
+  if (!res.ok) {
+    let code = "HTTP_ERROR";
+    let message = res.statusText;
+    try {
+      const data = await res.json();
+      if (typeof data.detail === "string") {
+        message = data.detail;
+      } else if (data.detail?.code) {
+        code = data.detail.code;
+        message = data.detail.message ?? message;
+      }
+    } catch {
+      // ignore
+    }
+    throw new TutorStreamError(res.status, code, message);
+  }
+
+  const threadId = res.headers.get("x-tutor-thread-id");
+  if (threadId) handlers.onThreadId?.(threadId);
+  if (!res.body) throw new TutorStreamError(500, "NO_STREAM", "Server không trả stream.");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const rawFrame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+
+      let eventName = "message";
+      const dataLines: string[] = [];
+      for (const line of rawFrame.split("\n")) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      }
+      if (dataLines.length === 0) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(dataLines.join("\n"));
+      } catch {
+        continue; // frame hỏng: bỏ qua, không làm crash UI
+      }
+      handlers.onEvent({
+        event: eventName as TutorStreamEvent["event"],
+        data: parsed as TutorStreamEvent["data"],
+      });
+    }
+  }
+}

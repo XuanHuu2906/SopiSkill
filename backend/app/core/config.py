@@ -91,6 +91,23 @@ class Settings(BaseSettings):
     # source_research_enabled=True. Mặc định tắt: flow cũ không đổi.
     source_research_auto_link: bool = False
 
+    # P3.0 AI Tutor — mặc định TẮT để không đổi hành vi hiện tại.
+    tutor_enabled: bool = False
+    # Số message history (user+assistant) gửi kèm trong một lời gọi.
+    tutor_history_max_messages: int = 12
+    # Trần ký tự cho một câu hỏi của người học.
+    tutor_max_question_chars: int = 2000
+    # Trần ký tự nội dung lesson đưa vào prompt (public blocks, không answer key).
+    tutor_context_max_chars: int = 6000
+    # Trần token output cho một câu trả lời tutor.
+    llm_max_output_tokens_tutor: int = 900
+    # Timeout toàn bộ một stream (giây) — chặn stream treo vô hạn.
+    tutor_stream_timeout_seconds: float = 60.0
+    # Khoảng nghỉ giữa hai heartbeat khi provider chưa trả token (giây).
+    tutor_heartbeat_seconds: float = 15.0
+    # Số lượt hỏi tối đa/ngày/user. 0 = không giới hạn (P3.1 làm quota đầy đủ).
+    tutor_messages_per_day: int = 0
+
     # Auth
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"

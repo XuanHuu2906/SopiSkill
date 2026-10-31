@@ -2,6 +2,109 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-10-31 — P3.0 AI Tutor Core (SSE + lesson grounding)
+- Base commit: `50e47c9` (branch `main`, working tree)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Scope & decisions:
+  - **Tutor ground trên PUBLIC blocks, không phải `lessons.content`**: system prompt chỉ chứa bản
+    public (đã loại `answerIndex`/`answer`/`acceptedAnswers`/`pairs`) ⇒ tutor không thể vô tình đọc
+    đáp án quiz đang làm. Đây là quyết định bảo mật, không chỉ là chi tiết hiển thị.
+  - **Client chỉ gửi VỊ TRÍ** (`lessonId` + `blockIndex`); server resolve lại course → lesson →
+    block và kiểm biên. Request có `systemPrompt`/`lessonContent`/`sources`/`ownerId` bị **422**
+    (`extra=forbid`), không âm thầm bỏ qua.
+  - **Idempotency ở tầng DB, không phải RAM**: `UNIQUE(course_id, clientMessageId, role)` +
+    `SELECT … FOR UPDATE` per-user. Retry khi đã xong ⇒ **replay** nội dung đã lưu và **không** gọi
+    provider; retry khi đang chạy ⇒ `409 MESSAGE_IN_PROGRESS` (không multiplex stream ở P3.0).
+  - **Không hứa resume**: chưa có event log bền vững nên `replaySupported=false` trong response và
+    UI nói rõ "tải lại lịch sử" thay vì giả vờ khôi phục từng byte. `id` frame = `streamId:seq`
+    (đơn điệu), để P3.1 có thể thêm `Last-Event-ID` nếu thật sự lưu log.
+  - **Trạng thái trung thực**: `pending → running → completed | failed | cancelled`. Client ngắt
+    stream ⇒ server ghi `cancelled` + giữ phần đã nhận, không đánh dấu `completed`, không treo
+    `running`; mọi lỗi provider thành SSE `error` có mã (không lộ exception).
+  - **Không bịa citation**: P3.0 chưa ingest nguồn nên prompt dặn rõ chưa có đoạn nguồn kiểm chứng;
+    tên nguồn đã liên kết chỉ để định hướng, cấm trích URL/số trang.
+  - **Mặc định TẮT** (`TUTOR_ENABLED=false`) để bảo toàn hành vi cũ; flag tắt ⇒
+    `503 TUTOR_DISABLED`.
+- IMPLEMENTED:
+  - `backend/app/models/models.py`: `TutorMessageRole`, `TutorMessageStatus`, `TutorThread`,
+    `TutorMessage` (denormalized `course_id` + `position` để UNIQUE/ordering ổn định).
+  - `backend/alembic/versions/0008_p30_tutor_core.py` (mới): 2 bảng + 2 enum + 4 index +
+    UNIQUE(course_id, client_message_id, role); expand-only, downgrade đối xứng.
+  - `backend/app/services/tutor_service.py` (mới): resolve lesson theo owner+course, kiểm
+    blockIndex, lock per-user, idempotent prepare, history bounded, finalize/cancel.
+  - `backend/app/services/tutor_context.py` (mới): system prompt từ public blocks + block hiện tại
+    + đoạn giảng lân cận (có trần ký tự) + danh sách **tên** nguồn; history builder.
+  - `backend/app/services/sse.py` (mới): frame/headers chuẩn (data 1 dòng, no-store,
+    `X-Accel-Buffering: no`), `seq_id`.
+  - `backend/app/api/v1/tutor.py` (mới): POST stream + GET threads/thread detail; CSRF, rate limit
+    (30/phút + 6/10s), quota ngày, header `X-Tutor-Thread-Id`/`X-Tutor-Message-Id`.
+  - `backend/app/providers/base.py`: `stream_tutor_reply` (mặc định từ chối ⇒ không giả streaming).
+  - `backend/app/providers/mock_provider.py`: stream deterministic, ghi rõ là MOCK.
+  - `backend/app/providers/openai_compatible_provider.py`: stream SSE thật (`stream=true`,
+    `include_usage`), timeout/429/5xx/4xx → taxonomy, usage ghi cả khi stream bị ngắt.
+  - `backend/app/schemas/schemas.py`: `TutorContextRef`, `TutorMessageRequest` (extra=forbid),
+    `TutorMessageOut`, `TutorThread*Out`; `LessonOut.courseId` (nullable, backward-compatible).
+  - `backend/app/core/config.py` + `.env.example` + `docker-compose.yml`: 8 cấu hình tutor.
+  - Frontend: `lib/api.ts` (`streamTutorMessage` parser SSE thật, `AbortSignal`),
+    `lesson/[lessonId]/TutorPanel.tsx` (stream, stop, thread switch, `role=log`/`aria-live`,
+    Ctrl+Enter, hiển thị lỗi có mã), lesson page chọn block hiện tại; CSS mới.
+  - `backend/e2e_acceptance.py`: +6 check (12, 12b–12g) chạy cả hai chế độ flag.
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **306 passed, 12 skipped** (22.84s; trước 270/10).
+    Mới: `tests/test_p30_tutor.py` (**21 test**: SSE full turn + reload, seq đơn điệu, event id,
+    accumulate history trong cùng thread, duplicate replay không gọi service lần 2, 409 khi đang
+    chạy, cross-user 404, lesson khác course 404, blockIndex ngoài biên 422, chặn `systemPrompt`,
+    CSRF 403/401, flag tắt 503, quota ngày 429, provider timeout ⇒ SSE error + persist failed,
+    provider không hỗ trợ streaming ⇒ error sạch, prompt injection chỉ là user data, thread khác
+    lesson 422, public blocks không có answer key, hủy generator ⇒ `cancelled` giữ phần đã nhận), `tests/test_p30_tutor_stream_provider.py`
+    (**11 test**: yield chỉ text mới, usage/finish_reason, keep-alive/empty delta, chunk hỏng,
+    4 mã HTTP, timeout, truncate input, log không lộ key/prompt),
+    `tests/test_p30_tutor_migration_contract.py` (**4 test**).
+  - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK (9 routes, lesson 5.2 kB).
+- TESTED (PostgreSQL throwaway `p30_tutor_migration_check`):
+  - `alembic upgrade head` → exit 0 → `0008_p30_tutor_core (head)`, 17 bảng; `tutor_messages` có
+    `position`/`course_id` NOT NULL, `context_ref jsonb`, UNIQUE + index đúng.
+  - `alembic downgrade 0007_p22_eval_cost` → exit 0 → 15 bảng, 2 bảng + 2 enum tutor biến mất.
+  - Seed user/course/unit/lesson ở 0007 (`content_version=3`) → upgrade head → ORM đọc
+    `content_version=3`, `status=ready`, `grounding=general_ai_knowledge`, `tutor_threads=0`
+    ⇒ **không mất dữ liệu**.
+- TESTED (PostgreSQL race, throwaway `p30_tutor_race_check`):
+  - `POSTGRES_TEST_URL=…/p30_tutor_race_check python -m pytest tests/test_p30_tutor_postgres_concurrency.py -q`
+    → **2 passed**: 6 lần prepare đồng thời cùng `clientMessageId` ⇒ **1 cặp** user+assistant,
+    **1 thread**; cross-user thread lookup ⇒ 404.
+- TESTED (Docker full stack + E2E, mock provider):
+  - Backup trước khi rebuild: `docker exec db pg_dump` → `backup_pre_p30_tutor_20261031_202153.sql`.
+  - Backend tự chạy `alembic upgrade head` → DB dev `ailp` ở `0008_p30_tutor_core`; health 200.
+  - Flag **TẮT**: `E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py` → **52/52 PASS**
+    (12 = 503 `TUTOR_DISABLED`).
+  - Flag **BẬT** (`TUTOR_ENABLED=true docker compose up -d backend`) → **58/58 PASS**: stream
+    delta→done (329 ký tự, seq đúng), history đúng thứ tự, retry `replayed=true` cùng messageId,
+    blockIndex ngoài biên 422, chèn `systemPrompt` 422, user B 404 thread/list, thiếu CSRF 403.
+  - Trả về mặc định (`docker compose up -d backend`, `TUTOR_ENABLED=false`) → E2E lại **52/52**.
+- NOT TESTED:
+  - **Real provider streaming** (OpenAI-compatible thật, tốn phí): parser đã test bằng
+    `httpx.MockTransport`, nhưng chưa gọi endpoint thật ⇒ chất lượng/latency/token thật của tutor
+    là **NOT TESTED**, không được coi là đã kiểm chứng.
+  - Chất lượng sư phạm câu trả lời: mock trả template; chưa có người chấm.
+  - Resume `Last-Event-ID`, stop server-side, tool allowlist, allowance đầy đủ (P3.1).
+  - Browser E2E (Playwright) cho UI stream/stop: build + typecheck OK nhưng chưa chạy trình duyệt.
+- BLOCKED: none cho P3.0. Real streaming cần phê duyệt ngân sách/dữ liệu gửi ra ngoài.
+- Database: **có migration** `0008_p30_tutor_core` (expand-only; upgrade/downgrade/legacy-row đã
+  kiểm chứng trên DB throwaway; DB dev đã backup + upgrade).
+- Security: ownership 404; contextRef resolve server-side + kiểm biên; answer key không vào prompt;
+  `extra=forbid` chặn client chèn prompt/nội dung; CSRF + burst rate limit; log không chứa prompt,
+  key hay nội dung học viên; SSE `no-store`; lỗi provider chỉ lộ mã.
+- Regressions: 0. pytest 270 → **306 passed / 12 skipped**; E2E 52/52 (off) và 58/58 (on); build OK.
+- Known limitations:
+  - Chưa có endpoint stop server-side: dừng ở client ⇒ server ghi `cancelled`, nhưng provider có
+    thể đã tính phí phần đã sinh (không hoàn tiền).
+  - `TUTOR_MESSAGES_PER_DAY` là trần đơn giản, chưa phải allowance token/quota phân tán.
+  - Thread listing chưa phân trang UI (API có limit/offset).
+- PHASE GATE: **PASS cho P3.0 (Tutor Core, mock streaming)** — T-012/T-013 có bằng chứng; real
+  provider streaming ghi rõ **NOT TESTED**, không tuyên bố PASS.
+- NEXT: **P3.1** (tool read-only allowlist, stop/cancel server-side, quota/allowance đầy đủ) hoặc
+  **P4.0** PDF ingestion nếu ưu tiên nguồn tài liệu.
+
 ## 2026-10-31 — P2.2 AI Evaluation, Safety, Quality & Cost Control
 - Base commit: `0f2fd31886338620cc3967e4f5685bf4a54a32ec` (branch `main`, working tree)
 - New commit/branch: **NOT COMMITTED** (working tree)

@@ -6,11 +6,21 @@ import { useParams } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { api, citationStatusLabel, newClientId, type Citation } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
+import TutorPanel from "./TutorPanel";
 
 interface IdText {
   id: number;
   text: string;
 }
+
+const BLOCK_LABELS: Record<Block["type"], string> = {
+  teach: "Bài giảng",
+  mc: "Trắc nghiệm",
+  blank: "Điền chỗ trống",
+  order: "Sắp xếp",
+  match: "Ghép cặp",
+  short: "Trả lời ngắn",
+};
 
 // Public blocks từ server — KHÔNG có answer key.
 type Block =
@@ -23,6 +33,7 @@ type Block =
 
 interface LessonOut {
   id: string;
+  courseId?: string | null;
   title: string;
   orderIndex: number;
   contentVersion: number;
@@ -91,6 +102,9 @@ export default function LessonPage() {
   const [orderAnswers, setOrderAnswers] = useState<Record<number, number[]>>({});
   // match: leftId -> rightId (cả hai là id public).
   const [matchAnswers, setMatchAnswers] = useState<Record<number, Record<number, number>>>({});
+  // Block người học đang focus — dùng làm contextRef cho tutor (do người học chọn,
+  // không phải client tự bịa nội dung; server vẫn kiểm biên).
+  const [activeBlock, setActiveBlock] = useState(0);
 
   // clientAttemptId ổn định cho MỘT lần nộp: giữ nguyên qua retry mạng cùng nội dung,
   // chỉ tạo mới khi người học sửa câu trả lời hoặc nộp lần tiếp theo.
@@ -235,7 +249,12 @@ export default function LessonPage() {
       )}
 
       {lesson.data?.blocks.map((b, i) => (
-        <div className="card lesson-block" key={i}>
+        <div
+          className={`card lesson-block ${activeBlock === i ? "lesson-block-active" : ""}`}
+          key={i}
+          onFocusCapture={() => setActiveBlock(i)}
+          onClick={() => setActiveBlock(i)}
+        >
           {b.type === "teach" && (
             <>
               <h2>{b.title}</h2>
@@ -357,6 +376,19 @@ export default function LessonPage() {
           )}
         </div>
       ))}
+
+      {lesson.data?.courseId && (
+        <TutorPanel
+          courseId={lesson.data.courseId}
+          lessonId={lesson.data.id}
+          activeBlockIndex={activeBlock}
+          blockLabel={
+            lesson.data.blocks[activeBlock]
+              ? BLOCK_LABELS[lesson.data.blocks[activeBlock].type]
+              : undefined
+          }
+        />
+      )}
 
       {error && <div className="error-box">{error}</div>}
 

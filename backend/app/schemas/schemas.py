@@ -25,6 +25,12 @@ CITATION_VALIDATION_STATUS = Literal[
 ]
 LESSON_GROUNDING = Literal["source_grounded", "general_ai_knowledge"]
 
+CITATION_NOTICE = (
+    "P3.0 chưa ingest nội dung nguồn: câu trả lời KHÔNG có trích dẫn đã kiểm chứng. "
+    "Nếu người học hỏi cần bằng chứng, nói rõ là chưa có đoạn nguồn để kiểm chứng."
+)
+
+
 
 def _validate_http_url(value: str | None) -> str | None:
     """Chỉ chấp nhận http(s) tuyệt đối. KHÔNG fetch, KHÔNG suy ra độ tin cậy."""
@@ -451,6 +457,9 @@ class CourseDetailOut(BaseModel):
 
 class LessonOut(BaseModel):
     id: str
+    # Cho UI gọi các endpoint scoped theo course (progress, tutor) mà không phải
+    # đoán ngược từ URL. Server vẫn kiểm ownership ở mọi request.
+    courseId: str | None = None
     title: str
     orderIndex: int
     contentVersion: int
@@ -498,3 +507,62 @@ class AttemptOut(BaseModel):
     score: dict
     rewards: dict
     results: list[AttemptResultOut]
+
+
+# ---------- AI Tutor (P3.0) ----------
+class TutorContextRef(BaseModel):
+    """Tham chiếu ngữ cảnh do client gửi. Server luôn resolve lại từ DB."""
+
+    lessonId: str = Field(min_length=1, max_length=64)
+    blockIndex: int = Field(ge=0, le=200)
+
+    model_config = {"extra": "forbid"}
+
+
+class TutorMessageRequest(BaseModel):
+    """Body của POST /v1/courses/{courseId}/tutor/messages.
+
+    KHÔNG có `userId`, `courseId`, `systemPrompt`, `lessonContent`, `sources`
+    hay `ownerId`: server lấy identity từ session, course/lesson từ DB, và các
+    field đó bị từ chối rõ ràng (extra=forbid).
+    """
+
+    clientMessageId: str = Field(min_length=8, max_length=64)
+    threadId: str | None = Field(default=None, max_length=64)
+    text: str = Field(min_length=1, max_length=4000)
+    contextRef: TutorContextRef
+
+    model_config = {"extra": "forbid"}
+
+
+class TutorMessageOut(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    status: str
+    content: str
+    contextRef: dict | None = None
+    errorCode: str | None = None
+    finishReason: str | None = None
+    createdAt: str | None = None
+
+
+class TutorThreadSummaryOut(BaseModel):
+    id: str
+    courseId: str
+    lessonId: str
+    title: str
+    messageCount: int
+    createdAt: str | None = None
+    updatedAt: str | None = None
+
+
+class TutorThreadOut(TutorThreadSummaryOut):
+    messages: list[TutorMessageOut] = Field(default_factory=list)
+    # P3.0 không hỗ trợ replay byte-by-byte (chưa có event log bền vững).
+    replaySupported: bool = False
+    notice: str | None = None
+
+
+class TutorThreadListOut(BaseModel):
+    items: list[TutorThreadSummaryOut]
+    total: int

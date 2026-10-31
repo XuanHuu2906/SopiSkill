@@ -210,6 +210,7 @@ async def get_lesson(
     # Chỉ trả public blocks — answer key nằm trong private `lesson.content` ở server.
     return LessonOut(
         id=f"lsn_{lesson.id}",
+        courseId=f"crs_{lesson.course_id}",
         title=lesson.title,
         orderIndex=lesson.order_index,
         contentVersion=lesson.content_version,
