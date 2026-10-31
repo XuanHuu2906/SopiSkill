@@ -72,7 +72,7 @@ pytest -v
 E2E_BASE=http://127.0.0.1:8001 python e2e_acceptance.py
 ```
 
-Kết quả hiện tại: **119 unit+integration tests pass (+6 PostgreSQL race tests riêng); 35/35 E2E acceptance pass trên Docker Compose stack**. Mock provider vẫn là mặc định. Adapter LLM thật (OpenAI-compatible) có **28 mocked tests** và đã smoke test thật 3 request qua Deploy.com/DeepSeek (xem `docs/llm-provider.md`); tự động hoá real-provider trong CI vẫn **BLOCKED**. Chi tiết: `docs/development-progress.md`, `docs/llm-provider.md`.
+Kết quả hiện tại: **232 unit+integration tests pass (+10 PostgreSQL race tests riêng); 50/50 E2E acceptance pass trên Docker Compose stack (flag P2.SR tắt) và 52/52 khi bật**. Mock provider vẫn là mặc định. Adapter LLM thật (OpenAI-compatible) có mocked tests và đã smoke test thật 3 request qua Deploy.com/DeepSeek (xem `docs/llm-provider.md`); tự động hoá real-provider trong CI vẫn **BLOCKED**. Chi tiết: `docs/development-progress.md`, `docs/llm-provider.md`, `docs/source-first-architecture.md`.
 
 ## Alembic migration
 
@@ -96,17 +96,52 @@ Kết quả hiện tại: **119 unit+integration tests pass (+6 PostgreSQL race 
 | POST | `/v1/courses/{id}/retry` | Thử sinh lại |
 | GET | `/v1/courses` | **Dashboard**: danh sách course của chính user (limit/offset, tiến độ, resume) |
 | GET | `/v1/courses/{id}` | Course + path |
-| GET | `/v1/lessons/{id}` | **Public blocks** (không có answer key; order/match trả id đã shuffle) |
+| GET | `/v1/lessons/{id}` | **Public blocks** (không có answer key; order/match trả id đã shuffle) + `grounding` + `citations` |
 | POST | `/v1/lessons/{id}/attempts` | Nộp quiz — chấm deterministic từ private key trong DB; idempotent theo `clientAttemptId` |
+| POST | `/v1/sources` | Đăng ký nguồn metadata `{sourceType, title, canonicalUrl?, …}` (luôn `unverified`, cần CSRF) |
+| GET | `/v1/sources` | Nguồn public + nguồn private của chính user |
+| GET | `/v1/sources/discover` | Tìm nguồn qua adapter `curated`/`mock` (không network) |
+| GET | `/v1/sources/{id}` | Metadata nguồn (private của người khác ⇒ 404) |
+| GET | `/v1/sources/{id}/evaluation` | Đánh giá chất lượng nguồn (metadata-only, có giới hạn) |
+| POST | `/v1/courses/{id}/sources` | Liên kết nguồn với course (idempotent) |
+| GET | `/v1/courses/{id}/sources` | Nguồn đã liên kết + trạng thái grounding |
+| POST | `/v1/courses/{id}/research-runs` | **P2.SR**: chạy Source Research Agent (503 nếu flag tắt; idempotent theo fingerprint) |
+| GET | `/v1/courses/{id}/research-runs` | Danh sách lần nghiên cứu của course |
+| GET | `/v1/courses/{id}/research-runs/{runId}` | Chi tiết một lần nghiên cứu (cross-user ⇒ 404) |
+| POST | `/v1/courses/{id}/research-runs/{runId}/accept` | Đưa nguồn `metadata_verified` vào registry (run mock ⇒ 409) |
+
+## Source-First (P3.0)
+
+Đã triển khai **Source Registry + Evidence/Citation Contract + tích hợp tối thiểu vào luồng sinh
+bài học**. Điểm cần hiểu đúng:
+
+- Nguồn mới tạo **luôn** `unverified`; URL hợp lệ không làm nguồn đáng tin.
+- P3.0 **chưa ingest nội dung** ⇒ bài học luôn `general_ai_knowledge`, citation ở trạng thái
+  `unverified`/`unavailable`. Không có "đã xác minh" giả.
+- Bốn cấp kiểm chứng (metadata / locator / evidence / corroboration) được tách biệt; RAG thật là P4.
+- Chi tiết + checklist chuyển sang P4: `docs/source-first-architecture.md`.
+
+## Source Research Agent (P2.SR)
+
+Module nghiên cứu nguồn độc lập, **mặc định TẮT** (`SOURCE_RESEARCH_ENABLED=false`).
+
+- Tìm nguồn qua adapter `mock`/`curated` — **không gọi internet** trong phase này.
+- Agent chỉ kết luận `discovered` hoặc `metadata_verified`; `content_available` /
+  `evidence_verified` bị validator từ chối vì chưa có ingestion nội dung.
+- Không cấp `sourceId` registry cho agent; nguồn chỉ vào `sources` khi accept và vẫn `unverified`.
+- Idempotent theo `UNIQUE(course_id, request_fingerprint)`; timeout + bounded tool calls.
+- Chi tiết: `docs/source-research-agent.md`.
 
 ## Trạng thái triển khai
 
-Xem `docs/development-progress.md`. Tóm tắt: Course Generator + Lesson Engine + **Auth (JWT/Argon2id/CSRF)** + **Alembic migration** **IMPLEMENTED + TESTED**; Tutor/RAG **NOT IMPLEMENTED** (thiết kế có); Mock provider **không phải AI thật**.
+Xem `docs/development-progress.md`. Tóm tắt: Course Generator + Lesson Engine + **Auth (JWT/Argon2id/CSRF)** + **Alembic migration** + **Source Registry (P3.0)** + **Source Research Agent (P2.SR)** **IMPLEMENTED + TESTED**; Tutor/RAG ingestion/vector **NOT IMPLEMENTED** (thiết kế có); Mock provider **không phải AI thật**.
 
 ## Tài liệu
 
 - `docs/architecture.md` — kiến trúc và luồng nghiệp vụ
 - `docs/database-design.md` — schema PostgreSQL
+- `docs/source-first-architecture.md` — Source Registry, evidence contract, lộ trình RAG P4
+- `docs/source-research-agent.md` — Source Research Agent (P2.SR), contract, bảo mật, nâng cấp RAG
 - `docs/migration-runbook.md` — runbook chuyển DB cũ sang Alembic
 - `docs/implementation-plan.md` — kế hoạch slice
 - `docs/development-progress.md` — nhật ký tiến độ + giới hạn

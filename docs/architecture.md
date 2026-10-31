@@ -107,6 +107,42 @@ class LLMProvider(ABC):
 
 - PostgreSQL là nguồn dữ liệu chính. pgvector + RAG pipeline là giai đoạn 2; schema đã chừa chỗ mở rộng.
 
+### 3.6. Source Registry & Evidence Contract (P3.0 — đã triển khai)
+
+Source-first bổ sung lớp **truy vết nguồn** mà không đổi luồng interview/proposal/generation:
+
+- `sources`: metadata nguồn (không chứa nội dung tài liệu) + mức xác thực **metadata**.
+- `course_sources`: liên kết n–n course ↔ source + snapshot đánh giá.
+- `lesson_citations`: provenance của bài học, snapshot `source_version`.
+- `lessons.grounding`: `source_grounded` | `general_ai_knowledge`
+  (`server_default='general_ai_knowledge'` để bài học cũ đọc được).
+
+Bốn cấp kiểm chứng được tách biệt: metadata verified / locator verified / evidence supports
+claim / claim corroborated. P3.0 **chưa ingest nội dung** nên không bao giờ tạo
+`evidence_supported` và bài học luôn là `general_ai_knowledge`.
+
+Chi tiết + lộ trình RAG P4: `docs/source-first-architecture.md`.
+
+### 3.7. Source Research Agent (P2.SR — đã triển khai, mặc định TẮT)
+
+Agent nghiên cứu nguồn chạy **trong sản phẩm**, độc lập với Course Orchestrator:
+
+```
+Topic → Interview → [Source Research Agent] → Source Registry → Proposal → Generation
+```
+
+- Package `backend/app/agents/source_research/` (agent, topic analysis, policies, ranking,
+  allowlisted tools, adapters mock/curated-bridge). Không phụ thuộc DB, không gọi LLM.
+- `services/source_research_service.py` giữ identity/ownership, idempotency (fingerprint sha256),
+  persistence (`source_research_runs`) và chuyển nguồn đã kiểm tra metadata vào registry.
+- Bốn trạng thái kiểm chứng vẫn tách biệt; agent chỉ được kết luận `discovered` /
+  `metadata_verified` — `content_available` và `evidence_verified` cần ingestion (P4).
+- Adapter `mock` deterministic, **không network**; `curated` đọc catalog env; `web` bị từ chối.
+- Feature flag `SOURCE_RESEARCH_ENABLED=false` ⇒ endpoint trả 503 có mã, flow cũ không đổi;
+  `SOURCE_RESEARCH_AUTO_LINK=false` ⇒ worker không tự chạy agent.
+
+Chi tiết: `docs/source-research-agent.md`.
+
 ## 4. Luồng nghiệp vụ
 
 ### Course Generator (vertical slice này)
@@ -119,8 +155,23 @@ POST /v1/courses/{id}/approve                 → 202 tạo generation job
 GET  /v1/courses/{id}/generation              → {status, stage, lessonsDone, ...}
 POST /v1/courses/{id}/retry                   → 202 job mới
 GET  /v1/courses/{id}                         → course + units + lessons
-GET  /v1/lessons/{id}                         → lesson blocks đầy đủ
+GET  /v1/lessons/{id}                         → lesson blocks + grounding + citations
 POST /v1/lessons/{id}/attempts                → chấm + lưu + rewards
+
+// P3.0 Source Registry
+POST /v1/sources                              → 201 tạo/reuse nguồn (luôn unverified)
+GET  /v1/sources?limit&offset                 → nguồn public + của chính user
+GET  /v1/sources/discover?topic&adapter       → candidate (curated/mock; không network)
+GET  /v1/sources/{id}                         → metadata (private người khác ⇒ 404)
+GET  /v1/sources/{id}/evaluation              → đánh giá deterministic metadata-only
+POST /v1/courses/{id}/sources                 → liên kết nguồn với course
+GET  /v1/courses/{id}/sources                 → danh sách nguồn đã liên kết
+
+// P2.SR Source Research Agent (flag SOURCE_RESEARCH_ENABLED, default off ⇒ 503)
+POST /v1/courses/{id}/research-runs           → 201 chạy/trả lại research run (deterministic)
+GET  /v1/courses/{id}/research-runs           → danh sách run của course
+GET  /v1/courses/{id}/research-runs/{runId}   → chi tiết (cross-user ⇒ 404)
+POST /v1/courses/{id}/research-runs/{runId}/accept → link nguồn metadata_verified (mock ⇒ 409)
 ```
 
 Trạng thái course: `interview → proposed → approved → generating → ready | failed`.
@@ -136,17 +187,23 @@ Trạng thái course: `interview → proposed → approved → generating → re
 
 ## 5. Bảo mật
 
-- Auth: JWT bearer (đơn giản cho slice này: user demo được seed tự động theo token header `X-User-Id`... — xem §7 Giới hạn).
-- Ownership check ở tầng service trên mọi truy cập course/lesson.
+- Auth: JWT trong HttpOnly cookie + Argon2id, CSRF double-submit cho mọi request thay đổi trạng
+  thái. Demo header `X-User-Id` mặc định tắt (chỉ `ALLOW_DEMO_HEADER=true` + `ENV=development`).
+- Ownership check ở tầng service trên mọi truy cập course/lesson/source; truy cập trái quyền trả 404.
+- Source private chỉ chủ sở hữu thấy; citation do server sinh từ registry, model không nhận/không
+  trả `sourceId`.
 - CORS cấu hình theo allowlist origin.
 - Không log secret; provider API key chỉ qua env.
 
 ## 6. Giới hạn đã biết (giai đoạn này)
 
-1. Chưa có auth đầy đủ (dùng demo user theo header) — sẽ thay bằng JWT/OAuth ở giai đoạn sau.
+1. P3.0: Source Registry chỉ lưu **metadata**; chưa có ingestion nội dung, chunking, embedding hay
+   vector search ⇒ bài học luôn `general_ai_knowledge` và citation chưa thể `locator_verified`.
 2. Chưa có Tutor, RAG, gamification nâng cao (thiết kế trong docs, chưa code).
 3. MockProvider sinh nội dung mẫu, không phải AI thật; gọi "AI thật" chỉ khi adapter provider thật được bật.
-4. Không có HTTPS/deploy config — chỉ local qua Docker Compose.
+4. P2.SR: Source Research Agent tìm nguồn từ adapter `mock`/`curated` (không internet) và chỉ kiểm
+   tra metadata; không đọc nội dung, không sinh citation, không tự verified.
+5. Không có HTTPS/deploy config — chỉ local qua Docker Compose.
 
 ## 7. Khác biệt có chủ đích so với hệ thống được phân tích
 

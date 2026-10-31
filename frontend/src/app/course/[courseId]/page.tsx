@@ -3,7 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { api } from "@/lib/api";
+import {
+  api,
+  fetchCourseSources,
+  isVerifiedStatus,
+  verificationLabel,
+} from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
 
 interface CourseDetail {
@@ -31,6 +36,7 @@ export default function CoursePage() {
   const { courseId } = useParams<{ courseId: string }>();
   const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
   const courseKey = useSessionQueryKey("course", courseId);
+  const sourcesKey = useSessionQueryKey("course-sources", courseId);
 
   const course = useQuery({
     queryKey: courseKey,
@@ -38,6 +44,13 @@ export default function CoursePage() {
     queryFn: () => api<CourseDetail>(`/v1/courses/${courseId}`),
     refetchInterval: (q) =>
       q.state.data && ["ready", "failed"].includes(q.state.data.status) ? false : 2000,
+  });
+
+  const sources = useQuery({
+    queryKey: sourcesKey,
+    enabled: !!courseId && isAuthenticated,
+    queryFn: () => fetchCourseSources(courseId),
+    retry: false,
   });
 
   if (!courseId) return <div className="container">Thiếu courseId.</div>;
@@ -89,6 +102,48 @@ export default function CoursePage() {
             Thử lại
           </button>
         </div>
+      )}
+
+      {sources.data && (
+        <div className="card source-card">
+          <h2>Nguồn tham khảo ({sources.data.total})</h2>
+          {sources.data.notice && <p className="muted">{sources.data.notice}</p>}
+          {sources.data.items.length === 0 && (
+            <p className="muted">Khóa học này chưa gắn nguồn tài liệu nào.</p>
+          )}
+          <ul className="source-list">
+            {sources.data.items.map(({ source }) => (
+              <li key={source.id}>
+                <strong>{source.title}</strong>
+                {source.publisher && <span className="muted"> — {source.publisher}</span>}
+                <div className="muted">
+                  {source.canonicalUrl && (
+                    <a
+                      className="link"
+                      href={source.canonicalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer nofollow"
+                    >
+                      {source.canonicalUrl}
+                    </a>
+                  )}
+                  {source.sourceUpdatedAt && ` · cập nhật ${source.sourceUpdatedAt.slice(0, 10)}`}
+                  {source.version && ` · version ${source.version}`}
+                </div>
+                <span className={`badge ${isVerifiedStatus(source.verificationStatus) ? "" : "badge-muted"}`}>
+                  {verificationLabel(source.verificationStatus)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {course.data?.status === "ready" && (
+        <p className="muted">
+          Nội dung bài học do AI sinh. Kiến thức chưa được đối chiếu với nguồn trừ khi bài học
+          ghi rõ trạng thái đã xác minh.
+        </p>
       )}
 
       {course.data?.units.map((unit) => (

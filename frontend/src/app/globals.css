@@ -240,3 +240,68 @@ textarea {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* P2.1 — proposal: learner profile + curriculum graph */
+.profile-box {
+  background: #f8f9fd;
+  border: 1px solid #e3e6ee;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 12px 0;
+}
+
+.profile-box h3 {
+  font-size: 0.95rem;
+  margin: 0 0 8px;
+}
+
+.muted {
+  color: #5b6178;
+  font-size: 0.9rem;
+}
+
+.curriculum-list {
+  padding-left: 20px;
+}
+
+.curriculum-list li {
+  margin-bottom: 10px;
+}
+
+/* P3.0 — source registry & citations */
+.notice-box {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 12px 0;
+  font-size: 0.9rem;
+}
+
+.badge-muted {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.source-list {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.source-list li {
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.source-card {
+  margin-bottom: 18px;
+}
+
+.evidence-quote {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-left: 3px solid #cdd2e1;
+  color: #4b5563;
+  font-size: 0.9rem;
+}

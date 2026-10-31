@@ -1,0 +1,21 @@
+# Evidence captures are redacted by hand and reviewed before saving.
+# Raw HAR, raw SSE frames, cookies, tokens and full URLs are never stored here.
+# Uncomment / adjust the broad patterns below only if you understand the risk.
+
+# raw capture formats
+*.har
+*.saz
+*.pcap
+*.pcapng
+*.sse
+*.ndjson
+
+# chrome profile copies
+chrome-profile/
+cdp-*/
+
+# still images captured from the account UI
+*.png
+*.jpg
+*.jpeg
+*.webp

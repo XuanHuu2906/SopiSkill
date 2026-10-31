@@ -20,14 +20,17 @@ from app.core.config import get_settings
 from app.models import (
     Course,
     CourseProposal,
+    CourseSource,
     GenerationJob,
-    JobStatus,
     Lesson,
     LessonStatus,
+    Source,
     Unit,
 )
 from app.providers import SchemaInvalidError, get_provider
 from app.schemas.schemas import ProposalPayload
+from app.services import citation_service, source_evaluation, source_service
+from app.services import source_context as source_context_service
 
 logger = logging.getLogger(__name__)
 
@@ -150,8 +153,32 @@ async def _generate_lessons(db, job: GenerationJob, course: Course) -> None:
     if proposal_row is None:
         raise RuntimeError("NO_PROPOSAL")
     proposal = ProposalPayload.model_validate(proposal_row.payload)
+    # P2.1 — proposal tạo trước P2.1 có thể thiếu curriculum; chuẩn hoá để mỗi
+    # bài luôn có skill/outcome khi soạn nội dung (không ghi lại vào DB).
+    from app.services import pedagogy
+
+    proposal = pedagogy.normalize_curriculum(proposal)
 
     provider = get_provider()
+
+    # P2.SR — Source Research (tuỳ chọn, mặc định TẮT). Nếu bật, agent có thể
+    # nghiên cứu + link nguồn đã kiểm tra metadata TRƯỚC khi resolve source context.
+    # Lỗi ở bước này không làm job thất bại: nguồn là phần bổ sung, không phải
+    # điều kiện sinh bài (xem `maybe_auto_link_for_generation`).
+    from app.services import source_research_service
+
+    await source_research_service.maybe_auto_link_for_generation(db, course)
+
+    # P3.0 — Source Resolution. Danh sách nguồn do SERVER đọc từ registry (scoped
+    # theo owner của course). P3.0 CHƯA ingest nội dung nên:
+    #   - chỉ metadata (title/publisher/url) được đưa vào prompt, excerpt = None;
+    #   - bài học KHÔNG được gọi là `source_grounded` (không có đoạn nguồn thật);
+    #   - citation vẫn được ghi để truy vết, nhưng ở trạng thái unverified/
+    #     unavailable chứ không giả vờ đã kiểm chứng.
+    linked_sources: list[tuple[CourseSource, Source]] = []
+    if get_settings().source_context_enabled:
+        linked_sources = await source_service.load_course_sources_for_generation(db, course)
+    source_context = source_context_service.build_source_context(linked_sources)
 
     job.stage = "outline"
     lesson_total = sum(len(u.lessonTitles) for u in proposal.units)
@@ -181,6 +208,10 @@ async def _generate_lessons(db, job: GenerationJob, course: Course) -> None:
             unit.title = proposal_unit.title
             unit.blurb = proposal_unit.blurb
 
+        # Stage theo unit giúp UI/log thấy tiến độ phân cấp (không lộ nội dung).
+        job.stage = f"unit_{u_idx + 1}/{len(proposal.units)}"
+        await db.commit()
+
         existing_lessons = (
             await db.execute(select(Lesson).where(Lesson.unit_id == unit.id))
         ).scalars().all()
@@ -196,7 +227,12 @@ async def _generate_lessons(db, job: GenerationJob, course: Course) -> None:
             try:
                 content = await asyncio.wait_for(
                     provider.generate_lesson(
-                        course.topic, proposal, proposal_unit.title, lesson_title, previous_titles
+                        course.topic,
+                        proposal,
+                        proposal_unit.title,
+                        lesson_title,
+                        previous_titles,
+                        source_context or None,
                     ),
                     timeout=settings.generation_lesson_timeout_seconds,
                 )
@@ -222,6 +258,7 @@ async def _generate_lessons(db, job: GenerationJob, course: Course) -> None:
                     status=LessonStatus.ready,
                 )
                 db.add(lesson_row)
+                await db.flush()
             else:
                 lesson_row = lesson_by_order[l_idx]
                 # P1.1.7: chỉ tăng contentVersion khi nội dung thực sự đổi.
@@ -234,6 +271,27 @@ async def _generate_lessons(db, job: GenerationJob, course: Course) -> None:
                     lesson_row.title = content.title
                     lesson_row.content = new_blocks
                 lesson_row.status = LessonStatus.ready
+
+            # P3.0 — provenance. Grounding do server quyết định từ dữ liệu nguồn thật
+            # (không phải model tự khai). Citation tái tạo mỗi lần ghi bài để không
+            # giữ citation của phiên bản nội dung cũ trỏ sang nguồn đã đổi.
+            lesson_row.grounding = source_context_service.lesson_grounding(source_context)
+            await db.flush()
+            await citation_service.replace_lesson_citations(
+                db,
+                lesson_row,
+                course,
+                [source for _link, source in linked_sources],
+                evidence_by_source=None,
+                has_ingested_content=False,
+            )
+            if linked_sources:
+                # Snapshot đánh giá nguồn tại thời điểm sinh bài (chỉ để hiển thị lại).
+                for link, source in linked_sources:
+                    if link.evaluation is None:
+                        link.evaluation = source_evaluation.evaluate_source(
+                            source, topics=[course.topic]
+                        ).to_dict()
 
             previous_titles.append(content.title)
             job.lessons_done = lesson_index

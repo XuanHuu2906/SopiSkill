@@ -251,7 +251,9 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P2.1 | TODO | High | Generation bằng LLM thật có kiểm chứng nếu có credentials |
 | P2.2 | TODO | High | Rubric, evaluation, budget/latency metrics |
 | P3.0–P3.1 | TODO | High | Tutor grounded, secure, SSE/cancel/quota |
-| P4.0–P4.1 | TODO | High | PDF → hybrid RAG → citations xác thực |
+| P3.0b (Source Registry + Evidence Contract) | **DONE 2026-10-31** | High | `0005_p30_source_registry`; 190 pytest + 3 race + 47/47 E2E |
+| P2.SR (Source Research Agent) | **DONE 2026-10-31** | High | `0006_p2sr_source_research`; agent độc lập + registry/idempotency + flag off/on; offline adapter (mock/curated) |
+| P4.0–P4.1 | TODO (nền P3.0b + P2.SR đã sẵn) | High | PDF → hybrid RAG → citations xác thực |
 | P4.2–P4.3 | OPTIONAL | Medium | Chỉ khi có use case/test corpus |
 | P5.0 | TODO sau RAG | Medium | Mastery/FSRS có data model và QA |
 | P5.1–P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
@@ -487,6 +489,45 @@ POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop  (P3.1)
 **Không làm:** Tool cho model tùy ý thực thi code, truy cập web nội bộ hay cập nhật lesson không có xác nhận người dùng.
 
 ---
+
+## 12.1 PHASE P3.0b — Source Registry & Evidence Contract (đã làm trước P4)
+
+> Thực hiện trước P4 để có nền truy vết nguồn, không phải RAG.
+
+- [x] `sources` / `course_sources` / `lesson_citations` + `lessons.grounding` (migration
+      `0005_p30_source_registry`, expand-only, rollback đã kiểm chứng).
+- [x] Ownership server-side: public hoặc owner; cross-user ⇒ 404.
+- [x] Dedupe `sources(dedupe_key)` + `course_sources(course_id, source_id)` — chống duplicate
+      (đã test race trên PostgreSQL thật).
+- [x] Evaluator deterministic metadata-only; thiếu dữ liệu ⇒ `unknown`, loại khỏi mẫu số.
+- [x] Evidence contract 4 cấp; P3.0 **không thể** tạo `evidence_supported`.
+- [x] Discovery adapter `curated`/`mock` (không network); `web` ⇒ 503.
+- [x] Tích hợp generation: source resolution → prompt metadata → ghi grounding + citation.
+- [x] Frontend: danh sách nguồn ở course, citation + notice chưa xác minh ở lesson.
+- [ ] UI tạo nguồn / discover / review trạng thái (chỉ API; ghi nhận là việc còn lại).
+
+Chi tiết + checklist chuyển P4: `docs/source-first-architecture.md`.
+
+## 12.2 PHASE P2.SR — Source Research Agent Foundation
+
+**Mục tiêu:** Agent nghiên cứu nguồn độc lập, testable offline, sẵn sàng nối P4.
+**Không phải RAG.** Không crawl internet, không ingest nội dung, không citation thật.
+
+- [x] Package `app/agents/source_research/`: agent + schemas + policies + ranking + tools + adapters.
+- [x] Topic analysis deterministic (domain, chủ đề con, tiên quyết, level, language, queries).
+- [x] `SourceDiscoveryAdapter` protocol + bridge tới adapter P3.0 (`curated`/`mock`); `web` từ chối.
+- [x] Mock discovery deterministic, không network (test chặn socket).
+- [x] Policy riêng theo domain (programming/medicine/general) thay vì một trust score.
+- [x] Dedupe canonical URL; max sources; bounded tool calls + timeout; structured error codes.
+- [x] Chỉ kết luận `discovered`/`metadata_verified`; validator từ chối `content_available`/`evidence_verified`.
+- [x] `source_research_runs` (migration `0006_p2sr_source_research`) với UNIQUE(course_id, fingerprint).
+- [x] API `/v1/courses/{id}/research-runs` (create/list/get/accept) + CSRF + rate limit + ownership 404.
+- [x] Feature flag `SOURCE_RESEARCH_ENABLED` (default false) ⇒ flow cũ không đổi; `AUTO_LINK` default false.
+- [x] Worker hook `maybe_auto_link_for_generation`: lỗi research không làm job failed; mock không auto-link.
+- [ ] UI research run + review/accept nguồn (API sẵn sàng).
+- [ ] Adapter nguồn thật (Crossref/OpenAlex/arXiv/web) — cần allowlist + SSRF guard (P4.2).
+
+Chi tiết: `docs/source-research-agent.md`.
 
 ## 13. PHASE P4.0 — PDF Text Ingestion & Source Provenance
 
@@ -742,6 +783,11 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-10-30 | LLM provider/model/key/budget | **UNKNOWN/CHƯA CHỐT** | Chỉ chọn khi người dùng cho phép |
 | 2026-10-30 | Embedding model/dimension/index và OCR | **CHƯA CHỐT** | P4 benchmark / use case |
 | 2026-10-30 | BKT/LSTM/Bandit và billing | **CONDITIONAL/FUTURE** | Dữ liệu/metrics/approval |
+| 2026-10-31 | **P3.0 tách khỏi P3 Tutor**: làm Source Registry + Evidence Contract trước, không nhảy sang RAG | **HOÀN THÀNH (IMPLEMENTED+TESTED)** | `docs/development-progress.md` 2026-10-31 P3.0; migration `0005_p30_source_registry` |
+| 2026-10-31 | Nguồn mới **luôn** `unverified`; evaluator chỉ **đề xuất** trạng thái, không tự ghi | **CHỌN (bảo mật/trung thực)** | `services/source_service.create_source`, `services/source_evaluation` |
+| 2026-10-31 | Bài học chưa có nguồn ingest ⇒ luôn `general_ai_knowledge`; không tạo `evidence_supported` giả | **CHỌN (trung thực với bằng chứng)** | `services/source_context.lesson_grounding`, `tests/test_p30_source_first.py` |
+| 2026-10-31 | Citation do **server** sinh từ registry; LLM không nhận/không trả `sourceId` | **CHỌN (chống citation giả)** | `services/citation_service`, prompt `p3.0-v1` |
+| 2026-10-31 | Discovery mặc định `curated`/`mock`, **không network**; `web` trả 503 tới khi có SSRF guard P4.2 | **CHỌN (an toàn)** | `services/source_discovery` |
 
 ---
 

@@ -1,0 +1,6 @@
+# Fixtures are local research artifacts, not product source.
+# The PDF and its oracle (answer key) are NOT committed by default.
+*.pdf
+oracle.local.json
+runs.local.csv
+*.png

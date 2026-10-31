@@ -14,7 +14,78 @@ interface ProposalOut {
     objective: string;
     units: { title: string; blurb: string; lessonTitles: string[] }[];
     outcomes: string[];
+    learnerProfile?: {
+      goal: string;
+      currentLevel: "beginner" | "intermediate" | "advanced";
+      weeklyMinutes: number | null;
+      preferredStyles: string[];
+      depth: "broad" | "balanced" | "deep";
+      warnings: string[];
+    } | null;
+    skills?: {
+      id: string;
+      title: string;
+      lesson: string;
+      bloomLevel: string;
+      outcome: string;
+    }[];
+    prerequisites?: [string, string][];
   };
+}
+
+const LEVEL_LABEL: Record<string, string> = {
+  beginner: "Mới bắt đầu",
+  intermediate: "Đã có nền tảng",
+  advanced: "Nâng cao",
+};
+
+const DEPTH_LABEL: Record<string, string> = {
+  broad: "Phủ rộng",
+  balanced: "Cân bằng",
+  deep: "Đi sâu",
+};
+
+const STYLE_LABEL: Record<string, string> = {
+  hands_on: "Thực hành",
+  project: "Dự án",
+  theory: "Lý thuyết",
+  visual: "Trực quan",
+};
+
+function CurriculumCard({
+  skills,
+  prerequisites,
+}: {
+  skills: NonNullable<ProposalOut["payload"]["skills"]>;
+  prerequisites: [string, string][];
+}) {
+  const byId = new Map(skills.map((s) => [s.id, s]));
+  return (
+    <div className="card">
+      <h2>Lộ trình kỹ năng (prerequisite DAG)</h2>
+      <p className="muted">
+        {skills.length} kỹ năng · {prerequisites.length} liên kết tiên quyết. Bạn học theo
+        đúng thứ tự này; mỗi bài gắn một kết quả đo được (Bloom).
+      </p>
+      <ol className="curriculum-list">
+        {skills.map((skill) => {
+          const needs = prerequisites
+            .filter(([, child]) => child === skill.id)
+            .map(([parent]) => byId.get(parent)?.title)
+            .filter(Boolean);
+          return (
+            <li key={skill.id}>
+              <strong>{skill.title}</strong>{" "}
+              <span className="badge">{skill.bloomLevel}</span>
+              {needs.length > 0 && (
+                <div className="muted">Cần học trước: {needs.join(", ")}</div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
 
 function ProposalInner() {
@@ -64,6 +135,44 @@ function ProposalInner() {
           <div className="card">
             <h2>{proposal.data.payload.name}</h2>
             <p>{proposal.data.payload.objective}</p>
+            {proposal.data.payload.learnerProfile && (
+              <div className="profile-box">
+                <h3>Hồ sơ học viên (suy ra từ câu trả lời của bạn)</h3>
+                <p>
+                  <span className="badge">
+                    {LEVEL_LABEL[proposal.data.payload.learnerProfile.currentLevel] ??
+                      proposal.data.payload.learnerProfile.currentLevel}
+                  </span>
+                  <span className="badge">
+                    Độ sâu:{" "}
+                    {DEPTH_LABEL[proposal.data.payload.learnerProfile.depth] ??
+                      proposal.data.payload.learnerProfile.depth}
+                  </span>
+                  <span className="badge">
+                    {proposal.data.payload.learnerProfile.weeklyMinutes != null
+                      ? `${Math.round(
+                          proposal.data.payload.learnerProfile.weeklyMinutes / 60
+                        )} giờ/tuần`
+                      : "Chưa nêu thời gian/tuần"}
+                  </span>
+                  {proposal.data.payload.learnerProfile.preferredStyles.map((style) => (
+                    <span className="badge" key={style}>
+                      {STYLE_LABEL[style] ?? style}
+                    </span>
+                  ))}
+                </p>
+                {proposal.data.payload.learnerProfile.goal && (
+                  <p className="muted">
+                    Mục tiêu: {proposal.data.payload.learnerProfile.goal}
+                  </p>
+                )}
+                {proposal.data.payload.learnerProfile.warnings.map((warning, i) => (
+                  <p className="muted" key={i}>
+                    Lưu ý: {warning}
+                  </p>
+                ))}
+              </div>
+            )}
             <p>
               <strong>Kết quả mong đợi:</strong>
             </p>
@@ -73,6 +182,12 @@ function ProposalInner() {
               ))}
             </ul>
           </div>
+          {proposal.data.payload.skills && proposal.data.payload.skills.length > 0 && (
+            <CurriculumCard
+              skills={proposal.data.payload.skills}
+              prerequisites={proposal.data.payload.prerequisites ?? []}
+            />
+          )}
           {proposal.data.payload.units.map((u, i) => (
             <div className="card" key={i}>
               <h3>{u.title}</h3>

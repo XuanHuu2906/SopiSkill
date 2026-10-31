@@ -8,7 +8,7 @@ Mọi adapter phải:
 
 from abc import ABC, abstractmethod
 
-from app.schemas.schemas import LessonContent, ProposalPayload
+from app.schemas.schemas import LessonContent, ProposalPayload, SourceContextEntry
 
 
 class ProviderError(Exception):
@@ -97,5 +97,12 @@ class LLMProvider(ABC):
         unit_title: str,
         lesson_title: str,
         previous_titles: list[str],
+        source_context: list[SourceContextEntry] | None = None,
     ) -> LessonContent:
-        """Sinh nội dung 1 bài học dạng blocks."""
+        """Sinh nội dung 1 bài học dạng blocks.
+
+        `source_context` chỉ chứa metadata (và excerpt nếu đã ingest) của nguồn do
+        SERVER chọn từ Source Registry. Provider không được tự tạo sourceId, URL,
+        số trang hay đoạn trích. Nội dung không có nguồn ⇒ vẫn sinh bình thường và
+        bài học được đánh dấu `general_ai_knowledge`.
+        """

@@ -44,3 +44,6 @@ Bao_cao_*.docx
 # Database backups (chứa dữ liệu người dùng thật — không commit)
 backup_*.sql
 *.dump
+
+# P2.1 eval reports (không commit — có metadata chi phí/latency)
+backend/evals/reports/

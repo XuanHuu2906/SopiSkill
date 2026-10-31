@@ -2,6 +2,239 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-10-31 — P2.SR Source Research Agent Foundation
+- Base commit: `5e5f9cd496a22e6c1b10b535efd1fdeece43c6c9` (branch `main`, working tree có P2.1 + P3.0b chưa commit)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Scope & decisions:
+  - **Agent độc lập, không phải sub-agent IDE.** Package `backend/app/agents/source_research/` tách khỏi
+    `course_service`; Course Orchestrator vẫn giữ điều phối.
+  - **Không LLM trong agent phase này.** Topic analysis + ranking đều deterministic ⇒ test offline,
+    không chi phí API, giải thích được từng quyết định.
+  - **Agent không chạm DB.** Persistence do `services/source_research_service.py` thực hiện với
+    identity/ownership server-side; agent chỉ nhận `saver` (không dùng để ghi kết quả thật).
+  - **Chỉ 2 mức kiểm chứng thuộc agent** (`discovered`, `metadata_verified`). Validator ở
+    `ResearchResult` **từ chối** `content_available`/`evidence_verified` ⇒ bảo đảm ở tầng dữ liệu,
+    không chỉ là quy ước. Mock luôn bị ép `discovered`.
+  - **Policy theo lĩnh vực**, không dùng một trust score: programming ưu tiên official docs/spec,
+    medicine ưu tiên clinical guideline/systematic review/government health, general ưu tiên
+    curriculum/university/textbook.
+  - **Không nhân bản adapter discovery:** dùng lại `app/services/source_discovery.py` qua bridge.
+  - **Mặc định TẮT** (`SOURCE_RESEARCH_ENABLED=false`, `SOURCE_RESEARCH_AUTO_LINK=false`) để bảo toàn
+    regression; flag tắt ⇒ endpoint trả `503 SOURCE_RESEARCH_DISABLED`, worker không chạy agent.
+- IMPLEMENTED:
+  - `backend/app/agents/source_research/`: `agent.py` (workflow bounded), `schemas.py` (input/output
+    contract + validator), `policies.py`, `ranking.py` (dedupe + scoring + verification), `topic.py`,
+    `tools.py` (allowlist + budget + timeout + input validation), `adapters/{base,mock}.py`.
+  - `backend/app/services/source_research_service.py` (mới): resolve adapter, fingerprint sha256,
+    idempotent run, stale-run recovery, `link_verified_sources`, worker hook.
+  - `backend/app/api/v1/research.py` (mới): 4 endpoint + CSRF + rate limit + ownership 404.
+  - `backend/app/models/models.py`: `SourceResearchStatus` + `SourceResearchRun`; export trong
+    `app/models/__init__.py`.
+  - `backend/alembic/versions/0006_p2sr_source_research.py` (mới): bảng + enum + 3 index +
+    UNIQUE(course_id, request_fingerprint); expand-only.
+  - `backend/app/core/config.py`: 7 cấu hình P2.SR; `.env.example`; `docker-compose.yml` (cả 3 service).
+  - `backend/app/worker/generation.py`: gọi `maybe_auto_link_for_generation` (flag-guarded, lỗi không
+    làm job failed).
+  - `backend/app/schemas/schemas.py`: `ResearchRequestIn` (không có courseId/ownerId), `ResearchSourceOut`,
+    `ResearchRunOut`, `ResearchRunListOut`.
+  - `backend/e2e_acceptance.py`: +5 check (S1–S5) chạy cả hai chế độ flag.
+  - `docs/source-research-agent.md` (mới), cập nhật `architecture.md`, `database-design.md`,
+    `SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md`.
+- TESTED (offline, SQLite):
+  - `cd backend && python -m pytest -q` → **232 passed, 10 skipped** (19.72s; trước 190/9).
+    Mới: `tests/test_source_research_agent.py` (**21 test**: topic analysis ví dụ "Python for AI",
+    medicine policy, domain fallback, input bounds, canonical-URL dedupe, ranking official-vs-blog,
+    medicine guideline-vs-blog, mock determinism + no-socket, empty catalog ⇒ insufficient, max
+    sources, maxSources=20 clamp, tool budget, adapter timeout, config failure, invalid tool input,
+    curated-only tool, saver), `tests/test_p2sr_integration.py` (**16 test**: persist run, idempotent
+    retry, cross-user 404 (list/get/accept), flag off 503, CSRF 403, adapter failure ⇒ failed row,
+    accept mock ⇒ 409, accept curated ⇒ link + DB vẫn `unverified` + re-accept không nhân bản,
+    provider `web`/lạ ⇒ 503 có mã, body cấm override `courseId`/`ownerId` + bounds 422, flag off
+    generation không tạo run, auto-link curated khi bật (lesson vẫn `general_ai_knowledge`), failed
+    run retry không nhân bản row, toàn bộ agent vượt timeout ⇒ failed run (không treo)),
+    `tests/test_p2sr_migration_contract.py` (**5 test**).
+  - `cd frontend && npm run build` → OK (9 routes, không đổi UI nên bundle tương đương).
+- TESTED (PostgreSQL throwaway `p2sr_migration_check`):
+  - `alembic upgrade head` → exit 0 → `0006_p2sr_source_research (head)`, 14 bảng, enum
+    `source_research_status`, index/UNIQUE đúng.
+  - `alembic downgrade 0005_p30_source_registry` → exit 0 → bảng P2.SR và enum bị drop, 13 bảng còn lại.
+  - Seed user/course/unit/lesson ở revision 0005 (`content_version=3`) → upgrade head → ORM đọc được
+    `grounding=general_ai_knowledge`, `content_version=3`, course `ready` ⇒ **không mất dữ liệu**.
+- TESTED (PostgreSQL race, throwaway `p2sr_race_check`):
+  - `POSTGRES_TEST_URL=…/p2sr_race_check python -m pytest tests/test_p2sr_postgres_concurrency.py -q`
+    → **1 passed**: 6 request đồng thời cùng fingerprint ⇒ **1 research run** (1 created, 5 reused).
+- TESTED (Docker full stack + E2E, mock provider):
+  - Backup trước khi rebuild: `docker exec db pg_dump` → `backup_pre_p2sr_20261031_173653.sql` (13 COPY).
+  - Backend container tự chạy `alembic upgrade head` → DB dev `ailp` ở `0006_p2sr_source_research`.
+  - `E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py` **flag TẮT** → **50/50 PASS**
+    (S1 = 503 `SOURCE_RESEARCH_DISABLED`, S4/S5 cross-user 404 + CSRF 403).
+  - Chạy lại với `SOURCE_RESEARCH_ENABLED=true SOURCE_RESEARCH_PROVIDER=mock` → **52/52 PASS**
+    (S1 run completed 3 nguồn deterministic, S2 reused=true, S3 accept mock ⇒ 409).
+  - Trả môi trường về mặc định (`docker compose up -d` không set env) → E2E lại **50/50 PASS**.
+- NOT TESTED:
+  - Nguồn thật (Crossref/OpenAlex/arXiv/web): **chưa triển khai**, không có network call nào được chạy.
+  - Kiểm chứng nội dung nguồn / citation thật: **không thể** vì chưa ingest (P4).
+  - LLM trong agent: không dùng; chất lượng topic analysis trên chủ đề lạ chỉ được test bằng rule.
+  - UI research run: **NOT IMPLEMENTED** (chỉ API).
+- BLOCKED: none cho P2.SR. P4 bị chặn bởi ingestion pipeline (chưa có).
+- Database: **có migration** `0006_p2sr_source_research` (expand-only; upgrade/downgrade/legacy-row đã
+  kiểm chứng trên DB throwaway; DB dev đã upgrade; backup trước khi thao tác).
+- Security: ownership server-side (404); agent không truy cập DB/network/FS; adapter `web` từ chối;
+  mock không bao giờ auto-link; `accept` từ chối run mock; goals/level người học **không** gửi ra
+  adapter; CSRF + rate limit; log chỉ id/adapter/status/số nguồn.
+- Regressions: 0. pytest 190 → **232 passed**; E2E 47 → **50/50** (flag off) và **52/52** (flag on);
+  build OK; quiz/XP/progress/interview/proposal không đổi.
+- Known limitations:
+  - `metadata_verified` = kiểm tra **cấu trúc** metadata, không phải "nguồn đáng tin".
+  - Relevance là so khớp từ khoá bề mặt; topic analysis rule-based.
+  - `SOURCE_RESEARCH_PROVIDER=web` lỗi cấu hình có chủ đích.
+  - Chưa có UI; chưa có eval chất lượng chọn nguồn.
+- PHASE GATE: **PASS cho P2.SR** (AC01–AC13 có bằng chứng; AC13 = `docs/source-research-agent.md` §11).
+- NEXT: P4.0 PDF ingestion + provenance (storage/extract/chunk/idempotent worker) trước khi bất kỳ
+  `source_grounded`/`locator_verified` nào được bật.
+
+## 2026-10-31 — P3.0b Source Registry, Evidence Contract & Source-First Integration
+> Ghi chú đánh số: `docs/SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md` dùng **P3.0–P3.1 cho AI Tutor**.
+> Việc này là nhánh **P3.0b (Source-First foundation)** chèn trước P4 vì nó không phụ thuộc Tutor
+> và là điều kiện để citation P4 có chỗ bám. Revision id giữ tên `0005_p30_source_registry`.
+- Base commit: `5e5f9cd496a22e6c1b10b535efd1fdeece43c6c9` (branch `main`, working tree có P2.1 chưa commit)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Scope & decisions:
+  - **Source-First nhưng trung thực về giới hạn:** P3.0 chỉ thêm *metadata* nguồn + contract citation.
+    Chưa ingest PDF/web, chưa chunk, chưa embedding/vector ⇒ **không** có grounding thật.
+  - **Bốn cấp kiểm chứng tách biệt** (metadata / locator / evidence supports claim / corroborated)
+    được mã hoá thành 2 enum riêng, không gộp thành một "trust score".
+  - **Model không được cấp `sourceId`** ⇒ citation chỉ do server sinh từ registry; không thể bịa.
+  - **Evaluator deterministic metadata-only** (không đọc nội dung). Thiếu dữ liệu ⇒ `unknown` và
+    loại khỏi mẫu số; coverage < 0.5 ⇒ `insufficient_metadata`, `weightedScore=None`.
+  - `lessons.grounding` server_default `general_ai_knowledge` ⇒ bài học cũ đọc được, hiểu đúng là
+    chưa kiểm chứng. Course có nguồn nhưng chưa ingest **vẫn** là `general_ai_knowledge`.
+  - Discovery: interface adapter + `curated` (catalog env) + `mock` (deterministic, no network);
+    adapter `web` từ chối 503 thay vì âm thầm gọi mạng.
+- IMPLEMENTED:
+  - `backend/app/models/models.py`: `SourceType`, `SourceVisibility`, `SourceVerificationStatus`,
+    `CitationValidationStatus`, `LessonGrounding` + model `Source`, `CourseSource`,
+    `LessonCitation`, cột `Lesson.grounding`.
+  - `backend/alembic/versions/0005_p30_source_registry.py` (mới): 3 bảng + 1 cột + enum + index,
+    `upgrade`/`downgrade` đối xứng, idempotent theo inspector.
+  - `backend/app/services/source_service.py` (mới): create idempotent (dedupe_key sha256), ownership
+    (public hoặc owner), link/unlink course, load cho worker scoped theo `course.user_id`.
+  - `backend/app/services/source_evaluation.py` (mới): 6 tiêu chí có trọng số, công thức chuẩn hoá
+    theo trọng số **có dữ liệu**, license hạn chế chặn `metadata_verified`.
+  - `backend/app/services/citation_service.py` (mới): `validate_citation_locator` (source_changed /
+    unavailable / unverified / rejected — **không bao giờ** evidence_supported), replace/list.
+  - `backend/app/services/source_discovery.py` (mới): `curated`, `mock`, `web` placeholder;
+    `get_discovery_adapter` fail rõ ràng.
+  - `backend/app/services/source_context.py` (mới): build context, quyết định grounding (chỉ khi có
+    excerpt thật), câu thông báo.
+  - `backend/app/api/v1/sources.py` (mới): POST/GET sources, discover (khai báo trước route động),
+    evaluation, POST/GET `/v1/courses/{id}/sources`.
+  - `backend/app/schemas/schemas.py`: source/citation/discovery schemas; `LessonOut` +
+    `grounding`/`citations`/`evidenceNotice` (backward-compatible default).
+  - `backend/app/worker/generation.py`: source resolution theo course; `generate_lesson(..., source_context)`;
+    ghi `grounding` + `replace_lesson_citations`; snapshot evaluation vào `course_sources`.
+  - `backend/app/providers/*`: `generate_lesson` nhận `source_context` (mock + openai-compatible);
+    prompt `p3.0-v1` cấm model tự tạo URL/số trang/sourceId; delimiter chống prompt injection.
+  - `backend/app/core/config.py`: `source_discovery_adapter`, `source_curated_catalog`,
+    `source_context_enabled`, `source_context_max_chars`.
+  - Frontend: `lib/api.ts` (SourceOut/Citation + nhãn trạng thái + `isVerifiedStatus`), course page
+    hiển thị danh sách nguồn + publisher/URL/version/ngày cập nhật + badge trạng thái, lesson page
+    hiển thị citation + notice "chưa xác minh"; CSS mới (`.notice-box`, `.badge-muted`, `.source-list`,
+    `.evidence-quote`).
+  - `backend/e2e_acceptance.py`: +10 check P3.0 (11, 11b–11h, B5, B6).
+- TESTED (offline):
+  - `cd backend && python -m pytest -q` → **190 passed, 9 skipped** (42.27s; các lần chạy trước 44.86s và 97.41s khi máy bận). Mới: `tests/test_p30_source_first.py` (**26 test**): metadata round-trip, duplicate
+    idempotent, public reuse, invalid input (6 case), CSRF, private cross-user 404, link chéo bị chặn,
+    many-sources-per-course, discovery deterministic + no-socket monkeypatch, network adapter 503,
+    evaluation unknown/insufficient/license, citation contract (unavailable/source_changed/rejected/
+    không tự evidence_supported), lessons có/không nguồn, FK citation, source-context helpers.
+  - `npx tsc --noEmit` → 0 lỗi; `npm run build` → OK (9 routes).
+  - `tests/test_p30_migration_contract.py` (**4 test**): revision chain nối 0004, upgrade+downgrade
+    callable, upgrade không drop cột/bảng cũ, metadata có đủ 3 bảng + `lessons.grounding` + constraints.
+  - E2E (`E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py`, Docker full stack, mock)
+    → **47/47 PASS**, gồm: tạo nguồn unverified, dedupe, evaluation metadata-only, link course, lesson
+    có nguồn nhưng grounding=`general_ai_knowledge` + 1 citation `unverified`, answer key không lộ,
+    user B bị 404 ở source/course-sources/lesson, CSRF 403.
+- TESTED (migration, PostgreSQL throwaway `p30_migration_check`):
+  - `alembic upgrade head` → exit 0 → 13 bảng + enum `lesson_grounding` + `lessons.grounding`
+    NOT NULL default `'general_ai_knowledge'`.
+  - `alembic downgrade 0004_p12_job_reliability` → exit 0 → còn 10 bảng, cột/enum P3.0 bị drop,
+    enum course/job/lesson giữ nguyên.
+  - Seed lesson "legacy" ở 0004 → upgrade head → ORM đọc `grounding=general_ai_knowledge`, version
+    giữ nguyên ⇒ **AC08 đạt**.
+  - DB dev thật (`ailp`) đã upgrade lên `0005_p30_source_registry` qua entrypoint container; backend
+    health 200, E2E 47/47.
+- TESTED (PostgreSQL race/idempotency, throwaway DB `p30_race_check` — đã drop sau test):
+  - `POSTGRES_TEST_URL=…/p30_race_check python -m pytest tests/test_p30_postgres_concurrency.py -q`
+    → **3 passed**: 8 request đồng thời tạo cùng nguồn ⇒ **1 row** (1 created, 7 reused); 6 request
+    đồng thời link cùng course↔source ⇒ **1 row**; cross-user đọc nguồn private ⇒ `SourceAccessError`.
+  - Regression suite PostgreSQL cũ vẫn xanh: `test_p11_postgres_concurrency.py` → 2 passed;
+    `test_p12_postgres_concurrency.py` → 4 passed.
+- NOT TESTED:
+  - Grounding thật / locator verification / evidence-supported: **không thể** vì chưa ingest nội dung.
+  - PDF ingestion, chunking, embedding, pgvector retrieval, web/arXiv fetch (P4).
+  - Real-provider lesson generation **có** source_context (chỉ mock được test; không gọi API thật
+    để tránh chi phí ngoài phạm vi).
+  - (đã bổ sung) Concurrency race test trên PostgreSQL thật — xem mục TESTED (PostgreSQL) bên dưới.
+- BLOCKED: none cho P3.0. P4 bị chặn bởi việc chưa có ingestion pipeline + storage adapter.
+- Database: **có migration** `0005_p30_source_registry` (expand-only, rollback đã kiểm chứng).
+- Security: ownership server-side (404, không 403 → không xác nhận tồn tại); model không nhận
+  sourceId; nguồn mới luôn unverified; discovery không network; log chỉ id/type/visibility; không
+  lưu secret/PII trong source; license hạn chế chặn metadata_verified.
+- Regressions: 0. pytest 160 → **190 passed, 9 skipped**; E2E 37 → **47/47**; build/tsc OK; quiz/XP/progress/interview không đổi.
+- Known limitations:
+  - `evidence_supported`/`corroborated` **chưa từng** được tạo ra — đúng thiết kế cho P3.0.
+  - `consistency` luôn `unknown`; `relevance` chỉ keyword bề mặt.
+  - Chưa có UI tạo nguồn / duyệt nguồn / discover (API sẵn sàng; UI hiển thị là chính).
+  - `content_hash`/`version` lưu nhưng chưa dùng để phát hiện nguồn đổi (chờ ingestion P4).
+- PHASE GATE: **PASS cho P3.0 (phạm vi Source Registry + contract)** — AC01–AC11 có bằng chứng;
+  AC12 (tài liệu chuyển sang RAG) ở `docs/source-first-architecture.md` §8.
+- NEXT: P4.0 PDF ingestion + provenance (storage, extraction, chunking, idempotent worker) trước khi
+  bật bất kỳ grounding thật nào.
+
+## 2026-10-31 — P2.1 AI Course Generator + Pedagogy DAG
+- Base commit: `5e5f9cd496a22e6c1b10b535efd1fdeece43c6c9` (branch `main`, working tree)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Scope & decisions:
+  - **Hồ sơ người học do SERVER suy ra** (`services/pedagogy.extract_learner_profile`, rule-based, deterministic) từ chính 5 câu trả lời; **không** tin field model tự khai và **không** suy diễn thuộc tính nhạy cảm (tuổi/giới/sức khỏe/quốc tịch/tôn giáo).
+  - **Curriculum = DAG prerequisite**: mỗi bài đúng 1 skill (id, tiêu đề, Bloom level, outcome); chuẩn hoá bỏ self-loop/cạnh trùng/cạnh ngược thứ tự bài; **chu trình thật ⇒ 502 `PROPOSAL_SCHEMA_INVALID`** (không tự sửa lặng lẽ). Kiểm chứng bằng Kahn topological sort.
+  - Dữ liệu curriculum nằm trong `course_proposals.payload` (JSON) ⇒ **không cần migration**, proposal cũ (thiếu field) vẫn đọc được; `pedagogy.fill_skills` lấp skill thiếu để không có bài "mồ côi".
+  - Generation vẫn phân cấp proposal → unit → lesson và dùng **proposal snapshot** của P1.2 (`job.proposal_version`); worker chuẩn hoá lại curriculum để proposal legacy cũng có skill/outcome.
+  - **Answer key giữ nguyên contract P1.1**: LLM tạo đáp án nhưng chỉ tồn tại trong `lessons.content` (private); API vẫn trả `public_blocks`; chấm vẫn deterministic.
+- IMPLEMENTED:
+  - `backend/app/schemas/schemas.py`: `LearnerProfile`, `CurriculumSkill` (+`BLOOM_LEVEL`), `ProposalPayload.learnerProfile/skills/prerequisites` (optional, backward-compatible).
+  - `backend/app/services/pedagogy.py` (mới): `extract_learner_profile` (level/time/style/depth + warnings), `lesson_order`, `fill_skills`, `normalize_curriculum`, `validate_curriculum` (DAG), `curriculum_summary` (topological order + Bloom cao nhất).
+  - `backend/app/providers/validation.py`: `validate_proposal` gọi normalize+validate curriculum; `validate_lesson` thêm lint câu hỏi trùng và đoạn giảng lặp nguyên văn.
+  - `backend/app/providers/openai_compatible_provider.py`: prompt `p2.1-v1` (interview 5 khía cạnh + cấm thông tin nhạy cảm; proposal có skills/prerequisites/Bloom; lesson có skill+prerequisite context); `_structured()` retry **bounded** khi sai schema kèm mô tả lỗi.
+  - `backend/app/providers/mock_provider.py`: proposal deterministic có 4 skill + chuỗi prerequisite tuyến tính.
+  - `backend/app/services/course_service.py`: server gắn `learnerProfile`, chuẩn hoá/validate curriculum trước khi lưu; map lỗi curriculum → 502.
+  - `backend/app/worker/generation.py`: chuẩn hoá curriculum từ snapshot; `job.stage` theo unit (`unit_k/N`) để quan sát tiến độ phân cấp.
+  - Frontend `new/proposal`: card **Hồ sơ học viên** (level/độ sâu/thời gian/ phong cách/mục tiêu/warning) + card **Lộ trình kỹ năng** (Bloom badge, "Cần học trước"); CSS `.profile-box`, `.curriculum-list`, `.muted`.
+  - `backend/e2e_acceptance.py`: +2 check (3b learner profile, 3c DAG phủ đủ bài) → **37/37**; `E2E_GENERATION_TIMEOUT` để chạy cùng script với provider thật.
+  - `backend/evals/real_provider_eval.py` (mới, opt-in `--yes`): eval 3 topic thật, đo schema/curriculum/lesson + latency/token; report JSON gitignored.
+- TESTED (offline):
+  - `python -m pytest -q` → **160 passed, 6 skipped** (25.8s). Mới: `tests/test_p21_pedagogy.py` (24 test: profile, DAG cycle/prune, lesson lint, API proposal, eval 10 topic mock) + 12 test trong `test_llm_provider.py` (prompt version/nội dung, profile trong prompt, skill context, cycle từ LLM bị từ chối, budget theo loại call, escalation bounded, schema repair bounded).
+  - `npm run build` → OK (9 routes); `npx tsc --noEmit` → 0 lỗi.
+  - `E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py` (mock, Docker full stack) → **37/37 PASS**.
+- TESTED (real provider — Deploy.com `deepseek-ai/deepseek-v4.1-flash-1017`, được người dùng duyệt ngân sách):
+  - `python -m evals.real_provider_eval --topics 3 --yes` → **3/3 topic pass** (31 request; 18.365 prompt / 63.163 completion tokens; 138–154s/topic): `vi-beginner-tech` 9/9 bài, `vi-advanced-social` 8/8 bài (10 edge), `en-advanced-eng` 8/8 bài. Trường hợp biên gặp và đã xử lý: output JSON bị cắt (`finish_reason=length`) và model trả thiếu câu hỏi (schema repair).
+  - **Real E2E qua Docker + Celery worker** (`LLM_PROVIDER=openai`, `E2E_GENERATION_TIMEOUT=1200`): **37/37 PASS** — 9 bài thật, `contentVersion=2` sau retry, quiz 3/3 (XP 50), attempt idempotent, cross-user 404, stale version 409. Worker log: `llm call ok ... finish_reason=stop` ×10, `Task ... succeeded` 134s và 141s, 0 Traceback.
+  - Đã **trả môi trường về `LLM_PROVIDER=mock`** sau test; E2E mock lại 37/37.
+- NOT TESTED:
+  - Chất lượng **sư phạm/factual** của nội dung (script chỉ đo schema/curriculum/lint deterministic; rubric người chấm thuộc P2.2).
+  - Eval real quy mô lớn (10+ topic thật) và benchmark prompt version khác; chi phí tiền tệ chính xác (provider không trả giá).
+  - Streaming, OCR/RAG, Tutor (ngoài phạm vi P2.1).
+- BLOCKED: none.
+- Database: **không migration** (curriculum nằm trong JSON payload), revision vẫn `0004_p12_job_reliability`.
+- Security: profile không chứa thuộc tính nhạy cảm (có test); answer key vẫn server-only (E2E 7b `leaked=[]`); API không lộ chi tiết provider; log chỉ metadata (`finish_reason`/token), không prompt/key; API key chỉ ở `.env` và env container (không commit, không log); schema repair và escalation **bounded** để không đốt tiền.
+- Regressions: 0. pytest 119 → 160; E2E 35 → 37.
+- Known limitations:
+  - `extract_learner_profile` là **rule-based tiếng Việt/Anh** (từ khóa); câu trả lời quá ngắn có thể thiếu time/level → warning, không bịa.
+  - Curriculum là snapshot JSON: chưa có bảng skill riêng nên chưa truy vấn "skill → mastery" (P5.0 sẽ cần).
+  - Provider reasoning tính `reasoning_tokens` vào `completion_tokens` ⇒ budget check phải dựa trên `finish_reason`; provider không trả `finish_reason` bị coi là truncated (an toàn hơn, có thể retry 1 lần).
+- PHASE GATE: **PASS** — 6/6 acceptance P2.1 có bằng chứng (offline mock + real provider + real Docker E2E); sai chu trình DAG bị chặn; answer key không lộ; budget/lint bounded.
+- NEXT: **P2.2 AI Evaluation, Safety, Quality & Cost Control** — cần rubric người chấm + ngân sách eval ≥10 topic thật.
+
 ## 2026-10-30 — P2.0 LLM Provider Infrastructure (Provider-Neutral)
 - Base commit: `464e5e19d978e0afee58960a73f44451c43fbdcf` (branch `main`)
 - New commit/branch: NOT COMMITTED (working tree)

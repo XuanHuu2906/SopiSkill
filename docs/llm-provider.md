@@ -61,8 +61,50 @@ Vi phạm ⇒ `SchemaInvalidError` ⇒ job failed với mã rõ ràng (không đ
 
 - Log mỗi lần gọi: `provider`, `model`, `prompt_version`, `prompt_tokens`,
   `completion_tokens`. **Không** log API key, prompt, hay nội dung người học.
-- Input người dùng bị cắt theo `LLM_MAX_INPUT_CHARS`; output chạm trần
-  `LLM_MAX_OUTPUT_TOKENS` ⇒ `ProviderBudgetError`.
+- Input người dùng bị cắt theo `LLM_MAX_INPUT_CHARS`.
+- Output bị cắt được phát hiện qua `finish_reason` (`length`), **không** chỉ dựa
+  vào tổng `completion_tokens`. Lý do: model reasoning tính cả `reasoning_tokens`
+  vào `completion_tokens`, nên một response **hoàn chỉnh** vẫn có thể chạm trần —
+  báo lỗi khi đó là false positive (đã gặp thật ở P2.1 real eval).
+- Khi bị cắt: **một** lần leo thang ngân sách (×2, trần ×1.6, bounded bởi
+  `LLM_MAX_RETRIES`) rồi mới báo `ProviderBudgetError`.
+- Sai schema/semantic: thử lại **bounded** bởi `LLM_MAX_SCHEMA_RETRIES` (mặc định
+  1 → tối đa 2 request) kèm mô tả lỗi ngắn trong prompt sửa. Không retry mù.
+
+## Token budget theo loại call (P2.1)
+
+| Biến | Mặc định | Dùng cho |
+|---|---|---|
+| `LLM_MAX_OUTPUT_TOKENS_INTERVIEW` | 800 | 5 câu hỏi phỏng vấn |
+| `LLM_MAX_OUTPUT_TOKENS_PROPOSAL` | 4500 | proposal + skills + prerequisites |
+| `LLM_MAX_OUTPUT_TOKENS_LESSON` | 3000 | một bài học blocks |
+| `LLM_MAX_SCHEMA_RETRIES` | 1 | số lần sửa schema tối đa |
+
+`LLM_MAX_OUTPUT_TOKENS` cũ vẫn giữ làm fallback chung. Compose truyền đủ các
+biến này cho `backend`, `worker`, `beat` (sửa P2.1: trước đây thiếu nên container
+dùng default, gây `PROVIDER_BUDGET_EXCEEDED` khi chạy thật).
+
+## Curriculum & hồ sơ người học (P2.1)
+
+- `LearnerProfile` được **server** suy ra deterministic từ câu trả lời
+  (`services/pedagogy.py`), không phải model tự khai; không suy diễn thuộc tính
+  nhạy cảm.
+- `skills` + `prerequisites` là DAG; chuẩn hoá bỏ self-loop/cạnh ngược thứ tự
+  bài; **chu trình thật ⇒ 502** `PROPOSAL_SCHEMA_INVALID`. Proposals legacy thiếu
+  curriculum được `fill_skills` lấp để mỗi bài có đúng 1 skill.
+- Prompt version: `p2.1-v1` (thay `p2.0-v1`).
+
+## Eval provider thật (P2.1.8)
+
+```powershell
+cd backend
+$env:LLM_PROVIDER="openai"       # + LLM_API_KEY / LLM_BASE_URL / LLM_MODEL như trên
+python -m evals.real_provider_eval --topics 3 --yes
+```
+
+Script đo schema/curriculum/lint + latency/token per topic, ghi report JSON vào
+`backend/evals/reports/` (gitignored). Cần `--yes` để xác nhận phát sinh chi phí.
+**Không** kết luận chất lượng sư phạm từ script này (đó là phạm vi P2.2).
 - Trước khi bật provider thật, cần xác nhận: dữ liệu nào được gửi ra ngoài, ngân
   sách, và nhà cung cấp (xem Decision Log trong master plan).
 
@@ -75,8 +117,11 @@ Vi phạm ⇒ `SchemaInvalidError` ⇒ job failed với mã rõ ràng (không đ
   `https://api-cdn.deploy.com/api/v1` + `deepseek-ai/deepseek-v4.1-flash-1017`.
   Kết quả: interview 5 câu 4.79s; proposal 3 unit/12 bài 13.89s; lesson 5 block
   12.05s — tất cả HTTP 200 và qua semantic lint.
-- **BLOCKED**: real-provider E2E tự động trong CI (không đưa key vào CI) và
-  P2.1 real eval 10 topic (cần duyệt thêm ngân sách).
+- **P2.1 TESTED (real)**: eval 3 topic (`vi-beginner-tech`, `vi-advanced-social`,
+  `en-advanced-eng`) → **3/3 pass**, 31 request, 18.365 prompt / 63.163 completion
+  tokens; real E2E qua Docker + Celery worker **37/37 PASS** (9 bài học thật).
+- **BLOCKED**: real-provider E2E tự động trong CI (không đưa key vào CI); eval
+  chất lượng sư phạm bằng rubric người chấm thuộc P2.2.
 
 Sau smoke test, `LLM_PROVIDER` đã đặt lại `mock` trong `.env` để tránh chi phí
 ngoài ý muốn. Muốn chạy thật lại: đổi `LLM_PROVIDER=openai` rồi restart

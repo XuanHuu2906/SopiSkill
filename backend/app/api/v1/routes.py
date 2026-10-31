@@ -21,6 +21,7 @@ from app.schemas.schemas import (
     ProposalOut,
 )
 from app.services import course_service, job_service, lesson_service
+from app.services import citation_service, source_context as source_context_service, source_service
 from app.services.lesson_content import public_blocks
 
 router = APIRouter(prefix="/v1")
@@ -198,6 +199,9 @@ async def get_lesson(
     db: AsyncSession = Depends(get_db),
 ):
     lesson = await lesson_service.get_owned_lesson(db, lesson_id, user.id)
+    citation_rows = await citation_service.list_lesson_citations(db, lesson, user.id)
+    linked = await source_service.list_course_sources(db, lesson.course_id, user.id)
+    grounding = lesson.grounding
     # Chỉ trả public blocks — answer key nằm trong private `lesson.content` ở server.
     return LessonOut(
         id=f"lsn_{lesson.id}",
@@ -206,6 +210,14 @@ async def get_lesson(
         contentVersion=lesson.content_version,
         status=lesson.status.value,
         blocks=public_blocks(lesson.id, lesson.content_version, lesson.content or []),
+        grounding=grounding.value,
+        citations=[
+            citation_service.to_citation_out(citation, source)
+            for citation, source in citation_rows
+        ],
+        evidenceNotice=source_context_service.grounding_notice(
+            grounding, has_linked_sources=bool(linked)
+        ),
     )
 
 

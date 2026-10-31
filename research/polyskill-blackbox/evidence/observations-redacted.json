@@ -1,0 +1,554 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-10-31T10:50:00+07:00",
+  "session": {
+    "session_id": "ps-bbx-2026-10-31",
+    "mode": "EXECUTED",
+    "cdp_endpoint": "http://127.0.0.1:9222",
+    "cdp_reachable_at_preflight": false,
+    "cdp_preflight_error": "curl exit 7 (connect refused) at 2026-10-31T10:44+07:00",
+    "origins_declared": [
+      "https://web.polyskill.app",
+      "https://api.polyskill.app"
+    ],
+    "origins_approved_by_owner": true,
+    "owner_approval": {
+      "approved_at": "2026-10-31T10:56:00+07:00",
+      "granted": [
+        "passive CDP observation via rea inspect-web-page on the two declared origins",
+        "upload of fixtures/rag_synthetic_v1.pdf and creation of a course from that source (quota cost accepted by owner)"
+      ],
+      "not_granted_explicitly": [
+        "tutor messages beyond what R1-R5 require (A1-A4 need a separate confirmation at action time)",
+        "creating the two D1 courses",
+        "rewriting a lesson via harder/easier (D2)",
+        "submitting a wrong quiz attempt that mutates the learning record (D3)"
+      ],
+      "reconfirmation_required_per_action": true
+    },
+    "owner_ui_actions_performed": 14,
+    "actions_by_agent": [],
+    "rea_version": "6.7.0",
+    "rea_path": "C:\\nvm4w\\nodejs\\rea.cmd",
+    "node_version": "24.11.1",
+    "npm_version": "11.6.4",
+    "chrome_present": true,
+    "chrome_version": "UNKNOWN (querying chrome.exe --version opens a browser window; not captured)",
+    "rea_doctor_healthy": false,
+    "rea_doctor_note": "healthy:false is driven by missing native analysis engines (hopper/ghidra/ida/jadx), unrelated to browser observation",
+    "cdp_reachable_during_session": true,
+    "browser_version": "Chrome/156.0.8078.76",
+    "captures": 6,
+    "note": "Owner performed all UI actions. Agent only ran passive rea inspect-web-page windows and read local JSON."
+  },
+  "redaction_policy": {
+    "never_stored": [
+      "authorization headers",
+      "cookies",
+      "access/refresh tokens",
+      "request or response bodies with user content",
+      "raw SSE frames",
+      "raw HAR/SAZ/pcap",
+      "full URLs containing query values",
+      "screenshots of the account UI",
+      "user identifiers (email, user id, course title authored by the user)"
+    ],
+    "allowed": [
+      "HTTP method",
+      "path template with ids replaced by {courseId}/{lessonId}",
+      "status code",
+      "content-type",
+      "event type names",
+      "event counts",
+      "boolean presence of fields",
+      "field names of non-sensitive schemas"
+    ]
+  },
+  "baseline_imported": {
+    "note": "Imported from polyskill-analysis-report.md (static, 2026-10-30) and polyskill-dynamic-analysis.md (runtime, 2026-10-30). NOT re-verified in this session. Kept separate from 'observations' to avoid implying fresh evidence.",
+    "records": [
+      {
+        "source_id": "BASE-STATIC-1",
+        "origin": "polyskill-analysis-report.md §4",
+        "assertion": "Client declares SSE events delta, tool, confirm, done, error, restarted.",
+        "claim_level": "FACT",
+        "evidence_level": "E0",
+        "meaning": "The client knows how to handle these names. It does not prove any of them was emitted."
+      },
+      {
+        "source_id": "BASE-STATIC-2",
+        "origin": "polyskill-analysis-report.md §4/§5",
+        "assertion": "Client declares six tool names and citationSchema{anchor, heading, gist}.",
+        "claim_level": "FACT",
+        "evidence_level": "E0",
+        "meaning": "Enum existence only. No tool-execution claim."
+      },
+      {
+        "source_id": "BASE-DYN-1",
+        "origin": "polyskill-dynamic-analysis.md §2.2",
+        "assertion": "POST /v1/courses/{courseId}/tutor/messages returned 200 and was treated as SSE; 4 such POSTs observed in one window.",
+        "claim_level": "FACT",
+        "evidence_level": "E1",
+        "meaning": "Transport shape observed. SSE body content was not retained."
+      },
+      {
+        "source_id": "BASE-DYN-2",
+        "origin": "polyskill-dynamic-analysis.md §2.2 / E5",
+        "assertion": "GET /v1/courses/{courseId}/tutor returned 8 messages with toolCalls[4]; every message had contextLabel.",
+        "claim_level": "FACT",
+        "evidence_level": "E2",
+        "meaning": "Four tool calls happened at runtime at some point. Which tools, with what summary, is UNKNOWN in that capture."
+      },
+      {
+        "source_id": "BASE-DYN-3",
+        "origin": "polyskill-dynamic-analysis.md §2.2 / E6",
+        "assertion": "Tutor POST body carried contextRef{lessonId, blockIndex}, entryPoint, clientMessageId, text.",
+        "claim_level": "FACT",
+        "evidence_level": "E2",
+        "meaning": "Structured context is sent. Whether the model read the block is not established."
+      },
+      {
+        "source_id": "BASE-DYN-4",
+        "origin": "polyskill-dynamic-analysis.md §2.2",
+        "assertion": "Lesson payload reported source: null for the tested topic-based course.",
+        "claim_level": "FACT",
+        "evidence_level": "E2",
+        "meaning": "No source-backed lesson was ever observed at runtime. All RAG claims remain untested."
+      },
+      {
+        "source_id": "BASE-DYN-5",
+        "origin": "polyskill-dynamic-analysis.md §5 rows 10 and 12",
+        "assertion": "Server-side RAG is INFERENCE; embeddings/vector search is UNKNOWN.",
+        "claim_level": "INFERENCE",
+        "evidence_level": "E0/E1",
+        "meaning": "Unchanged by this session."
+      }
+    ]
+  },
+  "observations": [
+    {
+      "test_id": "ENV-HARNESS",
+      "observed_at": "2026-10-31T11:02:51+07:00",
+      "mode": "PASSIVE_CAPTURE_ONLY",
+      "actor": "agent",
+      "action": "Started isolated Chrome profile via scripts/start-browser.ps1, listed targets, ran one 3000ms passive inspect on the polySkill tab.",
+      "browser_evidence": "Chrome/156.0.8078.76, protocol 1.3, revision 537.36 (@93ce6b54af3fee27e384d1f30346e80db47a14da)",
+      "target": {
+        "target_id": "ACF2A8D73FC24F561489BC26309D8EC8",
+        "origin": "https://web.polyskill.app",
+        "url_path": "/sign-in",
+        "title": "PolySkill",
+        "note": "target_id is browser-instance specific and is not a secret"
+      },
+      "origin_filters_applied": [
+        "https://web.polyskill.app",
+        "https://api.polyskill.app"
+      ],
+      "evidence": [
+        "rea list-browser-targets -> 2 page targets, excluded.disallowed_origin=0, non_page=7",
+        "rea inspect-web-page --observation-ms 3000 -> exit 0, completeness.status=policy_filtered",
+        "network.requests count = 0"
+      ],
+      "capture_quality": "POLICY_FILTERED",
+      "capture_quality_detail": {
+        "attach_limited_sections": [
+          "console_events",
+          "metadata",
+          "network_requests",
+          "websocket_connections",
+          "websocket_frames"
+        ],
+        "policy_filtered_sections": [
+          "accessibility",
+          "console_text",
+          "json_body_shapes",
+          "script_sources",
+          "scripts",
+          "storage_keys",
+          "websocket_shapes",
+          "workers"
+        ],
+        "truncated_sections": [],
+        "target_changed": false,
+        "disallowed_origin_at_network_level": 0
+      },
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "meaning": "The observation harness, origin filters and target discovery all work against the live site. This verifies the HARNESS, not any PolySkill AI capability.",
+      "limits": [
+        "Page was /sign-in, i.e. no authenticated session existed at capture time.",
+        "0 network requests captured because a static sign-in page issues none as the user idles.",
+        "This is not a negative result about any AI feature."
+      ]
+    },
+    {
+      "test_id": "ENV-INGEST",
+      "observed_at": "2026-10-31T11:05:20+07:00",
+      "mode": "USER_UI_PLUS_PASSIVE_CAPTURE",
+      "actor": "owner (UI: upload+ingest) / agent (passive capture only)",
+      "action": "Owner uploaded fixtures/rag_synthetic_v1.pdf via the source-upload UI; 240s observation window armed beforehand.",
+      "browser_evidence": "Chrome/156.0.8078.76",
+      "origin_filters_applied": [
+        "https://web.polyskill.app",
+        "https://api.polyskill.app"
+      ],
+      "evidence": [
+        "20 HTTP requests, 0 disallowed_origin, 0 policy-dropped API requests",
+        "hosts: api.polyskill.app=17, web.polyskill.app=3",
+        "POST /v1/sources/upload -> 201 (multipart: filename, byteSize)",
+        "POST /v1/sources/{sourceId}/ingest -> 202 (async accepted)",
+        "GET /v1/sources/{sourceId} -> 200 polled 10 times until brief materialised",
+        "final GET body shape: 57 nodes depth 5; source.brief.sections[] count=3 with anchor/heading/gist",
+        "source.brief: what(string), claims[](10), notation[](9), assumes[](5), sections[](3)",
+        "source.status is a string field; source.rejectReason null; source.readyAt present"
+      ],
+      "capture_quality": "COMPLETE_WITHIN_WINDOW",
+      "capture_quality_detail": {
+        "requests_captured": 20,
+        "disallowed_origin": 0,
+        "attach_limited": true,
+        "attach_limited_note": "window started before the upload action, but prior_activity_available=false; the action itself was fully inside the window",
+        "policy_filtered": 0,
+        "truncated": false,
+        "target_changed": false,
+        "window_elapsed": true
+      },
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "meaning": "The source pipeline exists and runs end-to-end for a user-owned 3-page PDF: upload -> 201, ingest -> 202, polled status -> brief populated. The brief contains exactly 3 section objects carrying anchor+heading+gist, matching the 3 pages of the fixture. This is a FACT about the ingest contract. It is NOT proof of embeddings or vector retrieval.",
+      "limits": [
+        "Section count 3 matching page count 3 is consistent with page-level chunking, but could also be derived from detected headings; the chunker strategy remains INFERENCE.",
+        "No source content or brief text values were retained (REA keeps value-free shapes only).",
+        "sourceId is a ULID; it is redacted in reports and kept only in local raw capture.",
+        "Does not show whether retrieval is dense, sparse or hybrid."
+      ]
+    },
+    {
+      "test_id": "ENV-COURSEGEN",
+      "observed_at": "2026-10-31T11:10:07+07:00",
+      "mode": "USER_UI_PLUS_PASSIVE_CAPTURE",
+      "actor": "owner (UI) / agent (passive capture only)",
+      "action": "Owner created a course from the ingested fixture source, answered 5 interview questions, approved the proposal, waited for generation, opened lesson 1.",
+      "browser_evidence": "Chrome/156.0.8078.76",
+      "origin_filters_applied": [
+        "https://web.polyskill.app",
+        "https://api.polyskill.app"
+      ],
+      "evidence": [
+        "98 HTTP requests, 0 disallowed_origin, 0 policy-dropped API requests",
+        "POST /v1/courses -> 201",
+        "POST /v1/courses/{courseId}/interview/answer -> 200 x4 observed in window (5th likely before window edge / dedup)",
+        "GET /v1/courses/{courseId}/plan -> 200 polled x6",
+        "GET /v1/courses/{courseId}/tutor?entryPoint=proposal -> 200 (tutor thread created at proposal stage)",
+        "POST /v1/courses/{courseId}/approve -> 200",
+        "GET /v1/courses/{courseId}/generation -> 200 polled 56 times until ready",
+        "GET /v1/courses/{courseId}/path -> 200",
+        "GET /v1/courses/{courseId}/glossary -> 200 x2",
+        "GET /v1/lessons/{lessonId}?prefetch=1 -> 200",
+        "GET /v1/lessons/{lessonId} -> 200",
+        "LESSON PAYLOAD: source is now an OBJECT {id:string, kind:string, title:string, byline:null, canonicalUrl:null} — the previous session observed source:null, so this is a behavioural difference caused by the source-backed course",
+        "LESSON PAYLOAD: lesson.blocks[] count=7",
+        "LESSON PAYLOAD: lesson.blocks[].cite is an object with anchor(string) + label(string), present on 3 of 7 blocks",
+        "ACCESSIBILITY: lesson content contains all unique fixture facts: LUMORA-731 (13x), Chuẩn bị/Khớp mẫu/Xác thực, MƯA TÍM (3x), ORBIT-294, ORBIT-249 'ngưỡng 71'",
+        "ACCESSIBILITY: 4 quick actions visible: 'Rút ngắn lại', 'Đi sâu hơn vào phần toán', 'Bỏ qua phần mình đã biết', 'Thêm phần thực hành'",
+        "ACCESSIBILITY: tutor panel shows 'Pol', 'Gia sư của bạn', 'Hỏi Pol bất cứ điều gì'"
+      ],
+      "capture_quality": "COMPLETE_WITHIN_WINDOW",
+      "capture_quality_detail": {
+        "requests_captured": 98,
+        "disallowed_origin": 0,
+        "attach_limited": true,
+        "policy_filtered": 0,
+        "truncated": false,
+        "target_changed": false,
+        "window_elapsed": true
+      },
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "meaning": "A source-backed course generates LESSON CONTENT grounded in the uploaded PDF. Every unique fixture fact appears in the lesson body and glossary, and 3 blocks carry structured citations (anchor+label). This is SOURCE_GROUNDING_OBSERVED at the GENERATION stage. It is NOT the same as query-time retrieval: no tutor question has been asked yet.",
+      "limits": [
+        "Grounding is observed in generated lesson content, not in tutor answers to arbitrary questions. R1-R5 (tutor) remain untested.",
+        "Citation anchor/label values were retained by REA as strings but were not read for correctness; citation accuracy requires opening them in UI.",
+        "Interview answer count in-window was 4, not 5; the first may predate the capture edge. Not treated as a finding.",
+        "Content shown here derives from the agent-authored fictional fixture, so quoting the unique facts carries no PII risk."
+      ]
+    },
+    {
+      "test_id": "R1-R5",
+      "observed_at": "2026-10-31T11:16:00+07:00",
+      "mode": "USER_UI_PLUS_PASSIVE_CAPTURE",
+      "actor": "owner (typed 6 questions) / agent (passive capture + oracle comparison)",
+      "fixture": {
+        "file": "rag_synthetic_v1.pdf",
+        "sha256": "fc333de6f9170d2db542185e6057008b7c3c4c851aa4ceb2f11cf0a452c41ee0",
+        "pages": 3
+      },
+      "origin_filters_applied": [
+        "https://web.polyskill.app",
+        "https://api.polyskill.app"
+      ],
+      "network_evidence": [
+        "6x POST /v1/courses/{courseId}/tutor/messages -> 200 (one per question)",
+        "each POST followed by GET /v1/courses/{courseId}/tutor?entryPoint=teach_block&lessonId={lessonId} -> 200",
+        "GET /v1/courses/{courseId}/path -> 200 after each turn",
+        "observed session refresh: GET /v1/me/stats -> 401, POST /v1/auth/refresh -> 200, then original GETs reissued at 200 (client auto-refresh on 401 confirmed at runtime)",
+        "thread state: messages[]=12, every message has contextLabel (12/12)",
+        "thread state: messages[].toolCalls[] present with name/summary/ok -> 3 tool calls total in this thread",
+        "thread state: messages[].action = null for all 12 (no confirm gate surfaced)",
+        "allowance{limit,remaining} + limit{limit,remaining,resetAt} returned; UI showed 'Còn 19 câu hỏi miễn phí'"
+      ],
+      "observed_answers_redacted": [
+        {
+          "test_id": "R1",
+          "answer_summary": "Names exactly three stages in order: Chuẩn bị, Khớp mẫu, Xác thực; adds that the process completes only after all three; explicitly denies a fourth stage.",
+          "oracle_match": true,
+          "oracle_expected": [
+            "Chuẩn bị",
+            "Khớp mẫu",
+            "Xác thực"
+          ],
+          "found_forbidden": [],
+          "cites_page": 1,
+          "ui_tool_badge": "đã đọc tài liệu nguồn"
+        },
+        {
+          "test_id": "R2",
+          "answer_summary": "Identifies LUMORA-731 from the paraphrase of the three steps, without repeating the heading; also notes the document self-declares as fictional test data.",
+          "oracle_match": true,
+          "cites_page": 1,
+          "ui_tool_badge": null
+        },
+        {
+          "test_id": "R3a",
+          "answer_summary": "17 đơn vị; adds the comparison is >= so exactly 17 activates; below 17 does not.",
+          "oracle_match": true,
+          "cites_page": 2,
+          "forbidden_value_present": "71",
+          "ui_tool_badge": null
+        },
+        {
+          "test_id": "R3b",
+          "answer_summary": "71 đơn vị; states ORBIT-249 is independent of ORBIT-294 and thresholds must not be swapped.",
+          "oracle_match": true,
+          "cites_page": 3,
+          "ui_tool_badge": null
+        },
+        {
+          "test_id": "R4",
+          "answer_summary": "MƯA TÍM skips Khớp mẫu and goes Chuẩn bị -> Xác thực; quotes the page-3 sentence verbatim; also states the exception does NOT waive the ORBIT-294 >= 17 start condition.",
+          "oracle_match": true,
+          "cites_page": 3,
+          "citation_quote_verbatim": true,
+          "ui_tool_badge": "đã đọc tài liệu nguồn"
+        },
+        {
+          "test_id": "R5",
+          "answer_summary": "Refuses: 'Không có trong tài liệu'; reports having re-read all three pages and that no author, year, history or version section exists; offers to list what the document actually defines.",
+          "oracle_match": true,
+          "expected_behavior": "refusal",
+          "hallucinated_person_or_year": false,
+          "ui_tool_badge": "đã đọc tài liệu nguồn"
+        }
+      ],
+      "oracle_result": {
+        "R1": "PASS",
+        "R2": "PASS",
+        "R3a": "PASS",
+        "R3b": "PASS",
+        "R4": "PASS",
+        "R5": "PASS",
+        "score": "6/6 sub-probes correct, 0 cross-contamination between 17 and 71, 0 hallucination on the negative probe"
+      },
+      "capture_quality": "COMPLETE_WITHIN_WINDOW",
+      "capture_quality_detail": {
+        "requests_captured": 51,
+        "disallowed_origin": 0,
+        "policy_filtered": 0,
+        "truncated": false,
+        "target_changed": false,
+        "window_elapsed": true,
+        "attach_limited": true
+      },
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "outcomes": {
+        "SOURCE_GROUNDING_OBSERVED": true,
+        "CITATION_GROUNDED": true,
+        "NEGATIVE_REFUSAL_OBSERVED": true,
+        "TOOL_EXECUTION_OBSERVED": true,
+        "RAG_MECHANISM_UNKNOWN": true
+      },
+      "meaning": "All six oracle questions were answered correctly from the uploaded 3-page PDF, including a paraphrase probe, a near-miss numeric pair (17 vs 71, no contamination) and an unanswerable probe (clean refusal). Three tool calls were recorded in the thread, matching the three UI badges 'đã đọc tài liệu nguồn'. R4 quoted the page-3 sentence verbatim and additionally stated the exception does not waive the ORBIT-294 >= 17 condition, which is consistent with the fixture.",
+      "limits": [
+        "Citation ACCURACY: R4 located the quote on the correct page (3) and quoted it verbatim, but no clickable citation object was opened in the UI, so page/chunk locator correctness for the structured cite{anchor,label} is only partially verified.",
+        "Tool NAMES were not readable: REA retained the shape (name:string, summary:string, ok:boolean) but the values were not surfaced in accessibility text. Therefore read_source vs explain_deeper cannot be attributed.",
+        "n=1 per question. Post-hoc rephrasing was not repeated, so this is pilot evidence.",
+        "The 3 tool calls correlate 1:1 with the 3 questions that produced a UI badge, but correlation is not proof that each badge equals a distinct tool invocation.",
+        "Retrieval mechanism (dense/sparse/hybrid), embeddings, chunker, reranker remain UNKNOWN. Grounding does not identify the retriever.",
+        "One 401 burst followed by /auth/refresh shows silent token refresh; this is a client behaviour observation, not an AI capability."
+      ]
+    },
+    {
+      "test_id": "A1-A2",
+      "observed_at": "2026-10-31T11:16:00+07:00",
+      "mode": "USER_UI_PLUS_PASSIVE_CAPTURE",
+      "actor": "owner (clicked one quick action) / agent (passive capture)",
+      "origin_filters_applied": [
+        "https://web.polyskill.app",
+        "https://api.polyskill.app"
+      ],
+      "evidence_a1": [
+        "POST /v1/courses/{courseId}/tutor/messages request shape: clientMessageId, entryPoint, contextRef{lessonId,blockIndex}, text, threadId?",
+        "contextRef.lessonId and contextRef.blockIndex both present as typed fields (number for blockIndex)",
+        "thread state: messages[]=12 and contextLabel present on 12/12 messages",
+        "GET /tutor?entryPoint=teach_block&lessonId={lessonId} used to open the lesson thread",
+        "-> Tutor receives STRUCTURED lesson context, not client-injected lesson text"
+      ],
+      "evidence_a2": [
+        "Owner clicked exactly one UI quick action ('Cho mình xem cách suy ra')",
+        "POST /v1/courses/{courseId}/tutor/messages -> 200 (1 new turn)",
+        "thread toolCalls count went 3 -> 4 after the click",
+        "the new assistant turn displays the same 'đã đọc tài liệu nguồn' badge",
+        "new answer content explains the derivation from page 1 (heading sentence decomposed into 'exactly three stages' + 'fixed order')",
+        "allowance decreased 19 -> 18 free questions",
+        "messages[].action remained null (no confirm gate surfaced)"
+      ],
+      "tool_call_evidence": {
+        "count_before": 3,
+        "count_after": 4,
+        "shape": {
+          "name": "string",
+          "summary": "string",
+          "ok": "boolean"
+        },
+        "values_readable": false,
+        "reason_values_hidden": "accessibility text and body shapes do not expose values; 0 occurrences of any of the 6 enum tool names anywhere in the capture",
+        "correlation": "the new tool call aligns 1:1 with the one clicked UI action, in the same turn"
+      },
+      "capture_quality": "COMPLETE_WITHIN_WINDOW",
+      "capture_quality_detail": {
+        "requests_captured": 18,
+        "disallowed_origin": 0,
+        "policy_filtered": 0,
+        "truncated": false,
+        "target_changed": false,
+        "window_elapsed": true,
+        "attach_limited": true
+      },
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "outcomes": {
+        "A1_CONTEXT_PASSING_OBSERVED": true,
+        "A2_TOOL_CALL_EXECUTION_OBSERVED": true,
+        "A2_TOOL_NAME_ATTRIBUTED": false,
+        "A3_READ_SOURCE_ATTRIBUTED": false,
+        "A4_CONFIRM_FLOW_NOT_OBSERVED": true
+      },
+      "meaning": "A1: the tutor POST carries structured contextRef{lessonId, blockIndex} and every thread message carries contextLabel. A2: one UI quick action produced exactly one new tutor turn and the thread toolCalls counter rose from 3 to 4, with a visible 'đã đọc tài liệu nguồn' badge on the resulting message. Tool EXECUTION is therefore observed at runtime.",
+      "limits": [
+        "Tool NAMES remain unattributed. The capture proves a tool call happened, not which one. Claiming 'read_source ran' would require the name value, which was never visible.",
+        "The badge 'đã đọc tài liệu nguồn' is a UI label; it is consistent with a source-reading tool but is not by itself the tool name.",
+        "Only one quick action was clicked, and it was a follow-up suggestion rather than the original 4 quick actions (the UI had changed after the first turn).",
+        "A4 (confirm flow) was never triggered: messages[].action stayed null in all 14 messages, so A4 stays NOT_TESTED, not NOT_OBSERVED.",
+        "n=1 for the action->tool-call correlation."
+      ]
+    },
+    {
+      "test_id": "A3-CITATION",
+      "observed_at": "2026-10-31T11:18:00+07:00",
+      "mode": "PASSIVE_CAPTURE_ONLY",
+      "actor": "agent",
+      "evidence": [
+        "lesson payload: lesson.blocks[].cite = object{anchor:string, label:string}, present on 3 of 7 blocks",
+        "lesson payload: source = object{id, kind, title, byline:null, canonicalUrl:null}",
+        "accessibility: cite.label rendered as StaticText 'Trang 1 — Quy trình LUMORA-731'",
+        "accessibility: NO clickable citation chip/button with a 'Trang N' label; 31 buttons enumerated, none is a citation",
+        "accessibility: text 'Trang 1' appears 5x, 'Trang 2' 3x, 'Trang 3' 0x in the lesson view",
+        "glossary: terms[]=11 with {key, kind, name, short, more, teaser, firstSeen{unit,lesson}} — firstSeen links a term to unit+lesson, NOT to a source page"
+      ],
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "outcomes": {
+        "CITATION_STRUCTURE_PRESENT": true,
+        "CITATION_CLICKABLE_IN_UI": false,
+        "A3_READ_SOURCE_TOOL_ATTRIBUTED": false
+      },
+      "meaning": "Citations exist as a structured {anchor,label} object attached to lesson blocks and are rendered as a visible label. They are NOT openable in this lesson view, so a citation cannot be navigated to its source span. Glossary provenance points to unit/lesson, not to a source page.",
+      "limits": [
+        "Only the first lesson was inspected; other lessons or units may render citations differently.",
+        "anchor values were not string-matched against the fixture text, so anchor correctness is unverified.",
+        "The absence of a clickable chip in this view is a UI observation, not proof the app lacks a citation viewer elsewhere.",
+        "A3 (read_source tool attribution) remains unproven: the tool name was never visible."
+      ]
+    },
+    {
+      "test_id": "D2",
+      "observed_at": "2026-10-31T11:33:26+07:00",
+      "mode": "USER_UI_PLUS_PASSIVE_CAPTURE",
+      "actor": "owner / agent",
+      "action": "Attempted to click a harder/easier quick action inside the open lesson. The four difficulty quick actions were NOT present in the lesson view at that time.",
+      "evidence": [
+        "live accessibility snapshot at /lesson/{lessonId}: 31 buttons, none of them 'Rút ngắn lại' / 'Đi sâu hơn vào phần toán' / 'Bỏ qua phần mình đã biết' / 'Thêm phần thực hành'",
+        "the lesson view exposed only 4 follow-up suggestion buttons: 'Giải thích trong 30 giây', 'Cho mình xem cách suy ra', 'Mình sẽ dùng điều này ở đâu?', 'Điều này dẫn tới đâu?'",
+        "COMPARISON: in the fresh-thread capture (ENV-COURSEGEN) all 4 difficulty quick actions WERE present; in the post-message snapshots they are absent and replaced by follow-up suggestions",
+        "D2 observation window terminated with reason=target_changed (no usable network shape captured)"
+      ],
+      "capture_quality": "INCONCLUSIVE",
+      "capture_quality_detail": {
+        "error": "target_unavailable",
+        "reason": "target_changed",
+        "disallowed_origin": 0
+      },
+      "verdict": "INCONCLUSIVE",
+      "claim_level": "FACT",
+      "outcomes": {
+        "D2_USER_TRIGGERED_ADJUSTMENT_NOT_TESTED": true,
+        "QUICK_ACTIONS_EXIST": true,
+        "QUICK_ACTIONS_VISIBILITY_IS_STATEFUL": true
+      },
+      "meaning": "The 4 difficulty quick actions exist, but they are only rendered while the tutor thread is empty. After the first message they are replaced by contextual follow-up suggestions. Therefore D2 could not be executed in the current lesson state.",
+      "limits": [
+        "This is a UI availability observation, not evidence about what harder/easier would do.",
+        "contentVersion was never compared before/after, so nothing is known about regeneration.",
+        "The window also failed with target_changed, so even a network-level check is unavailable for this attempt.",
+        "Whether the quick actions reappear in another lesson, or after clearing the thread, is untested."
+      ]
+    }
+  ],
+  "capture_quality_legend": {
+    "COMPLETE_WITHIN_WINDOW": "0 disallowed_origin, attach_limited=false, policy_filtered=0, truncated=false, target_changed=false",
+    "POLICY_FILTERED": "at least one request dropped by origin filter; cannot support negative claims",
+    "ATTACH_LIMITED": "collection began after the action; prior activity unavailable",
+    "INCONCLUSIVE": "owner performed the action but 0 relevant requests were captured"
+  },
+  "blocked_reasons": [
+    {
+      "test_ids": [
+        "A4"
+      ],
+      "reason": "NO_CONFIRM_SURFACED",
+      "detail": "messages[].action stayed null on all 14 messages; a confirm gate was deliberately not manufactured."
+    },
+    {
+      "test_ids": [
+        "D1"
+      ],
+      "reason": "QUOTA_AND_CONSENT",
+      "detail": "Requires 2 additional course creations; not covered by the approval given for the fixture upload."
+    },
+    {
+      "test_ids": [
+        "D3"
+      ],
+      "reason": "LEARNING_RECORD_MUTATION",
+      "detail": "Deliberately wrong quiz answer would mutate the owner's learning record; separate consent required."
+    },
+    {
+      "test_ids": [
+        "D2"
+      ],
+      "reason": "UI_STATE_PLUS_TARGET_CHANGED",
+      "detail": "Difficulty quick actions exist only on an empty tutor thread; the attempt window also terminated with target_changed."
+    }
+  ]
+}

@@ -107,7 +107,12 @@ def validate_proposal(payload: ProposalPayload) -> ProposalPayload:
         raise SchemaInvalidError("Proposal không có bài học nào.")
     if not payload.outcomes or all(not o.strip() for o in payload.outcomes):
         raise SchemaInvalidError("Proposal thiếu learning outcome.")
-    return payload
+
+    # P2.1 — lộ trình phải là DAG acyclic và phủ đủ mọi bài học.
+    from app.services import pedagogy
+
+    payload = pedagogy.normalize_curriculum(payload)
+    return pedagogy.validate_curriculum(payload)
 
 
 def _validate_block(block, index: int) -> None:
@@ -170,6 +175,16 @@ def _validate_block(block, index: int) -> None:
         return
 
 
+def _block_question(block) -> str:
+    if block.type in ("mc", "short"):
+        return block.question
+    if block.type == "blank":
+        return block.sentence
+    if block.type in ("order", "match"):
+        return block.prompt
+    return ""
+
+
 def validate_lesson(content: LessonContent) -> LessonContent:
     if not content.title.strip():
         raise SchemaInvalidError("Bài học không có tiêu đề.")
@@ -181,4 +196,26 @@ def validate_lesson(content: LessonContent) -> LessonContent:
         raise SchemaInvalidError("Bài học không có câu hỏi kiểm tra nào.")
     for index, block in enumerate(content.blocks):
         _validate_block(block, index)
+
+    # P2.1 — chống bài học "độn" bằng câu hỏi lặp (LLM hay lặp khi thiếu ngữ cảnh).
+    seen_questions: set[str] = set()
+    for index, block in enumerate(content.blocks):
+        question = _block_question(block)
+        if not question.strip():
+            continue
+        key = _norm(question)
+        if key in seen_questions:
+            raise SchemaInvalidError(f"Block {index}: câu hỏi bị lặp trong cùng bài học.")
+        seen_questions.add(key)
+
+    # Không lặp y nguyên toàn bộ đoạn giảng (dấu hiệu model nhồi nội dung).
+    paragraphs = [
+        _norm(p)
+        for block in content.blocks
+        if block.type == "teach"
+        for p in block.paragraphs
+        if len(_norm(p)) >= 40
+    ]
+    if len(set(paragraphs)) != len(paragraphs):
+        raise SchemaInvalidError("Bài học có đoạn giảng bị lặp nguyên văn.")
     return content

@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.providers import LLMProvider, ProviderError, SchemaInvalidError
 from app.schemas.schemas import ProposalPayload
+from app.services import pedagogy
 from app.services.lesson_content import COMPLETION_THRESHOLD_PERCENT
 
 INTERVIEW_QUESTIONS_COUNT = 5
@@ -152,6 +153,22 @@ async def _generate_proposal(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": exc.code, "message": "Không sinh được đề xuất. Vui lòng thử lại."},
+        ) from exc
+
+    # P2.1 — hồ sơ người học do SERVER suy ra từ chính câu trả lời (deterministic),
+    # không tin field do model tự khai. Curriculum được chuẩn hoá lại lần cuối để
+    # mock/legacy provider cũng có DAG hợp lệ.
+    try:
+        payload.learnerProfile = pedagogy.extract_learner_profile(
+            interview.questions or [], clean_answers
+        )
+        payload = pedagogy.normalize_curriculum(payload)
+        pedagogy.validate_curriculum(payload)
+    except SchemaInvalidError as exc:
+        course.status = CourseStatus.failed
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "PROPOSAL_SCHEMA_INVALID", "message": str(exc)[:300]},
         ) from exc
 
     result = await db.execute(

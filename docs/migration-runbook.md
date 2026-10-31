@@ -80,3 +80,64 @@ docker compose exec -T db psql -U ailp -d ailp < backup_pre_migration_*.sql  # k
 - Stamp `0001_initial` + `upgrade head` → `0002_auth_columns` thành công.
 - 16 users + 16 courses cũ **giữ nguyên**; 2 cột `email`, `password_hash` được thêm (nullable).
 - Backend up, E2E acceptance 21/21 PASS sau migration.
+
+## P3.0 — revision `0005_p30_source_registry` (expand-only)
+
+Thay đổi: bảng `sources`, `course_sources`, `lesson_citations` + cột `lessons.grounding`
+(server_default `'general_ai_knowledge'`). Không drop/sửa cột cũ; không backfill dữ liệu giả.
+
+### Kiểm chứng đã chạy (2026-10-31, DB throwaway `p30_migration_check`)
+
+```bash
+docker compose exec -T db psql -U ailp -d postgres -c "DROP DATABASE IF EXISTS p30_migration_check;" -c "CREATE DATABASE p30_migration_check;"
+cd backend
+DATABASE_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p30_migration_check" alembic upgrade head   # exit 0
+DATABASE_URL=… alembic current          # 0005_p30_source_registry (head)
+```
+
+Kết quả: 13 bảng (9 cũ + 4 mới), enum `lesson_grounding` tồn tại, `lessons.grounding`
+NOT NULL default `'general_ai_knowledge'`.
+
+### Rollback đã kiểm chứng
+
+```bash
+DATABASE_URL=… alembic downgrade 0004_p12_job_reliability   # exit 0
+# → còn 10 bảng (sources/course_sources/lesson_citations bị drop), cột grounding bị drop,
+#   các enum P3.0 bị drop; enum course/job/lesson giữ nguyên.
+DATABASE_URL=… alembic upgrade 0004_p12_job_reliability     # forward recovery OK
+```
+
+### Bài học cũ vẫn đọc được (đã kiểm chứng)
+
+Seed 1 user/course/unit/lesson "legacy" ở revision 0004 → `upgrade head` → truy vấn ORM:
+
+```
+legacy lesson: Legacy lesson | grounding = general_ai_knowledge | version = 1
+sources table readable, count = 0
+```
+
+### Giới hạn rollback (ghi rõ)
+
+- `downgrade` **mất** toàn bộ metadata nguồn, liên kết course–source và citation tạo sau P3.0.
+  Không thể khôi phục từ schema; cần restore backup nếu muốn quay lui có dữ liệu.
+- Trên DB thật: backup trước (`pg_dump`), dừng backend/worker, rồi mới downgrade.
+- `lessons.content`/attempt/progress **không** bị đụng khi rollback.
+
+## P2.SR — revision `0006_p2sr_source_research`
+
+```bash
+# throwaway check (đã chạy 2026-10-31)
+docker exec <db> psql -U ailp -d postgres -c "CREATE DATABASE p2sr_migration_check;"
+cd backend
+DATABASE_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p2sr_migration_check" \
+  python -m alembic upgrade head          # → 0006_p2sr_source_research (head), 14 bảng
+DATABASE_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p2sr_migration_check" \
+  python -m alembic downgrade 0005_p30_source_registry
+                                          # → drop source_research_runs + enum, còn 13 bảng
+```
+
+Đã kiểm chứng thêm: seed user/course/unit/lesson ở revision 0005 (`content_version=3`) → upgrade
+head → ORM đọc `grounding=general_ai_knowledge`, `content_version=3`, course `ready` ⇒ không mất
+dữ liệu. DB dev `ailp` đã upgrade lên 0006 sau backup `backup_pre_p2sr_*.sql`.
+
+Rollback mất **lịch sử research run** (không ảnh hưởng course/lesson/attempt/citation).

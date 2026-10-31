@@ -9,6 +9,7 @@ import hashlib
 from app.providers.base import LLMProvider
 from app.schemas.schemas import (
     BlankBlock,
+    CurriculumSkill,
     LessonContent,
     MatchBlock,
     MCBlock,
@@ -16,6 +17,7 @@ from app.schemas.schemas import (
     ProposalPayload,
     ProposalUnit,
     ShortBlock,
+    SourceContextEntry,
     TeachBlock,
 )
 
@@ -46,31 +48,50 @@ class MockProvider(LLMProvider):
         seed = _hash_int(topic)
         focus = LEVEL_WORDS[seed % len(LEVEL_WORDS)]
         answer_digest = " ".join(a[:40] for a in interview_answers if a).strip() or "người mới"
+        units = [
+            ProposalUnit(
+                title=f"Unit 1 — Nền tảng {topic}",
+                blurb=f"Các khái niệm đầu tiên và thiết yếu của {topic}.",
+                lessonTitles=[
+                    f"{topic} là gì?",
+                    f"Thiết lập môi trường cho {topic}",
+                ],
+            ),
+            ProposalUnit(
+                title=f"Unit 2 — Thực hành {topic}",
+                blurb=f"Áp dụng {topic} qua ví dụ và bài tập.",
+                lessonTitles=[
+                    f"Bài tập đầu tiên với {topic}",
+                    f"Lỗi thường gặp khi học {topic}",
+                ],
+            ),
+        ]
+        titles = [title for unit in units for title in unit.lessonTitles]
+        bloom = ["understand", "apply", "apply", "analyze"]
+        skills = [
+            CurriculumSkill(
+                id=f"sk-{index + 1}",
+                title=title,
+                lesson=title,
+                bloomLevel=bloom[min(index, len(bloom) - 1)],
+                outcome=f"Áp dụng được nội dung '{title}' khi học {topic}.",
+            )
+            for index, title in enumerate(titles)
+        ]
+        # Chuỗi prerequisite tuyến tính theo thứ tự bài — DAG hợp lệ, không chu trình.
+        prerequisites = [
+            (skills[index].id, skills[index + 1].id) for index in range(len(skills) - 1)
+        ]
         return ProposalPayload(
             name=f"{topic}: lộ trình {focus}",
             objective=f"Giúp bạn ({answer_digest[:200]}) nắm vững {topic} ở mức {focus}.",
-            units=[
-                ProposalUnit(
-                    title=f"Unit 1 — Nền tảng {topic}",
-                    blurb=f"Các khái niệm đầu tiên và thiết yếu của {topic}.",
-                    lessonTitles=[
-                        f"{topic} là gì?",
-                        f"Thiết lập môi trường cho {topic}",
-                    ],
-                ),
-                ProposalUnit(
-                    title=f"Unit 2 — Thực hành {topic}",
-                    blurb=f"Áp dụng {topic} qua ví dụ và bài tập.",
-                    lessonTitles=[
-                        f"Bài tập đầu tiên với {topic}",
-                        f"Lỗi thường gặp khi học {topic}",
-                    ],
-                ),
-            ],
+            units=units,
             outcomes=[
                 f"Giải thích được các khái niệm {focus} của {topic}",
                 f"Tự hoàn thành một ví dụ thực hành nhỏ với {topic}",
             ],
+            skills=skills,
+            prerequisites=prerequisites,
         )
 
     async def generate_lesson(
@@ -80,9 +101,18 @@ class MockProvider(LLMProvider):
         unit_title: str,
         lesson_title: str,
         previous_titles: list[str],
+        source_context: list[SourceContextEntry] | None = None,
     ) -> LessonContent:
         seed = _hash_int(lesson_title)
         key_term = lesson_title.split("—")[-1].strip()
+
+        # Nguồn chỉ ảnh hưởng phần diễn đạt, KHÔNG sinh citation/URL — server là
+        # bên duy nhất tạo citation từ registry.
+        source_line = (
+            f"Tham khảo nguồn: {source_context[0].title}."
+            if source_context
+            else ""
+        )
 
         teach: TeachBlock = {
             "type": "teach",
@@ -91,6 +121,7 @@ class MockProvider(LLMProvider):
                 f"{key_term} là một trong những nội dung cốt lõi khi học {topic}.",
                 f"Trong unit '{unit_title}', bạn sẽ làm quen từng bước qua ví dụ cụ thể.",
                 "Hãy đọc kỹ đoạn dưới đây trước khi làm phần kiểm tra.",
+                *([source_line] if source_line else []),
             ],
         }
 

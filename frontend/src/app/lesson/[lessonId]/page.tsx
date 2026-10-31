@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
-import { api, newClientId } from "@/lib/api";
+import { api, citationStatusLabel, newClientId, type Citation } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
 
 interface IdText {
@@ -28,6 +28,9 @@ interface LessonOut {
   contentVersion: number;
   status: string;
   blocks: Block[];
+  grounding: "source_grounded" | "general_ai_knowledge";
+  citations: Citation[];
+  evidenceNotice: string | null;
 }
 
 interface AttemptResult {
@@ -184,6 +187,52 @@ export default function LessonPage() {
           ← Trang chủ
         </Link>
       </div>
+
+      {lesson.data?.grounding === "general_ai_knowledge" && (
+        <div className="notice-box">
+          <span className="badge badge-muted">Chưa xác minh</span>
+          {lesson.data.evidenceNotice ??
+            "Bài học dựa trên kiến thức chung của AI, chưa có nguồn tài liệu được xác minh."}
+        </div>
+      )}
+
+      {lesson.data && lesson.data.citations.length > 0 && (
+        <div className="card source-card">
+          <h2>Nguồn của bài học</h2>
+          <ul className="source-list">
+            {lesson.data.citations.map((citation) => (
+              <li key={citation.citationId}>
+                {citation.sourceUrl ? (
+                  <a
+                    className="link"
+                    href={citation.sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer nofollow"
+                  >
+                    {citation.sourceTitle ?? citation.sourceUrl}
+                  </a>
+                ) : (
+                  <strong>{citation.sourceTitle ?? "Nguồn không có URL"}</strong>
+                )}
+                {citation.sourceVersion && (
+                  <span className="muted"> · version {citation.sourceVersion}</span>
+                )}
+                {citation.pageNumber != null && (
+                  <span className="muted"> · trang {citation.pageNumber}</span>
+                )}
+                <span className="badge badge-muted">{citationStatusLabel(citation.validationStatus)}</span>
+                {citation.evidenceText && (
+                  <blockquote className="evidence-quote">{citation.evidenceText}</blockquote>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="muted">
+            Trạng thái citation phản ánh mức kiểm tra vị trí/bằng chứng, không phải kết luận nội
+            dung bài học luôn đúng.
+          </p>
+        </div>
+      )}
 
       {lesson.data?.blocks.map((b, i) => (
         <div className="card lesson-block" key={i}>

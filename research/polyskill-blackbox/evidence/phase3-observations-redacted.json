@@ -1,0 +1,352 @@
+{
+  "schema_version": "1.1",
+  "generated_at": "2026-10-31T12:30:00+07:00",
+  "session": {
+    "session_id": "ps-bbx-2026-10-31-p3",
+    "mode": "EXECUTED_PARTIAL",
+    "phase_doc": "PHASE3_OPENCODE_POLYSKILL.md",
+    "cdp_endpoint": "http://127.0.0.1:9222",
+    "cdp_reachable_at_preflight": true,
+    "browser_version": "Chrome/156.0.8078.76",
+    "protocol_version": "1.3",
+    "rea_version": "6.7.0",
+    "node_version": "24.11.1",
+    "npm_version": "11.6.4",
+    "repo": {
+      "branch": "main",
+      "head": "5e5f9cd496a22e6c1b10b535efd1fdeece43c6c9",
+      "dirty_paths_before": ["PHASE3_OPENCODE_POLYSKILL.md", "research/"],
+      "source_code_modified": false
+    },
+    "origins_declared": ["https://web.polyskill.app", "https://api.polyskill.app"],
+    "actions_by_agent": [],
+    "owner_ui_actions_performed": 3,
+    "owner_ui_action_list": [
+      "opened lesson 1 of the fixture-backed course",
+      "pressed F12 -> Network -> Preserve log and filtered tutor/messages",
+      "sent exactly one tutor message"
+    ],
+    "note": "Owner performed every UI action and every quota-spending action. Agent only ran passive rea inspect-web-page windows and read local JSON."
+  },
+  "redaction_policy": {
+    "never_stored": [
+      "authorization headers",
+      "cookies",
+      "access/refresh tokens",
+      "raw SSE frames",
+      "raw HAR/SAZ/pcap",
+      "screenshots of the account UI",
+      "user identifiers (email, user id)",
+      "real courseId / lessonId / threadId / sourceId values"
+    ],
+    "allowed": [
+      "HTTP method",
+      "path template with ids replaced by {courseId}/{lessonId}/{threadId}",
+      "status code",
+      "content-type",
+      "event type names",
+      "event counts",
+      "boolean presence of fields",
+      "field names of non-sensitive schemas",
+      "normalized text hashes"
+    ],
+    "id_handling": "Capture files contained exactly one unique value each for crs_, lsn_ and thr_. All are replaced by placeholders in this file. Raw captures were kept only under the OS temp directory and were not committed."
+  },
+  "preflight": {
+    "step": "PHASE 0",
+    "fixture": {
+      "path": "research/polyskill-blackbox/fixtures/rag_synthetic_v1.pdf",
+      "sha256_computed": "fc333de6f9170d2db542185e6057008b7c3c4c851aa4ceb2f11cf0a452c41ee0",
+      "sha256_oracle": "fc333de6f9170d2db542185e6057008b7c3c4c851aa4ceb2f11cf0a452c41ee0",
+      "hash_match": true,
+      "bytes": 57921,
+      "pages": 3,
+      "extractor": "pypdf 6.13.0 (pre-installed, nothing added)",
+      "normalization": "NFC; NBSP->space; U+2013/U+2014/U+4E00->'-'; whitespace collapsed; page number 1-indexed"
+    },
+    "offline_oracle_selfcheck": {
+      "R1_stages_on_page_1": "3/3 needles found",
+      "R3_ORBIT-294_quote_on_page_2": "found",
+      "R3_ORBIT-249_quote_on_page_3": "found",
+      "R4_MUA_TIM_quote_on_page_3": "found",
+      "cross_page_leakage": "literal '17' absent from page 3; literal '71' absent from page 2",
+      "non_literal_oracle_quotes": [
+        "R1, R2, R5 'quote' fields are synthesized descriptions, not literal substrings -> must be graded by clause, not by whole-string match"
+      ]
+    },
+    "environment_mismatch_with_plan": {
+      "claim": "PHASE3 doc requires REA_BROWSER_OBSERVE_ENABLED / REA_BROWSER_CDP_ENDPOINTS_JSON / REA_BROWSER_ALLOWED_ORIGINS_JSON",
+      "finding": "none of these three names exist anywhere in rea-agents 6.7.0 (grep over the installed package returned 0 hits)",
+      "action_taken": "used CLI flags only (--allowed-origins repeated per origin, --observation-ms, --include-accessibility-text, --include-json-body-shapes)",
+      "verdict": "PLAN_PRECONDITION_ADJUSTED"
+    },
+    "rea_sse_support": {
+      "finding": "no 'text/event-stream' handling exists in rea-agents 6.7.0 dist/",
+      "consequence": "REA cannot produce SSE event names or SSE frame shapes; event names can only be owner-reported from DevTools"
+    }
+  },
+  "observations": [
+    {
+      "test_id": "P3-PREFLIGHT-BASELINE",
+      "step": "PHASE 1 precondition",
+      "observed_at": "2026-10-31T12:05:20+07:00",
+      "window_utc": { "started_at": "2026-10-31T05:05:20.961Z", "ended_at": "2026-10-31T05:05:36.039Z", "observation_ms": 15000 },
+      "target": { "target_id": "AA47B4C8001B350CFC16EC338EBE74E0", "origin": "https://web.polyskill.app", "url_path": "/course/{courseId}" },
+      "flags": ["--allowed-origins web.polyskill.app", "--allowed-origins api.polyskill.app", "--include-accessibility-text"],
+      "capture_quality": "POLICY_FILTERED",
+      "capture_quality_detail": {
+        "disallowed_origin": 0,
+        "truncated": false,
+        "unavailable_sections": [],
+        "target_changed": false,
+        "attach_limited": true,
+        "policy_filtered_sections": ["console_text", "json_body_shapes", "script_sources", "scripts", "storage_keys", "websocket_shapes"],
+        "network_requests": 0
+      },
+      "evidence": [
+        "rea list-browser-targets -> 1 page target on https://web.polyskill.app, disallowed_origin=0, non_page=3, unsupported_url=1",
+        "accessibility total_nodes=491, text retained 5612 bytes",
+        "tutor panel text: 'Con 18 cau hoi mien phi'",
+        "4 quick actions rendered: 'Giai thich trong 30 giay', 'Minh nen tap trung vao dau?', 'Cho chuong sau kho hon', 'Minh dang hoc den dau roi?'",
+        "0 occurrences of 'Rut ngan lai' / 'Di sau hon vao phan toan' / 'Bo qua phan minh da biet' / 'Them phan thuc hanh'",
+        "lesson 1 node present: 'Ba chang, mot thu tu, Hoc tiep - 9 phut' + 'Bat dau bai hoc'",
+        "course is the fixture-backed one: nodes mention LUMORA-731, ORBIT-294 threshold 17, ORBIT-249 threshold 71, MUA TIM"
+      ],
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "meaning": "Baseline UI state captured before any action in this phase: course-level tutor panel with 4 quick actions and 18 free questions remaining.",
+      "limits": [
+        "network_requests=0 because the page was idle during the window; this is NOT a negative result about any request.",
+        "json_body_shapes was not requested, so no body shapes exist for this window."
+      ]
+    },
+    {
+      "test_id": "U8_CITATION",
+      "step": "PHASE 2",
+      "observed_at": "2026-10-31T12:07:25+07:00",
+      "window_utc": { "started_at": "2026-10-31T05:07:25.263Z", "ended_at": "2026-10-31T05:07:40.321Z", "observation_ms": 15000 },
+      "target": { "target_id": "AA47B4C8001B350CFC16EC338EBE74E0", "origin": "https://web.polyskill.app", "url_path": "/lesson/{lessonId}" },
+      "flags": ["--allowed-origins web.polyskill.app", "--allowed-origins api.polyskill.app", "--include-accessibility-text", "--include-json-body-shapes"],
+      "capture_quality": "POLICY_FILTERED",
+      "capture_quality_detail": {
+        "disallowed_origin": 0,
+        "truncated": false,
+        "unavailable_sections": [],
+        "target_changed": false,
+        "attach_limited": true,
+        "network_requests": 0,
+        "note": "The lesson JSON GET happened when the owner opened the lesson, i.e. before the window attached; prior_activity_available=false."
+      },
+      "evidence": [
+        "accessibility total_nodes=385; roles: button=33, StaticText=53, generic=188, radio=5, textbox=1, progressbar=1",
+        "exactly 1 citation element in this view: role=StaticText, name='Trang 1 - Quy trinh LUMORA-731' (rendered with U+2014), parent=generic",
+        "the citation node carries states=[] -> not focusable, not a button, not a link",
+        "0 buttons whose name contains 'Trang' or 'nguon'",
+        "offline check: observed label normalizes to the literal page-1 heading 'Trang 1 - Quy trinh LUMORA-731' of the fixture",
+        "offline check: the R4 verbatim quote 'Trong dieu kien MUA TIM, quy trinh LUMORA-731 bo qua giai doan Khop mau va di thang tu Chuan bi sang Xac thuc' is a literal substring of page 3",
+        "offline check: the second quoted sentence 'Dieu kien MUA TIM la ngoai le duy nhat duoc ghi nhan trong tai lieu nay' is a literal substring of page 3",
+        "offline check: 'lon hon hoac bang 17' is a literal substring of page 2 (supports the answer's >= claim)",
+        "lesson block marker 'Khai niem 1/3' observed; only the first of three concept blocks is rendered in this view"
+      ],
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "outcomes": {
+        "CITATION_STRUCTURE_PRESENT": true,
+        "CITATION_CONTENT_MATCH": true,
+        "CITATION_PAGE_MATCH": true,
+        "CITATION_LOCATOR_VALIDATED": "PARTIAL",
+        "CITATION_NAVIGABLE_IN_THIS_VIEW": false,
+        "CITATION_ANCHOR_MACHINE_CHECKED": false
+      },
+      "meaning": "In this lesson view exactly one citation renders, as plain StaticText. Its label names page 1 and the page-1 heading of the fixture verbatim, so label->page correspondence is correct for that one citation. It is not clickable and does not navigate, so the citation cannot be followed to a source span in this view.",
+      "limits": [
+        "The raw anchor string from the lesson payload was NOT readable: no lesson JSON body was captured (attach_limited), so anchor literalness is unverified.",
+        "Only 1 of the 3 cited blocks was visible; the other two blocks were not rendered in this view.",
+        "Absence of a clickable citation in this view is a UI observation, not proof the app has no citation viewer anywhere.",
+        "network_requests=0 in this window, so no payload-level claim (contentVersion, blocks[]) can be made from it."
+      ]
+    },
+    {
+      "test_id": "U7_U13",
+      "step": "PHASE 1",
+      "observed_at": "2026-10-31T12:14:02+07:00",
+      "window_utc": { "started_at": "2026-10-31T05:14:02.981Z", "ended_at": "2026-10-31T05:16:33.031Z", "observation_ms": 150000 },
+      "target": { "target_id": "AA47B4C8001B350CFC16EC338EBE74E0", "origin": "https://web.polyskill.app", "url_path": "/lesson/{lessonId}" },
+      "flags": ["--allowed-origins web.polyskill.app", "--allowed-origins api.polyskill.app", "--include-accessibility-text", "--include-json-body-shapes"],
+      "owner_action": "sent exactly one tutor message: 'Trong tai lieu LUMORA-731, dieu kien MUA TIM ap dung o giai doan nao? Neu khong tim thay, hay noi ro.'",
+      "consent": {
+        "granted_at": "2026-10-31T12:10+07:00",
+        "scope": "one tutor message (quota spend acknowledged)",
+        "owner_wording_summary": "owner authorised the agent to proceed freely with this single turn"
+      },
+      "capture_quality": "COMPLETE_WITHIN_WINDOW",
+      "capture_quality_detail": {
+        "requests_captured": 6,
+        "disallowed_origin": 0,
+        "policy_filtered_sections": ["console_text", "script_sources", "scripts", "storage_keys", "websocket_shapes"],
+        "attach_limited": true,
+        "truncated": false,
+        "unavailable_sections": [],
+        "dropped_events_total": 0,
+        "target_changed": false,
+        "window_elapsed": true
+      },
+      "network_evidence": [
+        "0: POST /v1/courses/{courseId}/tutor/messages -> 200, mime=text/event-stream",
+        "1: GET /v1/courses/{courseId}/path -> 200, mime=application/json",
+        "2: GET /v1/courses/{courseId}/tutor?entryPoint=teach_block&lessonId={lessonId}&blockIndex=0&threadId={threadId} -> 200, mime=application/json",
+        "3: GET /v1/home -> 200",
+        "4: GET /v1/me/stats -> 200",
+        "5: GET /assets/assets/logo.*.png -> 200"
+      ],
+      "request_body_shape_observed": {
+        "clientMessageId": "string",
+        "contextRef": { "lessonId": "string", "blockIndex": "number" },
+        "entryPoint": "string",
+        "text": "string",
+        "threadId": "string"
+      },
+      "thread_state_shape_observed": {
+        "messages": { "type": "array", "observations": 16 },
+        "messages[].action": { "type": "null", "observations": 16 },
+        "messages[].contextLabel": { "type": "string", "observations": 16 },
+        "messages[].toolCalls": { "type": "array", "observations": 16 },
+        "messages[].toolCalls[]": { "type": "object", "observations": 4 },
+        "messages[].toolCalls[].name": "string (values never exposed)",
+        "messages[].toolCalls[].summary": "string (values never exposed)",
+        "messages[].toolCalls[].ok": "boolean (values never exposed)",
+        "allowance": { "limit": "number", "remaining": "number" }
+      },
+      "sse_frame_capture": {
+        "response_body_shape_status": "ABSENT",
+        "reason": "REA 6.7.0 has no text/event-stream parser; the SSE POST response body is not retained in any form"
+      },
+      "owner_reported_events": {
+        "reported_by": "owner, read from Chrome DevTools -> Network -> EventStream",
+        "evidence_class": "OWNER_REPORTED",
+        "event_names_observed": ["delta", "done"],
+        "delta_payload_shape_owner_saw": "{text: string}",
+        "done_payload_keys_owner_saw": ["threadId", "message", "..."],
+        "excerpt_indexing": "the owner's paste was line-numbered; the terminal 'done' sat at index 261 of that paste",
+        "event_names_not_seen_in_the_pasted_excerpt": ["tool", "confirm", "error", "restarted"],
+        "counts": {
+          "delta": "many (>= ~200 in the pasted excerpt; exact count not obtained)",
+          "done": 1,
+          "tool": "not observed in excerpt",
+          "confirm": "not observed in excerpt",
+          "error": "not observed in excerpt",
+          "restarted": "not observed in excerpt"
+        }
+      },
+      "tool_call_evidence": {
+        "count_before": 4,
+        "count_after": 4,
+        "delta": 0,
+        "values_readable": false,
+        "reason_values_hidden": "body shapes are value-free by design; no tool name appears in accessibility text",
+        "ui_badge": {
+          "label": "da doc tai lieu nguon",
+          "count_before": 4,
+          "count_after": 4,
+          "attached_to_the_new_answer": false
+        }
+      },
+      "quota_evidence": {
+        "before": 18,
+        "after": 17,
+        "delta": 1,
+        "matches_turns": 1
+      },
+      "answer_grounding_check": {
+        "new_answer_summary": "Says the effect lands on stage 2 (Khop mau), which is skipped; Chuan bi and Xac thuc still run and are simply joined; adds that the document does not phrase it as 'applies at which stage' and only states the effect on the path.",
+        "against_fixture": "consistent with page 3; answer also correctly restates that MUA TIM does not waive the ORBIT-294 >= 17 start condition",
+        "oracle_match": true
+      },
+      "character_defect_observed": {
+        "codes": "U+4E00 (CJK 'one')",
+        "occurrences_in_this_render": 3,
+        "context": "the inline citation prefix read 'Nguyen van trang 3 <U+4E00> Ngoai le MUA TIM va ORBIT-249' instead of using an em dash",
+        "normalized_match": "substituting U+4E00 -> '-' makes the string match the page-3 heading literally",
+        "as_is_match": "no literal match against the PDF text without that substitution"
+      },
+      "lesson_mutation_check": {
+        "lesson_block_markers_before": ["Khai niem 1/3", "Ba tram noi tiep", "Chang sau chi chay khi chang truoc da chay xong.", "Thuat ngu chinh", "Ba chang, dung thu tu", "Trang 1 - Quy trinh LUMORA-731"],
+        "lesson_block_markers_after": ["Khai niem 1/3", "Ba tram noi tiep", "Chang sau chi chay khi chang truoc da chay xong.", "Thuat ngu chinh", "Ba chang, dung thu tu", "Trang 1 - Quy trinh LUMORA-731"],
+        "verdict": "lesson body markers identical; only the chat panel grew",
+        "note": "The pre-turn snapshot had the avatar picker open (5 radio nodes) while the post-turn snapshot did not, so the two DOM snapshots are not structurally identical; only the named lesson-body markers were compared."
+      },
+      "verdict": "OBSERVED",
+      "claim_level": "FACT",
+      "outcomes": {
+        "SSE_HTTP_200": true,
+        "EVENTS_OBSERVED_OWNER_REPORTED": ["delta", "done"],
+        "EVENTS_OBSERVED_BY_CAPTURE": false,
+        "EVENT_NAMES_UNKNOWN_BY_CAPTURE": true,
+        "TOOL_RECORD_OBSERVED_THIS_TURN": false,
+        "TOOL_EXECUTION_SUCCESS_THIS_TURN": "unknown",
+        "TOOL_NAME_CONFIRMED": false,
+        "READ_SOURCE_ATTRIBUTED": false,
+        "GROUNDED_ANSWER_WITHOUT_NEW_TOOL_CALL": true
+      },
+      "thread_length_note": "Post-turn thread has 16 messages (measured in the GET /tutor body shape). The pre-turn length was not measured in this session; 14 is an arithmetic inference from 16 minus one user message and one assistant message, and from the previous session ending at 14.",
+      "meaning": "One tutor turn was captured end to end at the transport level: POST returns 200 text/event-stream, then the client refetches the path and the thread. The thread ends at 16 messages, contextLabel is present on all 16, action is null on all 16, and toolCalls stays at 4. The answer is correct and grounded in page 3 even though no tool call was recorded and no source badge was attached to it.",
+      "limits": [
+        "Event names are OWNER_REPORTED, not machine-captured; REA cannot parse SSE in 6.7.0.",
+        "The 'tool' event was not exercised in this turn because no tool call occurred, so this run says nothing about whether a tool event exists or what shape it has.",
+        "Tool NAMES remain unreadable: shapes are value-free and no name appears in accessibility text.",
+        "n=1. Whether grounded answers normally run without a tool call, or whether this turn reused already-loaded context, is not established.",
+        "Because toolCalls did not increase, the earlier 1:1 badge<->tool-call correlation was not re-tested; it now has a counter-example at the turn level (grounded answer, 0 new tool calls, 0 new badge)."
+      ]
+    }
+  ],
+  "blocked_reasons": [
+    {
+      "test_ids": ["D2", "U9"],
+      "reason": "NO_EMPTY_THREAD_AND_QUOTA_DECLINED",
+      "detail": "The difficulty affordance set is only rendered while the tutor thread is empty. The only lesson with an empty thread in this course was lesson 1, which received a message during U7/U13 and can no longer be used. Every other lesson node in the path was 'Da khoa' or 'Pro'. The owner declined spending quota on a new course or a chapter rewrite, so D2/U9 stays BLOCKED rather than INCONCLUSIVE.",
+      "observed_but_not_tested": {
+        "difficulty_affordance_exists": true,
+        "current_label_set": ["Giai thich trong 30 giay", "Minh nen tap trung vao dau?", "Cho chuong sau kho hon", "Minh dang hoc den dau roi?"],
+        "earlier_session_label_set": ["Rut ngan lai", "Di sau hon vao phan toan", "Bo qua phan minh da biet", "Them phan thuc hanh"],
+        "label_sets_identical": false,
+        "course_level_copy_observed": "Nho Pol dieu chinh khoa hoc nay / 'Hay noi voi Pol, cac chuong tiep theo se duoc soan lai cho hop voi ban.'"
+      }
+    },
+    {
+      "test_ids": ["D1"],
+      "reason": "OUT_OF_SCOPE_THIS_SESSION",
+      "detail": "Explicitly excluded by the owner for this session."
+    },
+    {
+      "test_ids": ["D3"],
+      "reason": "OUT_OF_SCOPE_THIS_SESSION",
+      "detail": "Explicitly excluded by the owner for this session; also mutates the learning record."
+    },
+    {
+      "test_ids": ["A4"],
+      "reason": "OUT_OF_SCOPE_THIS_SESSION",
+      "detail": "Explicitly excluded by the owner for this session."
+    }
+  ],
+  "redaction_scan": {
+    "method": "Node one-liners over the three local capture files, counting regex matches for JWT-shaped strings, bearer tokens, email addresses, 'refreshToken', 'authorization', 'cookie', the known Mixpanel token literal, and JSON id keys",
+    "files_scanned": ["ps3-u7-baseline.json", "ps3-u8-lesson.json", "ps3-u7-u13-turn.json"],
+    "results": {
+      "jwt_shaped": 0,
+      "bearer_header": 0,
+      "email": 0,
+      "refreshToken": 0,
+      "authorization": 0,
+      "cookie": 0,
+      "mixpanel_literal": 0,
+      "json_id_keys": 0
+    },
+    "identifier_inventory": {
+      "crs_": "1 unique value in the U7 capture, 1 in the lesson capture -> replaced with {courseId}",
+      "lsn_": "1 unique value in each capture -> replaced with {lessonId}",
+      "thr_": "1 unique value in the U7 capture -> replaced with {threadId}",
+      "ulid_standalone": 0
+    },
+    "conclusion": "No credential material was present in the captures. Real opaque ids were present and are excluded from this file."
+  }
+}

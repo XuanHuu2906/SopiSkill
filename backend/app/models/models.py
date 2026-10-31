@@ -38,6 +38,64 @@ class LessonStatus(str, enum.Enum):
     failed = "failed"
 
 
+class SourceType(str, enum.Enum):
+    official_documentation = "official_documentation"
+    academic = "academic"
+    user_document = "user_document"
+    webpage = "webpage"
+
+
+class SourceVisibility(str, enum.Enum):
+    public = "public"
+    private = "private"
+
+
+class SourceVerificationStatus(str, enum.Enum):
+    """Mức xác thực của NGUỒN (metadata), không phải mức nội dung đúng.
+
+    Thang tăng dần: unverified < metadata_verified < locator_verified
+    < evidence_supported < corroborated. Không bao giờ tự nhảy bậc vì URL hợp lệ
+    hoặc vì LLM khai báo.
+    """
+
+    unverified = "unverified"
+    pending_review = "pending_review"
+    metadata_verified = "metadata_verified"
+    locator_verified = "locator_verified"
+    evidence_supported = "evidence_supported"
+    corroborated = "corroborated"
+    rejected = "rejected"
+
+
+class CitationValidationStatus(str, enum.Enum):
+    """Mức kiểm chứng của MỘT citation, tách biệt hoàn toàn với độ đúng của claim."""
+
+    unverified = "unverified"
+    locator_verified = "locator_verified"
+    evidence_supported = "evidence_supported"
+    unavailable = "unavailable"
+    source_changed = "source_changed"
+    rejected = "rejected"
+
+
+class LessonGrounding(str, enum.Enum):
+    source_grounded = "source_grounded"
+    general_ai_knowledge = "general_ai_knowledge"
+
+
+class SourceResearchStatus(str, enum.Enum):
+    """Trạng thái của một lần nghiên cứu nguồn (P2.SR).
+
+    `running` chỉ tồn tại trong thời gian request; nếu tiến trình chết giữa chừng
+    row sẽ ở `running` và bị coi là không dùng được (không tự đánh dấu completed).
+    """
+
+    running = "running"
+    completed = "completed"
+    insufficient_evidence = "insufficient_evidence"
+    failed = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -172,7 +230,170 @@ class Lesson(Base):
     status: Mapped[LessonStatus] = mapped_column(
         Enum(LessonStatus, name="lesson_status"), default=LessonStatus.pending
     )
+    # P3 source-first: bài học dựa trên nguồn đã liên kết hay kiến thức chung của AI.
+    # Default giữ cho mọi row cũ đọc được như "kiến thức chung, chưa kiểm chứng".
+    grounding: Mapped[LessonGrounding] = mapped_column(
+        Enum(LessonGrounding, name="lesson_grounding"),
+        default=LessonGrounding.general_ai_knowledge,
+    )
     unit: Mapped[Unit] = relationship(back_populates="lessons")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Source(Base):
+    """Source Registry — metadata của một nguồn tri thức (P3.0).
+
+    Bảng này KHÔNG chứa nội dung tài liệu (text/chunks thuộc P4). Nó chỉ lưu
+    metadata + mức xác thực metadata, để citation có thể trỏ tới một nguồn có
+    quyền truy cập và có phiên bản rõ ràng.
+
+    `dedupe_key` là hash deterministic của (scope sở hữu, source_type, canonical
+    URL/title, content_hash) ⇒ tạo lại cùng một nguồn trả về bản ghi cũ thay vì
+    sinh duplicate vô hạn.
+    """
+
+    __tablename__ = "sources"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_source_dedupe"),
+        Index("ix_sources_visibility_owner", "visibility", "owner_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    source_type: Mapped[SourceType] = mapped_column(
+        Enum(SourceType, name="source_type"), default=SourceType.webpage
+    )
+    title: Mapped[str] = mapped_column(Text)
+    canonical_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publisher: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publication_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    retrieved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    language: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"), index=True, nullable=True
+    )
+    visibility: Mapped[SourceVisibility] = mapped_column(
+        Enum(SourceVisibility, name="source_visibility"), default=SourceVisibility.private
+    )
+    license_info: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verification_status: Mapped[SourceVerificationStatus] = mapped_column(
+        Enum(SourceVerificationStatus, name="source_verification_status"),
+        default=SourceVerificationStatus.unverified,
+    )
+    dedupe_key: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CourseSource(Base):
+    """Liên kết n–n Course ↔ Source.
+
+    `evaluation` là snapshot đánh giá chất lượng tại thời điểm liên kết (JSON) để
+    hiển thị lại kể cả khi thuật toán chấm điểm thay đổi. Không dùng để suy ra
+    "nội dung đúng".
+    """
+
+    __tablename__ = "course_sources"
+    __table_args__ = (
+        UniqueConstraint("course_id", "source_id", name="uq_course_source"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id"), index=True
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sources.id"), index=True)
+    evaluation: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class LessonCitation(Base):
+    """Citation/provenance cho một bài học (P3.0 evidence contract).
+
+    Tách biệt bốn mức: metadata verified, locator verified, evidence supports
+    claim, claim corroborated. Bảng này chỉ ghi bằng chứng THỰC SỰ có (locator +
+    đoạn evidence nếu có); trạng thái mặc định luôn `unverified`.
+    """
+
+    __tablename__ = "lesson_citations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    lesson_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("lessons.id"), index=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sources.id"), index=True)
+    # Snapshot phiên bản nguồn tại thời điểm sinh bài — citation cũ không được âm
+    # thầm trỏ sang phiên bản mới khi source.version thay đổi.
+    source_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    section_anchor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_status: Mapped[CitationValidationStatus] = mapped_column(
+        Enum(CitationValidationStatus, name="citation_validation_status"),
+        default=CitationValidationStatus.unverified,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SourceResearchRun(Base):
+    """Một lần Source Research Agent chạy cho course (P2.SR).
+
+    Bảng chỉ lưu **kết quả nghiên cứu** và bằng chứng về mức kiểm chứng tại thời
+    điểm chạy. Nó KHÔNG phải registry: nguồn chỉ vào `sources` khi người dùng
+    chấp nhận và service xác thực quyền. Vì vậy:
+      - `sources` là JSON snapshot (adapter, metadata, verificationStatus, reason);
+      - `is_mock` buộc phải đúng khi adapter không trả dữ liệu thật;
+      - `request_fingerprint` chống tạo trùng khi client retry cùng yêu cầu.
+    """
+
+    __tablename__ = "source_research_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "course_id", "request_fingerprint", name="uq_research_run_fingerprint"
+        ),
+        Index("ix_research_runs_course_created", "course_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), index=True)
+    # Owner được ghi lại để truy vấn scoped không phải join course mỗi lần.
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[SourceResearchStatus] = mapped_column(
+        Enum(SourceResearchStatus, name="source_research_status"),
+        default=SourceResearchStatus.running,
+    )
+    topic: Mapped[str] = mapped_column(Text)
+    domain: Mapped[str] = mapped_column(Text, default="general")
+    adapter: Mapped[str] = mapped_column(Text)
+    is_mock: Mapped[bool] = mapped_column(default=False)
+    request_fingerprint: Mapped[str] = mapped_column(Text)
+    analysis: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    sources: Mapped[list] = mapped_column(JSONVariant, default=list)
+    warnings: Mapped[list] = mapped_column(JSONVariant, default=list)
+    error: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    insufficient_evidence: Mapped[bool] = mapped_column(default=True)
+    tool_calls: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -37,6 +37,11 @@ PG_DSN = os.environ.get(
     "E2E_PG_DSN", "postgresql://ailp:ailp_password@127.0.0.1:5433/ailp"
 )
 EMAIL = os.environ.get("E2E_EMAIL") or f"e2e-{uuid.uuid4().hex[:8]}@test.dev"
+# Mock: generation xong trong <1s. Provider thật: mỗi khóa ~10 request × 10-25s.
+# Cho phép cấu hình để chạy cùng script trên cả hai chế độ.
+GENERATION_POLL_TIMEOUT = float(os.environ.get("E2E_GENERATION_TIMEOUT", "30"))
+_POLL_STEP = 0.5
+_POLL_ROUNDS = max(1, int(GENERATION_POLL_TIMEOUT / _POLL_STEP))
 PASSWORD = "E2ePassw0rd!2026"
 
 # Cookie jar giữ session (HttpOnly access_token + csrf_token)
@@ -151,8 +156,14 @@ step("1b. Idempotent khi retry request", course2["id"] == course_id, f"same id={
 st, interview = call("GET", f"/v1/courses/{course_id}/interview", None, 200)
 step("2. Interview co 5 cau", len(interview["questions"]) == 5, f"completedCount={interview['completedCount']}")
 
-for i in range(5):
-    st, ans = call("POST", f"/v1/courses/{course_id}/interview/answer", {"position": i, "answer": f"Tôi muon hoc de lam du an, moi tim hieu {i}"}, 200)
+for i, answer in enumerate([
+    "Mình chưa từng học Python",
+    "Muốn tự làm được một web app nhỏ để nộp đồ án",
+    "Mỗi tuần mình dành 3 giờ",
+    "Thích thực hành và làm dự án hơn đọc lý thuyết",
+    "Muốn đi sâu vào backend",
+]):
+    st, ans = call("POST", f"/v1/courses/{course_id}/interview/answer", {"position": i, "answer": answer}, 200)
 step("2b. Tra loi 5 cau", ans["completedCount"] == 5, f"completedCount={ans['completedCount']}")
 
 # 3. Proposal hợp lệ
@@ -161,13 +172,60 @@ p = proposal["payload"]
 valid = bool(p["name"]) and len(p["units"]) >= 2 and len(p["outcomes"]) >= 2 and all(u["lessonTitles"] for u in p["units"])
 step("3. Proposal co cau truc hop le", valid, f"name='{p['name'][:40]}' units={len(p['units'])} lessons={sum(len(u['lessonTitles']) for u in p['units'])}")
 
+# 3b. P2.1 — learner profile do server suy ra (không phải model tự khai)
+profile = p.get("learnerProfile") or {}
+step(
+    "3b. Proposal co learner profile (server-derived)",
+    profile.get("currentLevel") in ("beginner", "intermediate", "advanced")
+    and isinstance(profile.get("weeklyMinutes"), int)
+    and profile.get("depth") in ("broad", "balanced", "deep"),
+    f"level={profile.get('currentLevel')} minutes={profile.get('weeklyMinutes')} depth={profile.get('depth')}",
+)
+
+# 3c. P2.1 — curriculum DAG phủ đủ bài học, không chu trình
+_lesson_titles = [t for u in p["units"] for t in u["lessonTitles"]]
+_skills = p.get("skills") or []
+_edges = [tuple(e) for e in (p.get("prerequisites") or [])]
+_skill_lessons = [s["lesson"] for s in _skills]
+_skill_ids = [s["id"] for s in _skills]
+
+
+def _dag_acyclic(ids, edges):
+    indegree = {n: 0 for n in ids}
+    children = {n: [] for n in ids}
+    for parent, child in edges:
+        if parent not in indegree or child not in indegree:
+            return False
+        children[parent].append(child)
+        indegree[child] += 1
+    ready = [n for n in ids if indegree[n] == 0]
+    ordered = 0
+    while ready:
+        node = ready.pop(0)
+        ordered += 1
+        for child in children[node]:
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                ready.append(child)
+    return ordered == len(ids)
+
+
+step(
+    "3c. Curriculum DAG phu du bai hoc",
+    sorted(_skill_lessons) == sorted(_lesson_titles)
+    and len(set(_skill_ids)) == len(_skill_ids)
+    and all(e[0] != e[1] for e in _edges)
+    and _dag_acyclic(_skill_ids, _edges),
+    f"skills={len(_skills)} edges={len(_edges)} lessons={len(_lesson_titles)}",
+)
+
 # 4. Approve
 st, approve = call("POST", f"/v1/courses/{course_id}/approve", None, 202)
 step("4. Duyet proposal (202)", st == 202, f"jobId={approve['jobId'][:20]}")
 
 # 5. Poll generation
 final = None
-for _ in range(60):
+for _ in range(_POLL_ROUNDS):
     st, gen = call("GET", f"/v1/courses/{course_id}/generation", None, 200)
     if gen["status"] in ("ready", "failed"):
         final = gen
@@ -187,7 +245,7 @@ step(
 # va retry tao job MOI (khong dung job cu).
 st, retry = call("POST", f"/v1/courses/{course_id}/retry", None, 202)
 step("5c. Retry tao job moi", retry["jobId"] != approve["jobId"], f"jobId={retry['jobId'][:20]}")
-for _ in range(60):
+for _ in range(_POLL_ROUNDS):
     st, gen2 = call("GET", f"/v1/courses/{course_id}/generation", None, 200)
     if gen2["status"] in ("ready", "failed"):
         break
@@ -333,6 +391,79 @@ step(
     f"limit=1 items={len(page['items'])} hasMore={page['hasMore']}",
 )
 
+# 11. P3.0 — Source Registry: tạo nguồn, idempotent, đánh giá, liên kết course
+source_body = {
+    "sourceType": "official_documentation",
+    "title": "Python 3 Documentation",
+    "canonicalUrl": "https://docs.python.org/3/",
+    "publisher": "Python Software Foundation",
+    "language": "en",
+    "version": "3.13",
+    "visibility": "private",
+}
+st, source = call("POST", "/v1/sources", source_body, 201)
+step(
+    "11. Tao nguon (201, unverified)",
+    st == 201 and source["verificationStatus"] == "unverified",
+    f"id={source['id'][:16]} status={source['verificationStatus']}",
+)
+st, source_dup = call("POST", "/v1/sources", source_body, 201)
+step("11b. Nguon trung -> tai su dung ban ghi", source_dup["id"] == source["id"], "")
+
+st, evaluation = call(
+    "GET", f"/v1/sources/{source['id']}/evaluation?topic=Python", None, 200
+)
+step(
+    "11c. Danh gia nguon deterministic, khong tu verified",
+    evaluation["evaluator"]["kind"] == "deterministic_metadata"
+    and evaluation["suggestedVerificationStatus"] in ("pending_review", "metadata_verified"),
+    f"verdict={evaluation['verdict']} score={evaluation['weightedScore']}",
+)
+
+st, linked = call(
+    "POST", f"/v1/courses/{course_id}/sources", {"sourceId": source["id"]}, 201
+)
+step("11d. Lien ket nguon voi course (201)", st == 201, f"total_source={linked['source']['id'][:16]}")
+st, course_sources = call("GET", f"/v1/courses/{course_id}/sources", None, 200)
+step(
+    "11e. Course doc duoc nguon da lien ket",
+    course_sources["total"] >= 1 and course_sources["groundingAvailable"] is False,
+    f"total={course_sources['total']} grounding={course_sources['groundingAvailable']}",
+)
+
+# 11f. Discovery mock deterministic + không gọi network thật
+st, disc1 = call("GET", "/v1/sources/discover?topic=python&adapter=mock", None, 200)
+st, disc2 = call("GET", "/v1/sources/discover?topic=python&adapter=mock", None, 200)
+step(
+    "11f. Discovery mock deterministic",
+    disc1["isMock"] is True and disc1["items"] == disc2["items"] and len(disc1["items"]) > 0,
+    f"adapter={disc1['adapter']} items={len(disc1['items'])}",
+)
+
+# 11g. Lesson mới sinh (sau khi liên kết nguồn) phải nêu rõ chưa xác minh
+st, regen = call("POST", f"/v1/courses/{course_id}/retry", None, 202)
+for _ in range(_POLL_ROUNDS):
+    st, gen3 = call("GET", f"/v1/courses/{course_id}/generation", None, 200)
+    if gen3["status"] in ("ready", "failed"):
+        break
+    time.sleep(0.5)
+st, detail3 = call("GET", f"/v1/courses/{course_id}", None, 200)
+lesson3_id = [l for u in detail3["units"] for l in u["lessons"]][0]["id"]
+st, lesson3 = call("GET", f"/v1/lessons/{lesson3_id}", None, 200)
+step(
+    "11g. Bai hoc co nguon nhung chua ingest -> chua xac minh",
+    gen3["status"] == "ready"
+    and lesson3["grounding"] == "general_ai_knowledge"
+    and lesson3["evidenceNotice"]
+    and lesson3["citations"]
+    and all(c["validationStatus"] in ("unverified", "unavailable") for c in lesson3["citations"]),
+    f"grounding={lesson3['grounding']} citations={len(lesson3['citations'])}",
+)
+
+# 11h. Public payload KHÔNG chứa answer key dù có citation
+leaked3 = [b["type"] for b in lesson3["blocks"] if public_answer_is_leaked(b)]
+step("11h. Citation khong lam lo answer key", not leaked3, f"leaked={leaked3}")
+
 # ---- Case lỗi ----
 
 # B. User khác (đăng nhập riêng) truy cập course không thuộc quyền → 404
@@ -381,6 +512,94 @@ step(
     all(code == 404 for code in checks.values()),
     f"status={checks}",
 )
+
+# B5. P3.0 — B không đọc được nguồn private / danh sách nguồn course của A
+st, _ = other_call("GET", f"/v1/sources/{source['id']}")
+private_status = st
+st, _ = other_call("GET", f"/v1/courses/{course_id}/sources")
+course_sources_status = st
+step(
+    "B5. B bi chan nguon private + course sources cua A",
+    private_status == 404 and course_sources_status == 404,
+    f"source={private_status} course_sources={course_sources_status}",
+)
+st, _ = other_call(
+    "POST", "/v1/sources", {"sourceType": "webpage", "title": "other-user-no-csrf"}
+)
+step("B6. POST source thieu CSRF -> 403", st == 403, f"status={st}")
+
+# S. P2.SR — Source Research Agent (flag mặc định TẮT)
+#    Flag tắt ⇒ 503 có mã rõ ràng (không đổi flow cũ); flag bật ⇒ run deterministic,
+#    không tự verified, không cấp sourceId, không link nguồn mock.
+st, research = call(
+    "POST", f"/v1/courses/{course_id}/research-runs", {"maxSources": 3}
+)
+if st == 503:
+    step(
+        "S1. Research flag tat -> 503 co ma loi (flow cu khong doi)",
+        research.get("detail", {}).get("code") == "SOURCE_RESEARCH_DISABLED",
+        f"code={research.get('detail', {}).get('code')}",
+    )
+else:
+    expected_status = "metadata_verified" if not research["isMock"] else "discovered"
+    step(
+        "S1. Research run deterministic, khong tu verified",
+        st == 201
+        and research["status"] in ("completed", "insufficient_evidence")
+        and all(s["verificationStatus"] == expected_status for s in research["sources"])
+        and all("sourceId" not in s for s in research["sources"]),
+        f"status={research.get('status')} sources={len(research.get('sources', []))}"
+        f" mock={research.get('isMock')}",
+    )
+    st_again, research_again = call(
+        "POST", f"/v1/courses/{course_id}/research-runs", {"maxSources": 3}, 201
+    )
+    step(
+        "S2. Retry cung yeu cau -> khong tao research run moi",
+        st_again == 201
+        and research_again["researchRunId"] == research["researchRunId"]
+        and research_again["reused"] is True,
+        f"reused={research_again.get('reused')}",
+    )
+    if research["isMock"]:
+        st_accept, accept_body = call(
+            "POST",
+            f"/v1/courses/{course_id}/research-runs/{research['researchRunId']}/accept",
+            None,
+            409,
+        )
+        step(
+            "S3. Khong the link nguon MOCK vao khoa hoc",
+            st_accept == 409
+            and accept_body.get("detail", {}).get("code") == "RESEARCH_SOURCES_NOT_LINKABLE",
+            f"status={st_accept} code={accept_body.get('detail', {}).get('code')}",
+        )
+    else:
+        st_accept, _ = call(
+            "POST",
+            f"/v1/courses/{course_id}/research-runs/{research['researchRunId']}/accept",
+            None,
+            200,
+        )
+        st_src, accepted_sources = call("GET", f"/v1/courses/{course_id}/sources", None, 200)
+        step(
+            "S3. Nguon curated metadata_verified duoc link nhung DB van unverified",
+            st_accept == 200
+            and accepted_sources["total"] >= 1
+            and all(
+                item["source"]["verificationStatus"] == "unverified"
+                for item in accepted_sources["items"]
+            ),
+            f"total={accepted_sources['total']}",
+        )
+
+# S4. Cross-user: B không đọc/không tạo được research run của A
+st_other, _ = other_call("GET", f"/v1/courses/{course_id}/research-runs")
+step("S4. B bi chan research runs cua A", st_other == 404, f"status={st_other}")
+st_no_csrf, _ = other_call(
+    "POST", f"/v1/courses/{course_id}/research-runs", {"maxSources": 3}
+)
+step("S5. POST research thieu CSRF -> 403", st_no_csrf == 403, f"status={st_no_csrf}")
 
 # C. interview answer position sai → 422
 st, _ = call("POST", f"/v1/courses/{course_id}/interview/answer", {"position": 99, "answer": "x"})
