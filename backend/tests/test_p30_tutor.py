@@ -163,7 +163,10 @@ def test_tutor_system_prompt_lists_linked_sources_without_content():
         linked_source_titles=["Python Docs"],
     )
     assert "Python Docs" in system
-    assert "CHƯA ingest" in system
+    # P4.0 đã ingest nội dung; điều chưa có là TRUY XUẤT cho câu hỏi này. Câu cũ
+    # "CHƯA ingest" đã sai sự thật từ P4.0 nên được sửa thành mô tả đúng.
+    assert "CHƯA truy xuất nội dung" in system
+    assert "đã truy xuất các đoạn tài liệu" not in system
 
 
 def test_history_is_bounded_and_filters_empty():

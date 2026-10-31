@@ -254,7 +254,8 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P3.1 (Tools/cancel/quota) | **DONE (lát A + B) 2026-10-31** | High | `0009_p31_tutor_controls` + `0010_p31_tutor_tools`; stop/allowance/stale/usage + tool allowlist/audit |
 | P3.0b (Source Registry + Evidence Contract) | **DONE 2026-10-31** | High | `0005_p30_source_registry`; 190 pytest + 3 race + 47/47 E2E |
 | P2.SR (Source Research Agent) | **DONE 2026-10-31** | High | `0006_p2sr_source_research`; agent độc lập + registry/idempotency + flag off/on; offline adapter (mock/curated) |
-| P4.0–P4.1 | TODO (nền P3.0b + P2.SR đã sẵn) | High | PDF → hybrid RAG → citations xác thực |
+| P4.0 | **DONE 2026-10-31** | High | `0011_p40_source_ingest`; PDF text → provenance, 385 pytest, 59/59 E2E |
+| P4.1 | **DONE 2026-10-31 (offline baseline)** | High | `0012_p41_rag`; lexical+vector+RRF, citation validator, 426 pytest, 72/72 E2E (RAG on) |
 | P4.2–P4.3 | OPTIONAL | Medium | Chỉ khi có use case/test corpus |
 | P5.0 | TODO sau RAG | Medium | Mastery/FSRS có data model và QA |
 | P5.1–P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
@@ -540,16 +541,16 @@ Chi tiết: `docs/source-research-agent.md`.
 
 **Công việc:**
 
-- [ ] P4.0.1 Source ownership: `sources` (owner, course relation nếu có, mime, original name safe, checksum, status), `source_pages`/`source_chunks` (page, offsets, text hash, provenance). Xóa theo quyền sở hữu; cascade rõ.
-- [ ] P4.0.2 Upload PDF qua streaming giới hạn size/type; xác minh MIME magic, page count, malware/sandbox limits, không tin extension. Đặt hard limits cấu hình rõ và có test.
-- [ ] P4.0.3 Storage adapter server-side, path non-public, random object keys, no direct arbitrary local path; signed retrieval chỉ sau auth.
-- [ ] P4.0.4 Async extract **PDF text trước**; giữ page numbers, heading/span/anchors. Với PDF scan chưa OCR ở phase này, báo `NO_EXTRACTABLE_TEXT`/status thích hợp.
-- [ ] P4.0.5 Chunking có page provenance, heading, source/version checksum; tránh overlap gây trích dẫn mơ hồ; log không chứa raw tài liệu cá nhân.
-- [ ] P4.0.6 Worker idempotent per `source_id + content_hash + pipeline_version`; retry không tạo trùng chunks, trạng thái extracting/ready/failed bền vững.
-- [ ] P4.0.7 Lọc/đánh dấu untrusted source text; document prompt-injection boundaries; không cho parser chạy process nguy hiểm.
-- [ ] P4.0.8 Frontend: upload, progress, source list, error, file validation; owner A/B isolation.
+- [x] P4.0.1 Source ownership: `source_documents` (owner qua source, mime, original name safe, checksum, status, storage key) + `source_chunks` (page, offsets, text hash, provenance). Xóa theo quyền sở hữu; cascade rõ. *(revision `0011_p40_source_ingest`)*
+- [x] P4.0.2 Upload PDF qua streaming giới hạn size/type; xác minh MIME magic, page count; không tin extension. Hard limits cấu hình rõ và có test. **Chưa có malware scanner** (ghi nhận giới hạn).
+- [x] P4.0.3 Storage adapter server-side (MinIO/S3), path non-public, random object keys, không nhận path từ client; đọc chỉ qua service sau auth.
+- [x] P4.0.4 Async extract **PDF text trước**; giữ page numbers, heading/span/anchors. Với PDF scan chưa OCR ở phase này, báo `NO_EXTRACTABLE_TEXT`/status `no_text`.
+- [x] P4.0.5 Chunking có page provenance, heading, source/version checksum; không overlap; log không chứa raw tài liệu.
+- [x] P4.0.6 Worker idempotent per `source_id + content_hash + pipeline_version`; retry không tạo trùng chunks, trạng thái queued/extracting/ready/no_text/failed bền vững (+ reconciler).
+- [x] P4.0.7 Đánh dấu untrusted source text (`wrap_untrusted` + delimiter); chunk chỉ là dữ liệu, không được thi hành như chỉ thị; parser chỉ đọc bytes trong process (không shell/network).
+- [x] P4.0.8 Frontend: trang `/sources` — tạo nguồn, upload, trạng thái, lỗi, validate file; owner A/B isolation.
 
-**Acceptance / Gate:** PDF text fixture có page/chunk đúng nguồn, PDF rỗng/scan/oversize/corrupt bị xử lý an toàn; 2 user không đọc được source nhau; reload tồn tại; không gọi RAG nếu ingest chưa ready.  
+**Acceptance / Gate:** PDF text fixture có page/chunk đúng nguồn, PDF rỗng/scan/oversize/corrupt bị xử lý an toàn; 2 user không đọc được source nhau; reload tồn tại; không gọi RAG nếu ingest chưa ready. **Trạng thái 2026-10-31: IMPLEMENTED + TESTED** (chi tiết `docs/development-progress.md` mục P4.0). Retrieval/citation verified vẫn **chưa** có — thuộc P4.1.
 **Không làm:** Tự crawl website, tự OCR mọi PDF, dùng Google Drive/files người dùng không được cho phép, giả citation.
 
 ---
@@ -564,18 +565,25 @@ Chi tiết: `docs/source-research-agent.md`.
 
 **Công việc:**
 
-- [ ] P4.1.1 **Embedding model/provider selection gate:** benchmark tiếng Việt/Anh trên 30+ query/answer examples; model, dimension, privacy, cost **chưa chốt** — lưu cấu hình model + dimension + version để tránh trộn vectors.
-- [ ] P4.1.2 Migrations pgvector + indexes phù hợp **dimension của model đã chọn**, dữ liệu cũ không mất; exact vector search trước, HNSW **chỉ nếu đo được scale/latency**.
-- [ ] P4.1.3 Lexical retrieval có metadata filters bắt buộc `owner_id`, `source_id/course_id`; xử lý tiếng Việt rõ giới hạn tokenizer; không trộn chunk của người khác.
-- [ ] P4.1.4 Vector retrieval có cùng ownership filter, no cross-tenant rows; RRF hợp nhất thứ hạng; giới hạn top-k, chunk/token budget.
-- [ ] P4.1.5 Context assembly mang `sourceId/chunkId/page/offset/contentHash` và untrusted delimiter; chống prompt injection trong source.
-- [ ] P4.1.6 Citation validator phía server: LLM chỉ được chọn từ IDs được retrieval trả về; kiểm tra source tồn tại, owner hợp lệ, page/chunk/anchor hợp lệ. Không bịa URL, số trang hoặc nội dung trích dẫn.
-- [ ] P4.1.7 Nếu không có đủ evidence: model trả **“chưa đủ thông tin từ tài liệu”**, không bịa câu trả lời tự tin. Câu hỏi ngoài nguồn phải minh bạch.
-- [ ] P4.1.8 Integrate vào tutor dưới feature flag `RAG_ENABLED`, `read_source` mở khi source ready, citations UI mở đúng PDF/page.
-- [ ] P4.1.9 Evals: retrieval Recall@k, MRR (nếu có qrels), citation precision/coverage, answer groundedness, cost/latency; có ít nhất test negative no-source, conflicting chunks, injected chunks.
+- [x] P4.1.1 **Embedding spec:** interface `EmbeddingSpec(provider, model, dimension, version)` + adapter `hashing` (offline) và `openai_compatible` (mặc định tắt, fail-fast). **Model thật chưa chốt** — 16 query/answer VI+EN (`backend/evals/rag_dataset.py`) là baseline, không phải benchmark chọn model.
+- [x] P4.1.2 Migration `0012_p41_rag`: `source_chunk_embeddings` (JSON vector + UNIQUE spec + index), `tutor_messages.citations`, GIN FTS. **Không dùng pgvector**; benchmark cho thấy cần chuyển khi >~700 chunk (xem `docs/specs/20-P41-HYBRID-RAG.md`).
+- [x] P4.1.3 Lexical: PostgreSQL `to_tsvector('simple')`/`ts_rank_cd`, SQLite token-overlap; scope SQL bắt buộc course + owner/public + document ready; cổng ngưỡng `RAG_MIN_LEXICAL_SCORE`.
+- [x] P4.1.4 Vector cosine cùng scope SQL; RRF (`k=60`); top-k + `RAG_CANDIDATE_LIMIT` + `RAG_CONTEXT_MAX_CHARS`.
+- [x] P4.1.5 Context mang `chk_<id>`/page/offset/anchor/textHash + delimiter untrusted; allowlist khớp đúng đoạn có trong prompt.
+- [x] P4.1.6 `citation_service.verify_answer_citations`: chỉ id trong allowlist của request; `locator_verified`; `evidenceSupported` luôn False.
+- [x] P4.1.7 Không evidence ⇒ prompt nói rõ + UI hiện "chưa đủ thông tin"; đo abstention 2/2 trong eval.
+- [x] P4.1.8 Tutor dưới `RAG_ENABLED` + `read_source` thật (scope server-side) + frame SSE `citations` + UI citation/unverified. Mở PDF đúng trang **chưa** làm (chỉ hiển thị tr. + anchor).
+- [x] P4.1.9 `evals/rag_eval.py` (Recall@6=1.0, MRR=0.964, abstention=1.0, p95≈8ms) + `evals/rag_benchmark.py`. Groundedness/citation precision **chưa** đo được (cần LLM/judge + nhãn người) — ghi NOT TESTED.
 
 **Acceptance / Gate:** Bộ PDF test sở hữu hợp pháp, tối thiểu 30 queries có ground truth page/chunk; **100% citation hiển thị phải resolve được chunk nguồn có quyền**; đo recall/groundedness, không khẳng định chất lượng cao khi chưa đo.  
 **Không làm:** Claim vector search của PolySkill, giả citations, truy cập nguồn người khác, dùng reranker/HNSW không benchmark.
+
+**Trạng thái 2026-10-31:** IMPLEMENTED + TESTED (offline baseline) / **một phần NOT TESTED**:
+- Citation: 100% citation hiển thị đi qua validator allowlist + scope SQL (test offline + PostgreSQL thật).
+- Dataset eval hiện có **16 query** (14 answerable + 2 abstain), **dưới mốc 30** ⇒ chưa đạt acceptance
+  đầy đủ về quy mô eval; Recall@6/MRR đo trên chính bộ này, không suy rộng.
+- **Chưa đo groundedness / citation precision** (cần LLM judge hoặc nhãn người).
+- Chưa có reranker, chưa pgvector (có benchmark quyết định ngưỡng chuyển).
 
 ---
 

@@ -96,6 +96,15 @@ export default function HomePage() {
           <li>Chờ hệ thống sinh bài học</li>
           <li>Học và làm quiz — điểm được chấm và lưu tự động</li>
         </ol>
+        {user && (
+          <p>
+            <Link href="/sources" className="link">
+              Tài liệu của tôi (PDF)
+            </Link>{" "}
+            — tải tài liệu để trích xuất nội dung. Trả lời kèm trích dẫn đã kiểm chứng
+            chưa được bật ở giai đoạn này.
+          </p>
+        )}
       </div>
     </div>
   );

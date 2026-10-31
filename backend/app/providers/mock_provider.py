@@ -5,6 +5,7 @@ Dùng cho dev/test và acceptance E2E. Nội dung sinh theo template bám topic
 """
 
 import hashlib
+import re
 from collections.abc import AsyncIterator
 
 from app.providers.base import LLMProvider
@@ -231,18 +232,39 @@ class MockProvider(LLMProvider):
             (line for line in system.splitlines() if line.startswith("Bài học hiện tại:")),
             "",
         )
-        answer = (
-            "Mình là trợ giảng ở chế độ MOCK (không phải AI thật). "
-            f"{lesson_line.strip()} Câu hỏi của bạn: \"{question}\". "
-            "Gợi ý: hãy đọc lại đoạn giảng ngay trên block bạn đang mở, "
-            "rồi tự giải thích bằng lời của mình trước khi xem đáp án quiz. "
-            "Mình chưa có nguồn tài liệu được kiểm chứng để trích dẫn."
-        )
+        # RAG (P4.1): nếu server đã đưa khối ngữ cảnh nguồn, mock trích đúng id
+        # ĐẦU TIÊN trong khối đó — mô phỏng hành vi "có căn cứ" để test đường
+        # verify citation. Không có khối nguồn ⇒ giữ câu nói thật là chưa có nguồn.
+        cited = _first_context_chunk_id(system)
+        if cited:
+            answer = (
+                "Mình là trợ giảng ở chế độ MOCK (không phải AI thật). "
+                f"{lesson_line.strip()} Câu hỏi của bạn: \"{question}\". "
+                f"Theo đoạn tài liệu đã truy xuất [{cited}], hãy đọc kỹ đoạn đó "
+                "rồi tự giải thích lại bằng lời của mình."
+            )
+        else:
+            answer = (
+                "Mình là trợ giảng ở chế độ MOCK (không phải AI thật). "
+                f"{lesson_line.strip()} Câu hỏi của bạn: \"{question}\". "
+                "Gợi ý: hãy đọc lại đoạn giảng ngay trên block bạn đang mở, "
+                "rồi tự giải thích bằng lời của mình trước khi xem đáp án quiz. "
+                "Mình chưa có nguồn tài liệu được kiểm chứng để trích dẫn."
+            )
         # Chia theo từ để mỗi delta có ý nghĩa; không sleep để test nhanh.
         words = answer.split(" ")
         for index, word in enumerate(words):
             yield word if index == 0 else " " + word
 
+
+
+_CONTEXT_ID_RE = re.compile(r"\[chk_([0-9a-fA-F-]{36})\]")
+
+
+def _first_context_chunk_id(system: str) -> str | None:
+    """Id chunk đầu tiên server đã cấp trong prompt (mock không tự bịa id khác)."""
+    match = _CONTEXT_ID_RE.search(system or "")
+    return f"chk_{match.group(1)}" if match else None
 
 
 def _rotate_options(options: list[str], answer_index: int, seed: int) -> list[str]:

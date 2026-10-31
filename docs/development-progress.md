@@ -2,6 +2,234 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-10-31 — P4.1 Hybrid RAG + verified citations (offline baseline)
+
+- Base commit: `9f5b5bf` (`main`, working tree — tiếp nối P4.0 chưa commit)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Quyết định (người dùng phê duyệt): **phương án A — offline-first**
+  - Embedding mặc định `hashing` (deterministic, không network, không tải model). Đây là baseline
+    lexical/subword, **KHÔNG** phải semantic embedding của Transformer.
+  - Adapter `openai_compatible` thêm nhưng **mặc định TẮT**; thiếu base URL/key/model/dimension ⇒
+    `EMBEDDING_NOT_CONFIGURED`, **không fallback** sang hashing.
+  - **Không đổi Docker image**, **không pgvector** ở phase này; vector lưu JSON + cosine exact có trần.
+  - Đổi sang pgvector khi benchmark chứng minh cần — xem số đo bên dưới.
+- IMPLEMENTED:
+  - `backend/app/services/embedding_service.py`: `EmbeddingSpec(provider, model, dimension, version)`,
+    `HashingEmbeddingProvider`, `OpenAICompatibleEmbeddingProvider`, `active_spec`,
+    `get_embedding_provider` (fail-fast), `hashing_embed` (token + char n-gram + fold dấu, signed hash,
+    L2), `cosine_similarity`, `chunks_missing_embedding`/`embed_chunks` (upsert idempotent),
+    `embedding_coverage`.
+  - `backend/app/services/retrieval_service.py`: scope SQL (course + owner/public + document ready),
+    lexical (`to_tsvector('simple')`/`ts_rank_cd` trên PostgreSQL; token-overlap trên SQLite), vector
+    cosine đúng spec, `rrf_fuse`, `RetrievedChunk`/`RetrievalResult`, `build_context_section_with_ids`
+    (allowlist khớp đúng đoạn đưa vào prompt), `insufficient_evidence`.
+  - `backend/app/services/rag_service.py`: `rag_active`, `retrieve_for_question`,
+    `build_system_with_rag`, `verify_answer` (verified/unverified/rejected), `embed_after_ingest`,
+    `coverage_notice`, `build_tool_read_source_section`, `lesson_query`.
+  - `backend/app/services/citation_service.py`: `extract_citation_ids`, `verify_answer_citations`
+    (chỉ id trong allowlist của request ⇒ `locator_verified`, `evidenceSupported` luôn False),
+    `unverified_source_pointers`.
+  - `backend/app/services/tutor_tools.py`: `read_source` **bật thật** qua `execute_async` +
+    `SourceReader` callback; `ReadSourceArgs.query`; args summary không ghi câu hỏi người học.
+  - `backend/app/api/v1/tutor.py`: retrieval trước khi build prompt; frame SSE `citations`;
+    lưu citation vào message; `_make_source_reader` mở session riêng, scope theo course/user.
+  - `backend/app/api/v1/sources.py`: `POST /v1/courses/{id}/sources/search` (CSRF, rate limit,
+    `sourceIds` chỉ thu hẹp trong nguồn đã liên kết); ingest-config trả trạng thái embedding/RAG thật.
+  - `backend/app/worker/ingest.py`: embed ngay sau ingest (best-effort) + `backfill_embeddings` +
+    task `reconcile_embeddings` trên beat.
+  - `backend/alembic/versions/0012_p41_rag.py`: `source_chunk_embeddings` (UNIQUE spec, FK CASCADE,
+    index), `tutor_messages.citations` (jsonb nullable), index `source_chunks(text_hash)`,
+    GIN `to_tsvector('simple', text)` (chỉ PostgreSQL).
+  - Frontend: `TutorPanel` hiển thị citation đã verify + nguồn đã truy xuất nhưng **chưa dẫn**
+    (style khác, `evidenceSupported=false`); `/sources` hiển thị trạng thái RAG/embedding thật.
+  - `backend/evals/rag_dataset.py` (4 tài liệu VI+EN, 16 query có ground truth page; 2 abstain),
+    `backend/evals/rag_eval.py`, `backend/evals/rag_benchmark.py`.
+  - `docs/specs/20-P41-HYBRID-RAG.md` (quyết định + giới hạn), cập nhật `11-SOURCES-AND-RAG.md`,
+    `database-design.md`, `migration-runbook.md`, master plan.
+- TESTED (offline, SQLite):
+  - `python -m pytest -q` → **426 passed, 24 skipped**. Mới: `test_p41_rag.py` (23),
+    `test_p41_tutor_rag.py` (8), `test_p41_migration_contract.py` (9),
+    `test_p41_postgres_concurrency.py` (4, skip khi không có URL).
+  - Phủ: embedding deterministic/L2/fold dấu; đổi version ⇒ vector cũ không được tái dùng; prompt không còn nói "chưa có nguồn" khi RAG cấp ngữ cảnh thật; provider
+    thật thiếu config fail-fast (không fallback); lexical VI có dấu; vector khớp câu không dấu; RRF xếp
+    chunk trúng cả hai ranker lên đầu; cross-user/unlinked/non-ready bị loại; query yếu ⇒
+    `insufficientEvidence`; citation bịa bị loại; `evidenceSupported=False`; allowlist khớp đúng prompt
+    (test hồi quy); SSE frame `citations`; `read_source` ok / no-evidence / unavailable khi RAG tắt;
+    thread detail có citation sau reload; API search CSRF/503/scope.
+  - `npm run build` → OK; `npx tsc --noEmit` → 0 lỗi.
+- TESTED (PostgreSQL throwaway `p41_race_check`, đã drop):
+  - `POSTGRES_TEST_URL=…/p41_race_check python -m pytest tests/test_p41_postgres_concurrency.py -q`
+    → **4 passed**: FTS `simple` khớp tiếng Việt có dấu; ownership filter ở SQL (link nguồn A vào
+    course B vẫn không lộ); 8 worker upsert đồng thời ⇒ đúng 1 row/chunk; vector stale
+    (`text_hash` cũ) bị loại.
+- TESTED (migration PostgreSQL throwaway `p41_migration_check`, đã drop):
+  - `upgrade 0011` → seed user+source → `upgrade head` → `0012_p41_rag (head)`;
+    `source_chunk_embeddings` 11 cột, UNIQUE spec, 2 FK CASCADE; GIN `ix_source_chunks_fts_simple`;
+    `tutor_messages.citations` jsonb nullable.
+  - `downgrade 0011` → GIN index + bảng embeddings + cột biến mất, `users`/`sources` còn **1/1**;
+    `upgrade head` lại thành công.
+- TESTED (Docker full stack, mock provider, worker Celery thật):
+  - Flag mặc định (RAG/Tutor tắt): `E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py`
+    → **60/60 PASS** (thêm 11p kiểm 503 `RAG_NOT_ENABLED`).
+  - Bật `RAG_ENABLED=true TUTOR_ENABLED=true TUTOR_TOOLS_ENABLED=true` → **72/72 PASS**
+    (11p provenance đầy đủ, 11q abstain, 12x tutor + tool + stop + quota).
+  - Kiểm thủ công qua HTTP thật: upload PDF 2 trang → `ready`, link course, hỏi tutor ⇒ nhận frame
+    `citations` với `pageNumber=1`, `sectionAnchor="Chapter 1: Loops"`, `textHash`,
+    `validationStatus=locator_verified`, `evidenceSupported=false`; search API trả 2 chunk.
+  - Worker log: `embed ready source_id=… chunks=2`; DB dev `20 chunks / 20 embeddings`, một spec duy
+    nhất `hashing/hashing-ngram-v1/d256/v1` (không trộn vector).
+- TESTED (eval + benchmark: `python -m evals.rag_eval`, `python -m evals.rag_benchmark`):
+  - Retrieval: **Recall@6 = 1.000, MRR = 0.964, abstention = 1.000, p50 ≈ 5 ms, p95 ≈ 8 ms**
+    (16 query: 7 EN, 9 VI). Theo ngôn ngữ: EN recall 1.0/MRR 1.0; VI recall 1.0/MRR 0.9375.
+  - Benchmark scale (SQLite exact scan): 500 chunk → p95 **84 ms**; 2000 → **368 ms**; 8000 →
+    **460 ms** (vector ~15.6 MB). Ngân sách 150 ms ⇒ **cần pgvector/ANN khi corpus vượt khoảng
+    700 chunk**, không sớm hơn.
+- NOT TESTED:
+  - **Semantic quality** của embedding thật (chưa cấu hình provider; chưa có key/chi phí được duyệt).
+  - **Groundedness / citation precision** (cần LLM judge hoặc nhãn người); hiện chỉ có retrieval
+    metrics + structural citation validity.
+  - Dataset eval **16 query < 30** theo acceptance plan ⇒ chưa đủ quy mô; ghi BLOCKED ở plan.
+  - Corpus lớn thật (>2000 chunk) trên PostgreSQL; HNSW/reranker (chưa triển khai, chưa benchmark).
+  - Mở đúng trang PDF trong UI (chỉ hiển thị số trang + section anchor).
+  - Multi-turn retrieval follow-up (query hiện tại = câu hỏi + block digest).
+  - OCR/PDF scan (P4.3), web/arXiv (P4.2).
+- BLOCKED: **không** blocked code. Bị chặn bởi quyết định/chi phí: chọn embedding model thật + key +
+  ngân sách; mở rộng eval ≥30 query có nhãn người; quyết định UI mở PDF.
+- Security: mọi truy vấn retrieval scope owner/course ở SQL (test cả PostgreSQL với dữ liệu xấu);
+  citation chỉ từ allowlist của request; `evidenceSupported` luôn False; prompt tài liệu nằm trong
+  delimiter untrusted; log không chứa nội dung/câu hỏi; API search có CSRF + rate limit; embedding key
+  chỉ server-side, không trả ra response.
+- Regressions: 0. pytest 385 → **426 passed** (+41); E2E 60 → **72/72** khi bật RAG/Tutor.
+- Known limitations:
+  - `hashing` có collision và không hiểu ngữ nghĩa; ngưỡng `RAG_MIN_LEXICAL_SCORE` /
+    `RAG_VECTOR_ONLY_MIN_SIMILARITY` hiệu chỉnh trên 16 query — **phải hiệu chỉnh lại** khi đổi
+    corpus/model.
+  - `groundingAvailable` vẫn `false`: P4.1 chỉ mở retrieval trong tutor, không đổi grounding của
+    lesson generation.
+  - Exact vector scan có trần; >~700 chunk cần pgvector (số đo ở trên).
+- PHASE GATE: **GATE-PARTIAL** — code + test chạy thật đầy đủ cho baseline offline, nhưng acceptance
+  đầy đủ (≥30 query, groundedness) chưa đạt. Không tuyên bố chất lượng semantic.
+- NEXT: P4.2 (web/arXiv có SSRF guard) **hoặc** P5.0 (Learner Profile/FSRS) nếu ưu tiên mastery;
+  trước P4.2 cần quyết định corpus/eval scale và (nếu dùng model thật) key + ngân sách.
+
+## 2026-10-31 — P4.0 PDF text ingestion + source provenance
+
+- Base commit: `9f5b5bf` (branch `main`, working tree)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Scope & decisions:
+  - **Storage thật: MinIO (S3-compatible)** theo yêu cầu, không fallback ghi đĩa. Object key do server
+    sinh ngẫu nhiên `sources/<source_id>/<uuid4>`; bucket private; upload/đọc chỉ qua service sau auth.
+    `SOURCE_STORAGE_BACKEND` rỗng ⇒ upload trả `503 STORAGE_NOT_CONFIGURED`. Backend `memory` chỉ
+    dành cho pytest/dev và bị từ chối khi `ENV=production`.
+  - **Không tin client**: kiểm tra magic `%PDF-`, trần byte (stream 1 MB/chunk, vượt ⇒ 413 trước khi
+    parse), trần số trang, PDF mã hoá/corrupt/không trang ⇒ mã lỗi ổn định. MIME ghi vào storage là
+    `application/pdf` sau khi xác minh, không lấy Content-Type client.
+  - **Chỉ trích text, không OCR.** PDF scan ⇒ `status=no_text` + `errorCode=NO_EXTRACTABLE_TEXT`
+    (không bịa nội dung, không báo `ready`).
+  - **Chunking theo trang, không overlap**, giữ `page_number`, `char_start/char_end` trong text của
+    TRANG (không phải byte PDF), `section_anchor` (heading gần nhất) và `text_hash`. Chunk quá ngắn
+    được gộp vào chunk trước **cùng trang**; block quá dài cắt theo dòng/câu.
+  - **Idempotent** theo `UNIQUE(source_id, content_hash, pipeline_version)`; ingest lại thay chunk
+    theo `document_id` trong một transaction. Upload trùng bytes trả document cũ, không chạy lại job.
+  - **Worker P1.2-style**: claim nguyên tử + lease/heartbeat + bounded attempts; Celery task
+    `app.worker.ingest.run_ingest_task`; reconciler `reconcile_ingest` trên beat (outbox + lease hết hạn).
+  - **Trung thực trạng thái**: có chunk chỉ đổi citation `unavailable → unverified` và làm
+    `evidence` criterion của evaluator có dữ liệu; **không** tạo `locator_verified`/`evidence_supported`,
+    không làm bài học `source_grounded`, `groundingAvailable` vẫn `false` cho tới P4.1.
+  - **Ownership**: upload/xoá chỉ trên nguồn **private của chính user** (`get_owned_source`); nguồn
+    public dùng chung và nguồn người khác ⇒ 404. Xoá nguồn dọn document/chunk/course link/lesson
+    citation + object storage (best-effort).
+  - **Log không chứa nội dung**: chỉ `document_id`, `source_id`, bytes, pages, chunks, error code.
+- IMPLEMENTED:
+  - `backend/app/models/models.py` + `models/__init__.py`: `SourceDocumentStatus` (queued/extracting/
+    ready/no_text/failed), `SourceDocument`, `SourceChunk` (unique/index/FK cascade).
+  - `backend/alembic/versions/0011_p40_source_ingest.py`: 2 bảng + enum + index, expand-only,
+    downgrade đối xứng (đã chạy thật trên PostgreSQL throwaway).
+  - `backend/app/services/storage.py`: interface `put/get/delete/delete_prefix`, `S3Storage` (minio SDK),
+    `InMemoryStorage` cho test, `sanitize_filename`, `build_object_key`.
+  - `backend/app/services/ingest.py`: `check_limits`, `extract_pages`, `chunk_pages`,
+    `register_document`, `claim_document`/`renew_lease`, `finish_ready`/`finish_no_text`/
+    `fail_document`, `get_owned_document`, `source_has_content`, `delete_source_documents`,
+    `wrap_untrusted` + delimiter `<<<NGUON_BAT_DAU>>>`.
+  - `backend/app/worker/ingest.py`: task + `dispatch_document` (broker hoặc inline blocking) +
+    `recover_stuck_documents`; `celery_app.include` + beat schedule.
+  - `backend/app/api/v1/sources.py`: `GET /v1/sources/ingest-config`,
+    `POST /v1/sources/{id}/document` (202, multipart, CSRF, rate limit),
+    `GET /v1/sources/{id}/documents`, `GET /v1/sources/{id}/documents/{docId}`,
+    `DELETE /v1/sources/{id}/documents/{docId}`, `DELETE /v1/sources/{id}`;
+    `list_course_sources` trả `contentIngested` thật.
+  - `backend/app/schemas/schemas.py`: `SourceDocumentOut`, `SourceDocumentListOut`, `SourceIngestConfigOut`.
+  - `backend/app/services/source_service.py`: `get_owned_source` (private + owner).
+  - `backend/app/core/config.py`: `SOURCE_*` (ingest limits, chunking, pipeline version, lease, storage)
+    + `source_storage_configured` (từ chối `memory` ở production).
+  - `docker-compose.yml`: service `minio` (+ healthcheck wget, volume `miniodata`), tham số `SOURCE_*`
+    cho backend/worker/beat, endpoint nội bộ `minio:9000`.
+  - `backend/requirements.txt`: `pypdf`, `python-multipart`, `minio`.
+  - Frontend: `src/app/sources/page.tsx` (tạo nguồn, upload PDF, poll trạng thái, xoá document/nguồn,
+    lỗi theo mã), `src/lib/api.ts` (types + `uploadSourceDocument` multipart + config), link từ trang chủ.
+  - `backend/e2e_acceptance.py`: +5 check P4.0 (config không lộ secret, upload→ready, upload trùng,
+    provenance/preview, MIME sai bị từ chối, scan→no_text, `contentIngested` trung thực).
+- TESTED (offline, SQLite):
+  - `python -m pytest -q` → **385 passed, 20 skipped** (34.5s). Mới: `test_p40_ingest.py` (28),
+    `test_p40_chunker.py` (2), `test_p40_honesty.py` (2), `test_p40_migration_contract.py` (9),
+    `test_p40_postgres_concurrency.py` (3, skip khi không có URL).
+  - `test_p40_ingest.py` phủ: happy path provenance, offset khớp đúng substring trang, không overlap,
+    contentHash ghi nhận + vẫn `unverified`, idempotent upload/re-ingest, nhiều document khác nội dung,
+    `no_text`, MIME sai/rỗng/corrupt/oversize/too-many-pages, CSRF, source không tồn tại,
+    owner A/B isolation (upload/read/delete), document thuộc nguồn khác, xoá document/source + storage,
+    nguồn public không upload được, prompt-injection ở lại khối untrusted, preview ≤200 ký tự,
+    `contentIngested` thật, config không lộ secret/endpoint/bucket, storage chưa cấu hình ⇒ 503,
+    lỗi storage tạm thời ⇒ `queued` + retry chạy lại được, upload lại sau `failed` còn lượt ⇒ retry,
+    upload lại khi đã cạn lượt ⇒ vẫn `failed` (không tự "chữa" trạng thái).
+  - `npm run build` → OK (10 routes, thêm `/sources`); `npx tsc --noEmit` → 0 lỗi.
+- TESTED (PostgreSQL throwaway `p40_race_check`, đã drop):
+  - `POSTGRES_TEST_URL=…/p40_race_check python -m pytest tests/test_p40_postgres_concurrency.py -q`
+    → **3 passed**: 8 upload đồng thời cùng bytes ⇒ 1 document; 6 worker claim đồng thời ⇒ 1 thắng,
+    `attempts_count=1`, status `extracting`; cross-user lookup ⇒ `SOURCE_DOCUMENT_NOT_FOUND`.
+- TESTED (migration PostgreSQL throwaway `p40_migration_check`, đã drop):
+  - `alembic upgrade 0010_p31_tutor_tools` → seed user + source → `upgrade head` → exit 0;
+    `alembic_version=0011_p40_source_ingest`, `source_documents` 21 cột, user/source cũ còn nguyên,
+    metadata source cũ đọc đúng.
+  - `alembic downgrade 0010_p31_tutor_tools` → exit 0; 2 bảng P4.0 + enum biến mất, `sources`/`users`
+    vẫn còn; `upgrade head` lại thành công.
+- TESTED (Docker full stack + MinIO thật + Celery worker):
+  - MinIO container `healthy` (healthcheck `wget .../minio/health/live`); backend roundtrip
+    `put/get/delete` qua `S3Storage` OK; bucket `sopiskill-sources` tự tạo.
+  - `E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py` → **59/59 PASS** (mock provider,
+    worker Celery thật): upload text PDF → `ready` (2 trang, 2 chunk), upload trùng không nhân bản,
+    document detail có provenance/preview, MIME sai 422, scan → `no_text`, `contentIngested=true`
+    nhưng citation vẫn `unverified`/`unavailable` và `groundingAvailable=false`.
+  - Worker log: `ingest ready document_id=… pages=2 chunks=2`, `ingest no_text`, 0 Traceback.
+- NOT TESTED:
+  - Chất lượng/độ phủ trích text trên PDF thật phức tạp (bảng, cột, công thức, font CJK/ToUnicode
+    lỗi) — chỉ test PDF fixture do script sinh.
+  - Malware scan/quarantine thật (không triển khai); zip-bomb/PDF-bomb ngoài trần byte/page.
+  - S3/MinIO production: HTTPS/TLS, bucket policy, lifecycle, credential rotation; retention/deletion
+    theo chính sách pháp lý.
+  - Real provider + nguồn đã ingest: chưa nối RAG (P4.1) nên chưa có câu trả lời grounded.
+  - UI `/sources` mới build + typecheck, **chưa** có E2E browser (Playwright) — kiểm qua HTTP API.
+  - **Lưu ý môi trường:** `docker pull minio/minio:latest` bị registry từ chối trong lần chạy này; đã
+    kiểm chứng bằng image MinIO có sẵn trên máy và tag lại `minio/minio:latest`. Trên máy khác cần
+    `docker compose pull minio` thành công trước khi `up`.
+- BLOCKED: không cho P4.0. (Registry MinIO ở môi trường hiện tại từ chối pull — đã dùng image sẵn có;
+  không ảnh hưởng code, nhưng máy mới cần pull được.) P4.1 (embedding/pgvector/retrieval/certified
+  citations) chưa bắt đầu.
+- Database: **có migration** `0011_p40_source_ingest` (expand-only, upgrade/downgrade đã chạy thật).
+- Security: upload chỉ nguồn private của chính user; object key ngẫu nhiên, không lộ trong API; magic
+  byte + size + page limits; không shell/network trong parser; log không chứa text; CSRF + rate limit;
+  scan không bị đánh dấu `ready`; citation không tự "verified" chỉ vì có chunk.
+- Regressions: 0. pytest 380 → **385 passed** (thêm 44 test P4.0); E2E 47 → **59/59**; build/tsc OK;
+  generation/quiz/XP/progress/tutor flow không đổi (mock regression xanh).
+- Known limitations:
+  - `locator_verified`/`evidence_supported` **chưa từng** được tạo ra — cần P4.1.
+  - `groundingAvailable` vẫn `false` dù đã ingest; `excerpt_provider` cố ý chưa nối.
+  - Parser pypdf bỏ qua text trong vector/ảnh; PDF scan trả `no_text` (OCR là P4.3).
+  - Chưa có UI mở PDF tới đúng trang (citation UI thật thuộc P4.1).
+- PHASE GATE: **PASS cho P4.0 (PDF text ingestion + provenance)** — mọi mục con có bằng chứng chạy
+  thật; các giới hạn ở trên được ghi rõ, không suy diễn thành năng lực đã có.
+- NEXT: **P4.1** — embedding model/dimension gate, pgvector, lexical + vector retrieval có filter
+  owner, RRF, citation validator, `read_source` mở, eval Recall@k/citation precision.
+
 ## 2026-10-31 — P3.1 (lát B) Tutor tool allowlist + audit
 
 - Base commit: `b92c414` (branch `main`, working tree)

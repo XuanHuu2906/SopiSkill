@@ -105,6 +105,20 @@ class TutorMessageStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
+class SourceDocumentStatus(str, enum.Enum):
+    """Trạng thái ingest của một tài liệu nguồn (P4.0).
+
+    `no_text` là trạng thái THẬT của PDF scan/không có text layer — KHÔNG phải
+    lỗi và KHÔNG được coi là "đã OCR". Chỉ `ready` mới có chunks dùng được.
+    """
+
+    queued = "queued"
+    extracting = "extracting"
+    ready = "ready"
+    no_text = "no_text"
+    failed = "failed"
+
+
 class SourceResearchStatus(str, enum.Enum):
     """Trạng thái của một lần nghiên cứu nguồn (P2.SR).
 
@@ -331,6 +345,155 @@ class Source(Base):
     )
 
 
+class SourceDocument(Base):
+    """Một tài liệu đã upload cho nguồn (P4.0) — trạng thái ingest + provenance.
+
+    Bảng này KHÔNG chứa text. Text nằm ở `source_chunks`; bản gốc nằm ở storage
+    private (object key lưu ở `storage_key`, không lộ ra API).
+
+    Idempotency: `UNIQUE(source_id, content_hash, pipeline_version)` ⇒ upload/retry
+    cùng bytes với cùng pipeline không tạo document thứ hai. Upload nội dung mới
+    (hash khác) tạo document mới; document cũ giữ nguyên để citation cũ không bị
+    trỏ sai.
+    """
+
+    __tablename__ = "source_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id", "content_hash", "pipeline_version", name="uq_source_document_version"
+        ),
+        Index("ix_source_documents_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), index=True
+    )
+    content_hash: Mapped[str] = mapped_column(Text)
+    mime: Mapped[str] = mapped_column(Text, default="application/pdf")
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pipeline_version: Mapped[str] = mapped_column(Text)
+    status: Mapped[SourceDocumentStatus] = mapped_column(
+        Enum(SourceDocumentStatus, name="source_document_status"),
+        default=SourceDocumentStatus.queued,
+    )
+    # Tên file gốc đã làm sạch (chỉ basename, không path) — chỉ để hiển thị.
+    original_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Object key NGẪU NHIÊN trong private storage; không phải path do client gửi.
+    storage_key: Mapped[str] = mapped_column(Text)
+    # P1.2-style lease để retry bounded và không có hai worker cùng ghi.
+    attempts_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    dispatch_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    # Mã lỗi ổn định + message ngắn do server dựng; KHÔNG chứa text tài liệu.
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    ingested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SourceChunk(Base):
+    """Đoạn text có provenance từ một `source_document` (P4.0).
+
+    `char_start`/`char_end` là offset trong text của TRANG tương ứng (không phải
+    offset trong file PDF nhị phân). `text_hash` cho phép kiểm tra lại nội dung
+    citation ở P4.1 mà không cần so cả đoạn dài.
+
+    Nội dung ở đây là **untrusted data**: chỉ được đưa vào prompt trong delimiter
+    và không bao giờ được thi hành như chỉ thị.
+    """
+
+    __tablename__ = "source_chunks"
+    __table_args__ = (
+        UniqueConstraint("document_id", "chunk_index", name="uq_source_chunk_index"),
+        Index("ix_source_chunks_source_page", "source_id", "page_number"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("source_documents.id", ondelete="CASCADE"), index=True
+    )
+    # Denormalized để P4.1 filter owner/source ngay tại query, không join thêm.
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), index=True
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    page_number: Mapped[int] = mapped_column(Integer)
+    char_start: Mapped[int] = mapped_column(Integer)
+    char_end: Mapped[int] = mapped_column(Integer)
+    section_anchor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    text_hash: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SourceChunkEmbedding(Base):
+    """Vector của một `source_chunk` theo MỘT spec embedding (P4.1).
+
+    Tách bảng riêng thay vì thêm cột vào `source_chunks` vì:
+      - Spec gồm `provider+model+dimension+version`; đổi model/dimension không
+        được ghi đè vector cũ (cần rollback/reindex có kiểm soát).
+      - UNIQUE(chunk_id, provider, model, dimension, version) ⇒ chỉ một vector
+        cho mỗi chunk/spec; re-embed cùng spec là idempotent (upsert).
+      - Vector lưu dạng JSON array (portable PostgreSQL + SQLite). Đây KHÔNG
+        phải pgvector: exact cosine có trần, xem `docs/specs/20-P41-HYBRID-RAG.md`.
+
+    `text_hash` snapshot để phát hiện chunk đã đổi nội dung mà vector chưa được
+    embed lại — retrieval bỏ qua vector stale thay vì trả kết quả sai.
+    """
+
+    __tablename__ = "source_chunk_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "chunk_id",
+            "provider",
+            "model",
+            "dimension",
+            "version",
+            name="uq_chunk_embedding_spec",
+        ),
+        Index("ix_chunk_embeddings_spec", "provider", "model", "dimension", "version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    chunk_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("source_chunks.id", ondelete="CASCADE"), index=True
+    )
+    # Denormalized để filter ownership ngay tại query (không phải join thêm).
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(Text)
+    dimension: Mapped[int] = mapped_column(Integer)
+    version: Mapped[str] = mapped_column(Text)
+    # Snapshot `source_chunks.text_hash` tại thời điểm embed.
+    text_hash: Mapped[str] = mapped_column(Text)
+    vector: Mapped[list] = mapped_column(JSONVariant)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class CourseSource(Base):
     """Liên kết n–n Course ↔ Source.
 
@@ -542,6 +705,10 @@ class TutorMessage(Base):
     client_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     finish_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # P4.1 — citation ĐÃ verify server-side cho câu trả lời này (rỗng nếu không
+    # có RAG / không đủ căn cứ). Chỉ chứa id do retrieval trả về và đã đối chiếu
+    # DB; không bao giờ chứa citation do model tự bịa.
+    citations: Mapped[list | None] = mapped_column(JSONVariant, nullable=True)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # P3.1 — cờ stop do client yêu cầu qua endpoint riêng. Stream đang chạy thấy

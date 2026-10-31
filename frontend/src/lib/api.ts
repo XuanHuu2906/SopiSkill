@@ -213,6 +213,23 @@ export async function logoutRequest(): Promise<void> {
 
 // ---------- AI Tutor (P3.0) ----------
 
+export interface TutorCitation {
+  chunkId: string;
+  sourceId: string;
+  documentId?: string | null;
+  pageNumber?: number | null;
+  charStart?: number | null;
+  charEnd?: number | null;
+  sectionAnchor?: string | null;
+  textHash?: string | null;
+  sourceTitle?: string | null;
+  sourceVersion?: string | null;
+  evidenceText?: string | null;
+  validationStatus: string;
+  /** P4.1 LUÔN false: locator_verified chỉ xác minh vị trí, không xác minh claim. */
+  evidenceSupported: boolean;
+}
+
 export interface TutorMessage {
   id: string;
   role: "user" | "assistant";
@@ -221,6 +238,7 @@ export interface TutorMessage {
   contextRef: Record<string, unknown> | null;
   errorCode: string | null;
   finishReason: string | null;
+  citations: TutorCitation[];
   createdAt: string | null;
 }
 
@@ -266,7 +284,14 @@ export function fetchTutorThread(
 }
 
 export interface TutorStreamEvent {
-  event: "delta" | "done" | "error" | "heartbeat" | "cancelled" | "tool";
+  event:
+    | "delta"
+    | "done"
+    | "error"
+    | "heartbeat"
+    | "cancelled"
+    | "tool"
+    | "citations";
   data: {
     streamId?: string;
     messageId?: string;
@@ -283,6 +308,17 @@ export interface TutorStreamEvent {
     status?: "ok" | "failed";
     summary?: string;
     durationMs?: number;
+    // Frame `citations` (P4.1): chỉ chứa id đã verify server-side.
+    citations?: TutorCitation[];
+    unverified?: Array<{
+      chunkId: string;
+      sourceId: string;
+      sourceTitle?: string | null;
+      pageNumber?: number | null;
+      sectionAnchor?: string | null;
+      validationStatus: string;
+    }>;
+    insufficientEvidence?: boolean;
     usage?: {
       promptTokens: number | null;
       completionTokens: number | null;
@@ -454,4 +490,178 @@ export async function streamTutorMessage(
       });
     }
   }
+}
+
+// ---------- Source Ingestion (P4.0) ----------
+
+export interface SourceDocument {
+  id: string;
+  sourceId: string;
+  status: "queued" | "extracting" | "ready" | "no_text" | "failed";
+  mime: string;
+  byteSize: number;
+  pageCount: number | null;
+  pipelineVersion: string;
+  originalFilename: string | null;
+  chunkCount: number;
+  preview: string | null;
+  error: { code?: string; message?: string } | null;
+  attempts: number;
+  ingestedAt: string | null;
+  createdAt: string | null;
+}
+
+export interface SourceDocumentList {
+  sourceId: string;
+  items: SourceDocument[];
+  total: number;
+  contentIngested: boolean;
+  notice: string | null;
+}
+
+export interface SourceIngestConfig {
+  ingestEnabled: boolean;
+  storageConfigured: boolean;
+  maxPdfBytes: number;
+  maxPdfPages: number;
+  pipelineVersion: string;
+  /** P4.1 — nếu false, tìm kiếm tài liệu KHÔNG chạy (không được giả vờ có RAG). */
+  embeddingEnabled: boolean;
+  embeddingConfigured: boolean;
+  embeddingProvider: string;
+  embeddingModel: string;
+  embeddingDimension: number;
+  ragEnabled: boolean;
+}
+
+export interface RagChunk {
+  chunkId: string;
+  sourceId: string;
+  documentId: string;
+  pageNumber: number;
+  charStart: number;
+  charEnd: number;
+  sectionAnchor: string | null;
+  textHash: string;
+  sourceTitle: string;
+  sourceVersion: string | null;
+  snippet: string;
+  lexicalRank: number | null;
+  vectorRank: number | null;
+  similarity: number | null;
+  rrfScore: number;
+}
+
+export interface RagSearchResult {
+  query: string;
+  embeddingSpec: string;
+  items: RagChunk[];
+  total: number;
+  insufficientEvidence: boolean;
+  notice: string | null;
+}
+
+export function searchCourseSources(
+  courseId: string,
+  query: string,
+  sourceIds: string[] = []
+): Promise<RagSearchResult> {
+  return api<RagSearchResult>(`/v1/courses/${courseId}/sources/search`, {
+    method: "POST",
+    body: { query, sourceIds },
+  });
+}
+
+export interface SourceList {
+  items: SourceOut[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
+const DOCUMENT_STATUS_LABEL: Record<string, string> = {
+  queued: "Đang chờ xử lý",
+  extracting: "Đang trích xuất",
+  ready: "Sẵn sàng",
+  no_text: "Không có lớp text",
+  failed: "Thất bại",
+};
+
+export function documentStatusLabel(status: string): string {
+  return DOCUMENT_STATUS_LABEL[status] ?? status;
+}
+
+export function fetchSources(limit = 50, offset = 0): Promise<SourceList> {
+  return api<SourceList>(`/v1/sources?limit=${limit}&offset=${offset}`);
+}
+
+export function createPrivateSource(body: {
+  title: string;
+  author?: string;
+  publisher?: string;
+  language?: string;
+  version?: string;
+}): Promise<SourceOut> {
+  return api<SourceOut>("/v1/sources", {
+    method: "POST",
+    body: { sourceType: "user_document", visibility: "private", ...body },
+  });
+}
+
+export function deleteSource(sourceId: string): Promise<void> {
+  return api<void>(`/v1/sources/${sourceId}`, { method: "DELETE" });
+}
+
+export function fetchSourceDocuments(sourceId: string): Promise<SourceDocumentList> {
+  return api<SourceDocumentList>(`/v1/sources/${sourceId}/documents`);
+}
+
+export function fetchSourceIngestConfig(): Promise<SourceIngestConfig> {
+  return api<SourceIngestConfig>("/v1/sources/ingest-config");
+}
+
+export function deleteSourceDocument(sourceId: string, documentId: string): Promise<void> {
+  return api<void>(`/v1/sources/${sourceId}/documents/${documentId}`, { method: "DELETE" });
+}
+
+function getCsrfTokenForUpload(): string {
+  if (typeof document === "undefined") return "";
+  const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+/**
+ * Upload PDF qua multipart. Không dùng `api()` vì body là FormData: browser tự
+ * đặt Content-Type kèm boundary, ta chỉ thêm CSRF header.
+ */
+export async function uploadSourceDocument(
+  sourceId: string,
+  file: File
+): Promise<SourceDocument> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_URL}/v1/sources/${sourceId}/document`, {
+    method: "POST",
+    headers: { "X-CSRF-Token": getCsrfTokenForUpload() },
+    body: form,
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    let code = "HTTP_ERROR";
+    let message = res.statusText;
+    try {
+      const data = await res.json();
+      if (typeof data.detail === "string") message = data.detail;
+      else if (data.detail?.code) {
+        code = data.detail.code;
+        message = data.detail.message ?? message;
+      }
+    } catch {
+      // ignore non-JSON error body
+    }
+    throw new ApiError(res.status, code, message);
+  }
+  return (await res.json()) as SourceDocument;
 }

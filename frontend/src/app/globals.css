@@ -369,6 +369,31 @@ textarea {
   font-size: 0.85rem;
 }
 
+.tutor-citations {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--border, #d4d4d8);
+  background: rgba(0, 0, 0, 0.02);
+  font-size: 0.85rem;
+}
+
+.tutor-citations ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.tutor-citations a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* Nguồn đã truy xuất nhưng CHƯA được dẫn — cố tình trông khác verified. */
+.tutor-citations-unverified {
+  border-left-style: dashed;
+  border-left-color: #b45309;
+  background: rgba(180, 83, 9, 0.06);
+}
+
 .tutor-quota {
   margin-left: auto;
   font-size: 0.85rem;

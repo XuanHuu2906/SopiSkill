@@ -13,6 +13,10 @@ argon2-cffi>=23.1
 pyjwt>=2.8
 alembic>=1.13
 psycopg[binary]>=3.1
+# P4.0 — PDF text extraction (không OCR) + multipart upload + S3/MinIO storage
+pypdf>=5.0
+python-multipart>=0.0.9
+minio>=7.2
 
 # dev/test
 pytest>=8.0

@@ -196,6 +196,32 @@ async def get_accessible_source(
     return source
 
 
+async def get_owned_source(
+    db: AsyncSession, source_id: str, user_id: uuid.UUID
+) -> Source:
+    """Nguồn PRIVATE thuộc đúng user hiện tại.
+
+    Dùng cho thao tác ghi (upload/xóa): nguồn public dùng chung **không** được
+    phép bị một người sửa nội dung, và nguồn private người khác trả 404 như
+    `get_accessible_source` (không xác nhận tồn tại).
+    """
+    sid = parse_source_id(source_id)
+    if sid is None:
+        raise SourceAccessError()
+    source = (
+        await db.execute(
+            select(Source).where(
+                Source.id == sid,
+                Source.visibility == SourceVisibility.private,
+                Source.owner_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if source is None:
+        raise SourceAccessError()
+    return source
+
+
 async def list_accessible_sources(
     db: AsyncSession, user_id: uuid.UUID, limit: int = 20, offset: int = 0
 ) -> dict:

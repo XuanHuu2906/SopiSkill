@@ -4,7 +4,8 @@
 > plan gốc dành P3.0–P3.1 cho AI Tutor. Revision DB: `0005_p30_source_registry`.
 >
 > **Trạng thái:** P3.0b **IMPLEMENTED + TESTED** (Source Registry + Evidence Contract + minimal
-> source-first integration). RAG/ingest/embedding **CHƯA** triển khai.
+> source-first integration). **P4.0 ingest PDF text + provenance: IMPLEMENTED + TESTED** (xem §10).
+> Retrieval/embedding/citation đã kiểm chứng (P4.1) **CHƯA** triển khai.
 > **Nhãn bằng chứng:** FACT (đọc từ code/migration), INFERENCE (suy luận có ghi rõ), UNKNOWN
 > (chưa xác minh), PROPOSAL (thiết kế của dự án).
 > **Nguồn tham khảo bên ngoài:** `polyskill-analysis-report.md`, `polyskill-dynamic-analysis.md`
@@ -157,27 +158,43 @@ nhân bản citation. `dedupe_key` + `UNIQUE(course_id, source_id)` chống nhâ
 
 Mục tiêu P4: biến metadata-only thành **evidence thật** mà không đổi contract API P3.0.
 
-### 8.1 Model bổ sung (P4.0)
+### 8.1 Model bổ sung (P4.0) — **ĐÃ TRIỂN KHAI** (revision `0011_p40_source_ingest`)
 
 ```
-source_documents  (source_id, content_hash, mime, page_count, extraction_version, status)
+source_documents  (source_id, content_hash, mime, byte_size, page_count, pipeline_version,
+                   status, storage_key, original_filename, attempts_count, max_attempts,
+                   lease_expires_at, heartbeat_at, dispatched_at, dispatch_attempts,
+                   error_code, error, ingested_at)
 source_chunks     (source_id, document_id, chunk_index, page_number, char_start, char_end,
-                   section_anchor, text, text_hash, embedding vector(N), embedding_model)
+                   section_anchor, text, text_hash)
 ```
 
-- `source_chunks.text` là nguồn duy nhất được phép làm `evidence_text`.
-- `embedding_model` + `dimension` **phải** lưu để tránh trộn vector giữa model khác nhau.
-- pgvector **chỉ** thêm khi stack đã chạy PostgreSQL thật (đã xác nhận: có, PostgreSQL 16).
+- `source_chunks.text` là nguồn duy nhất được phép làm `evidence_text` (P4.1).
+- `embedding`/`embedding_model`/`dimension` **chưa** có: thuộc P4.1 sau benchmark model.
+- pgvector **chỉ** thêm khi chốt dimension (P4.1), không thêm trước.
+- `UNIQUE(source_id, content_hash, pipeline_version)` chống nhân bản document khi retry.
+
+### 8.1b Trạng thái P4.0 (FACT)
+
+| Hạng mục | Trạng thái |
+|---|---|
+| Upload streaming + trần byte/page + magic `%PDF-` | **Có** (`services/ingest.check_limits`) |
+| Private storage MinIO/S3, key ngẫu nhiên, không lộ path | **Có** (`services/storage.py`) |
+| Trích text theo trang; PDF scan ⇒ `no_text` (không OCR) | **Có** (`services/ingest.extract_pages`) |
+| Chunking page provenance, offset/hash, không overlap | **Có** (`services/ingest.chunk_pages`) |
+| Worker idempotent + claim/lease + outbox reconciler | **Có** (`worker/ingest.py`) |
+| Untrusted delimiter | **Có** (`ingest.wrap_untrusted`), chưa nối prompt (chưa retrieval) |
+| `locator_verified` / `evidence_supported` | **KHÔNG** tạo ra — cần đối chiếu locator (P4.1) |
 
 ### 8.2 Điểm nối đã chuẩn bị sẵn trong P3.0
 
-| Điểm nối | Hiện tại | P4 |
+| Điểm nối | Hiện tại (P4.0) | P4.1 |
 |---|---|---|
-| `source_context.build_source_context(excerpt_provider=…)` | `None` | Trả chunk text đã retrieve |
+| `source_context.build_source_context(excerpt_provider=…)` | vẫn `None` | Trả chunk text đã retrieve |
 | `source_context.lesson_grounding` | Cần excerpt thật | Không đổi |
-| `citation_service.validate_citation_locator(has_ingested_content=…)` | `False` | `True` + so locator với chunk store |
+| `citation_service.validate_citation_locator(has_ingested_content=…)` | `True` khi có document `ready` | So locator với chunk store ⇒ `locator_verified` |
 | `citation_service.replace_lesson_citations(evidence_by_source=…)` | `None` | Map `source_id → evidence text` |
-| `sources.content_hash` / `sources.version` | Lưu nhưng chưa dùng | Phát hiện nguồn đổi (`source_changed`) |
+| `sources.content_hash` | Cập nhật từ SHA-256 file thật khi ingest | Phát hiện nguồn đổi (`source_changed`) |
 | `SourceDiscoveryAdapter` | curated/mock | `ArxivAdapter`, `WebAdapter` có SSRF guard |
 
 ### 8.3 Ingestion (P4.0) — yêu cầu an toàn bắt buộc
@@ -228,4 +245,39 @@ chống DNS rebinding, giới hạn redirect/size/time, tôn trọng robots/lice
 - `relevance` chỉ keyword bề mặt.
 - Chưa có UI tạo/duyệt nguồn (chỉ hiển thị nguồn đã liên kết + citation); tạo nguồn hiện qua API.
 - Discovery chỉ `curated`/`mock`; không tìm kiếm thật.
-- Chưa có job ingest ⇒ `content_hash`/`version` được lưu nhưng chưa được kiểm chứng.
+- P4.0 đã có job ingest PDF text: `content_hash` được cập nhật từ file thật và chunk có provenance,
+  nhưng **chưa** có retrieval/citation verified (P4.1).
+
+## 10. P4.0 — PDF text ingestion (FACT, đã triển khai)
+
+### 10.1 API bổ sung
+
+```
+GET    /v1/sources/ingest-config                     SourceIngestConfigOut (giới hạn, không lộ secret)
+POST   /v1/sources/{sourceId}/document              202 SourceDocumentOut  (multipart, CSRF)
+GET    /v1/sources/{sourceId}/documents              SourceDocumentListOut
+GET    /v1/sources/{sourceId}/documents/{docId}      SourceDocumentOut
+DELETE /v1/sources/{sourceId}/documents/{docId}      204
+DELETE /v1/sources/{sourceId}                        204 (chỉ nguồn private của chính user)
+```
+
+Upload chỉ áp dụng cho **nguồn private thuộc user hiện tại** (`source_service.get_owned_source`);
+nguồn public dùng chung và nguồn private của người khác trả 404 (không xác nhận tồn tại).
+
+### 10.2 Trạng thái document
+
+`queued → extracting → ready | no_text | failed`.
+
+- `no_text` là trạng thái thật của PDF scan (không có text layer), **không** phải lỗi và **không**
+  được đọc là "đã OCR". Chỉ `ready` mới có chunk dùng được.
+- Lease + `max_attempts` chặn retry vô hạn; reconciler chạy qua Celery beat
+  (`app.worker.ingest.reconcile_ingest`).
+- Upload trùng bytes + cùng pipeline trả document cũ (không chạy lại ingest, không nhân bản chunk).
+
+### 10.3 Giới hạn/không làm ở P4.0
+
+- Không OCR (P4.3), không web/arXiv (P4.2), không embedding/retrieval (P4.1).
+- Không malware scanner thật: chỉ giới hạn parser/size/page + private storage. Không được mô tả
+  hệ thống là đã quét virus/malware.
+- Chưa có UI mở đúng page/chunk và chưa hiển thị citation đã kiểm chứng — cần P4.1.
+- `groundingAvailable` vẫn `false`: có chunk **không** làm bài học `source_grounded`.

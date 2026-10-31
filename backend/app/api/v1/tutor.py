@@ -57,7 +57,15 @@ from app.schemas.schemas import (
     TutorThreadOut,
     TutorUsageOut,
 )
-from app.services import course_service, sse, tutor_context, tutor_service, tutor_tools
+from app.services import (
+    course_service,
+    rag_service,
+    retrieval_service,
+    sse,
+    tutor_context,
+    tutor_service,
+    tutor_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +151,22 @@ async def send_tutor_message(
     ):
         return _terminal_error_response(prepared, prepared.assistant_message.status)
 
+    # P4.1 — retrieval chỉ chạy khi RAG được bật VÀ embedding hợp lệ. Không có
+    # retrieval thì system prompt giữ nguyên (không hướng dẫn model trích dẫn).
+    rag_result = None
+    if rag_service.rag_active():
+        rag_result = await rag_service.retrieve_for_question(
+            db,
+            course=course,
+            user=user,
+            question=rag_service.lesson_query(
+                prepared.lesson,
+                prepared.block_index,
+                prepared.blocks,
+                prepared.user_message.content or "",
+            ),
+        )
+
     source_titles = await tutor_service.linked_source_titles(db, course.id, user.id)
     system = tutor_context.build_tutor_system(
         lesson_title=prepared.lesson.title,
@@ -150,6 +174,7 @@ async def send_tutor_message(
         block_index=prepared.block_index,
         linked_source_titles=source_titles,
         max_context_chars=settings.tutor_context_max_chars,
+        rag_context_active=bool(rag_result is not None and rag_result.items),
     )
     history_rows = await tutor_service.history_for_prompt(
         db,
@@ -163,8 +188,21 @@ async def send_tutor_message(
     if not history or history[-1].get("role") != "user":
         history.append({"role": "user", "content": prepared.user_message.content})
 
+    if rag_result is not None:
+        system, _allowlist = rag_service.build_system_with_rag(
+            system, rag_result, max_chars=settings.rag_context_max_chars
+        )
+
     return StreamingResponse(
-        _stream_turn(prepared, system, history, provider),
+        _stream_turn(
+            prepared,
+            system,
+            history,
+            provider,
+            rag_result=rag_result,
+            course_id=course.id,
+            user_id=user.id,
+        ),
         media_type="text/event-stream; charset=utf-8",
         headers=_stream_headers(prepared),
     )
@@ -410,6 +448,9 @@ async def _plan_tools(
     prepared: tutor_service.PreparedTurn,
     provider,
     history: list[dict[str, str]],
+    *,
+    source_reader: tutor_tools.SourceReader | None = None,
+    question: str = "",
 ) -> tutor_tools.ToolLoopResult:
     """Chạy tối đa `TUTOR_TOOL_MAX_CALLS` vòng plan→validate→execute.
 
@@ -469,12 +510,14 @@ async def _plan_tools(
             )
             break
 
-        execution = tutor_tools.execute(
+        execution = await tutor_tools.execute_async(
             name,
             parsed,
             blocks=prepared.blocks,
             current_block_index=prepared.block_index,
             max_chars=settings.tutor_tool_max_result_chars,
+            source_reader=source_reader,
+            question=question,
         )
         result.executions.append(execution)
         history_msgs.append(
@@ -489,11 +532,47 @@ async def _plan_tools(
     return result
 
 
+def _make_source_reader(
+    course_id,
+    user_id,
+    *,
+    prepared: tutor_service.PreparedTurn,
+) -> tutor_tools.SourceReader | None:
+    """Callback `read_source` cho tool loop — scope chặt theo course + user.
+
+    Trả None khi RAG tắt: tool sẽ từ chối hữu ích thay vì đọc nguồn ngoài phạm vi.
+    Mỗi lần gọi mở session riêng để không giữ transaction của stream quá lâu.
+    """
+    if not rag_service.rag_active():
+        return None
+
+    async def reader(query: str) -> tuple[str, str | None, str]:
+        async with SessionLocal() as session:
+            result = await retrieval_service.retrieve(
+                session,
+                course_id=course_id,
+                user_id=user_id,
+                query=query or (prepared.user_message.content or ""),
+            )
+        settings = get_settings()
+        return rag_service.build_tool_read_source_section(
+            query=query,
+            result=result,
+            max_chars=settings.rag_context_max_chars,
+        )
+
+    return reader
+
+
 async def _stream_turn(
     prepared: tutor_service.PreparedTurn,
     system: str,
     history: list[dict[str, str]],
     provider,
+    *,
+    rag_result: retrieval_service.RetrievalResult | None = None,
+    course_id=None,
+    user_id=None,
 ) -> AsyncIterator[str]:
     settings = get_settings()
     stream_id = prepared.stream_id()
@@ -507,8 +586,23 @@ async def _stream_turn(
 
     # Planner cũng là một lời gọi provider → phải nằm trong collector để token của
     # nó được tính vào allowance, không bị "ẩn" khỏi trần token.
+    source_reader = (
+        _make_source_reader(course_id, user_id, prepared=prepared)
+        if course_id is not None and user_id is not None
+        else None
+    )
     with collect_usage(usage):
-        tool_result = await _plan_tools(prepared, provider, history)
+        # Không có RAG ⇒ giữ đúng chữ ký cũ (không truyền tham số nguồn thừa).
+        if source_reader is None:
+            tool_result = await _plan_tools(prepared, provider, history)
+        else:
+            tool_result = await _plan_tools(
+                prepared,
+                provider,
+                history,
+                source_reader=source_reader,
+                question=prepared.user_message.content or "",
+            )
     if tool_result.executions:
         for execution in tool_result.executions:
             yield sse.frame(
@@ -651,10 +745,36 @@ async def _stream_turn(
                 continue
 
             if kind == "done":
+                answer = "".join(collected)
+                verified, pointers, rejected = rag_service.verify_answer(
+                    answer, rag_result
+                )
+                if rejected:
+                    # Chỉ log SỐ id bị loại — không log id/nội dung model bịa.
+                    logger.info(
+                        "tutor citation dropped count=%s assistant=%s",
+                        len(rejected),
+                        prepared.assistant_message.id,
+                    )
+                if verified or pointers:
+                    yield sse.frame(
+                        "citations",
+                        {
+                            "streamId": stream_id,
+                            "messageId": message_id,
+                            "seq": seq,
+                            "citations": verified,
+                            "unverified": pointers,
+                            "insufficientEvidence": not verified,
+                        },
+                        event_id=sse.seq_id(stream_id, seq),
+                    )
+                    seq += 1
                 terminal = tutor_service.FinalState(
                     status=TutorMessageStatus.completed,
-                    content="".join(collected),
+                    content=answer,
                     finish_reason="stop",
+                    citations=verified,
                 )
                 break
 

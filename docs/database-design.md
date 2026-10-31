@@ -279,6 +279,42 @@ Index `message_id` để xem toàn bộ tool của một lượt; FK cascade đ�
 | created_at, updated_at | | |
 | UNIQUE(course_id, request_fingerprint) | | idempotency: retry không nhân bản run |
 
+### source_documents (P4.0 — revision `0011_p40_source_ingest`)
+| cột | kiểu | ghi chú |
+|---|---|---|
+| id | UUID PK | hiển thị `doc_*` |
+| source_id | UUID FK sources (ON DELETE CASCADE) | tài liệu thuộc một nguồn |
+| content_hash | text NOT NULL | sha256 của file gốc |
+| mime | text | luôn `application/pdf` sau khi xác minh magic |
+| byte_size / page_count | int | page_count do server đếm, không tin client |
+| pipeline_version | text | đổi giá trị ⇒ re-ingest thành document mới |
+| status | enum: queued, extracting, ready, no_text, failed | `no_text` = PDF scan, KHÔNG phải OCR |
+| original_filename | text nullable | basename đã làm sạch để hiển thị (không phải path) |
+| storage_key | text NOT NULL | object key **ngẫu nhiên** trong private storage |
+| attempts_count / max_attempts | int | retry bounded |
+| lease_expires_at / heartbeat_at / dispatched_at / dispatch_attempts | | outbox + lease (giống generation job) |
+| error_code / error | text / jsonb | message ngắn, KHÔNG chứa text tài liệu |
+| ingested_at | timestamptz | thời điểm trích xong |
+| created_at / updated_at | | |
+| UNIQUE(source_id, content_hash, pipeline_version) | | retry cùng bytes không nhân bản |
+
+> Bảng này **không** chứa text. Không có cột `embedding` (P4.1).
+
+### source_chunks (P4.0)
+| cột | kiểu | ghi chú |
+|---|---|---|
+| id | UUID PK | |
+| document_id | UUID FK source_documents (CASCADE) | |
+| source_id | UUID FK sources (CASCADE) | denormalized để filter owner/source ở query |
+| chunk_index | int | unique trong document |
+| page_number | int | 1-based, theo trang PDF |
+| char_start / char_end | int | offset trong text **của trang**, không phải byte PDF |
+| section_anchor | text nullable | heading gần nhất (dòng ngắn không kết thúc bằng dấu câu) |
+| text | text | nội dung **untrusted**; chỉ dùng làm `evidence_text` khi có retrieval (P4.1) |
+| text_hash | text | sha256 của text đã chuẩn hoá whitespace |
+| created_at | | |
+| UNIQUE(document_id, chunk_index) | | không overlap, không trùng |
+
 ## 4. Index chính
 
 - `courses(user_id)`, `courses(user_id, client_course_id)` unique
@@ -289,8 +325,30 @@ Index `message_id` để xem toàn bộ tool của một lượt; FK cascade đ�
 - `course_sources(course_id)`, `course_sources(source_id)`, unique `(course_id, source_id)`
 - `lesson_citations(lesson_id)`, `lesson_citations(source_id)`
 - `source_research_runs(course_id, created_at)`, `source_research_runs(user_id)`, unique `(course_id, request_fingerprint)`
+- `source_documents(source_id)`, `source_documents(status, created_at)`, unique `(source_id, content_hash, pipeline_version)`
+- `source_chunks(document_id)`, `source_chunks(source_id)`, `source_chunks(source_id, page_number)`
+
+### source_chunk_embeddings (P4.1 — revision `0012_p41_rag`)
+
+- `chunk_id`, `source_id` (denormalized để filter quyền ngay tại SQL), `provider`, `model`,
+  `dimension`, `version`, `text_hash` (snapshot của chunk lúc embed), `vector` (JSON array).
+- UNIQUE `(chunk_id, provider, model, dimension, version)` ⇒ một vector/spec/chunk; đổi
+  model **không** ghi đè vector cũ, và không thể trộn hai không gian vector.
+- `text_hash` khác `source_chunks.text_hash` ⇒ vector stale, bị loại khỏi xếp hạng.
+- Index `(provider, model, dimension, version)` (chọn đúng spec), `(chunk_id)`, `(source_id)`.
+- Index `source_chunks(text_hash)` (phát hiện chunk đổi nội dung) và GIN
+  `to_tsvector('simple', text)` chỉ trên PostgreSQL cho lexical retrieval.
+
+`tutor_messages.citations` (JSONB, nullable) lưu citation **đã verify**; NULL = không có RAG
+hoặc không đủ căn cứ.
 
 ## 5. Mở rộng sau (RAG)
 
-- Bảng `sources` (arxiv/web/pdf), `source_chunks` với cột `embedding vector(1536)` + ivfflat index — chỉ thêm ở giai đoạn RAG.
-- Bảng `tutor_threads`, `tutor_messages` cho Tutor Engine.
+- P4.0 **đã có** `source_documents` + `source_chunks` (text/provenance, không embedding).
+- P4.1 **đã có** `source_chunk_embeddings` lưu vector dạng **JSON** (không pgvector):
+  exact cosine có trần `RAG_CANDIDATE_LIMIT`. Benchmark (`evals/rag_benchmark.py`) cho thấy
+  p95 84 ms ở 500 chunk và 368 ms ở 2000 chunk ⇒ **cần pgvector/ANN khi corpus vượt ~700 chunk**.
+  Khi chuyển: thêm cột `vector(N)` với dimension của model đã chốt, tạo HNSW **chỉ sau benchmark**,
+  backfill song song giữ nguyên bảng JSON để rollback. Không hardcode `1536`.
+- P4.2: nguồn web/arXiv (SSRF guard, licensing) dùng chung pipeline ingest.
+- P4.3: OCR cho PDF scan; khi đó `source_chunks` cần `origin`/bbox nhưng phải đánh dấu rõ khác text native.

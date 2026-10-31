@@ -205,6 +205,17 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
     linked_sources: list[tuple[CourseSource, Source]] = []
     if get_settings().source_context_enabled:
         linked_sources = await source_service.load_course_sources_for_generation(db, course)
+    # P4.0 — nguồn đã ingest text THẬT hay chưa. Chỉ dùng để ghi trạng thái citation
+    # trung thực (`unverified` thay vì `unavailable`), chưa có retrieval (P4.1).
+    from app.services import ingest as ingest_service
+
+    has_ingested_content = False
+    for _link, source in linked_sources:
+        if await ingest_service.source_has_content(db, source.id):
+            has_ingested_content = True
+            break
+    # P4.0 KHÔNG cấp excerpt_provider: chưa có retrieval nên chưa có đoạn nguồn
+    # thật gắn với nội dung bài. Grounding vẫn `general_ai_knowledge`.
     source_context = source_context_service.build_source_context(linked_sources)
 
     job.stage = "outline"
@@ -310,7 +321,7 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
                 course,
                 [source for _link, source in linked_sources],
                 evidence_by_source=None,
-                has_ingested_content=False,
+                has_ingested_content=has_ingested_content,
             )
             if linked_sources:
                 # Snapshot đánh giá nguồn tại thời điểm sinh bài (chỉ để hiển thị lại).

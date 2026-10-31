@@ -23,7 +23,7 @@ if _settings.redis_url:
         "ailp",
         broker=_settings.redis_url,
         backend=_settings.redis_url,
-        include=["app.worker.generation", "app.worker.reconcile"],
+        include=["app.worker.generation", "app.worker.reconcile", "app.worker.ingest"],
     )
     celery_app.conf.update(
         task_serializer="json",
@@ -40,7 +40,19 @@ if _settings.redis_url:
             "recover-stuck-generation-jobs": {
                 "task": "app.worker.reconcile.reconcile_jobs",
                 "schedule": float(_settings.generation_reconcile_interval_seconds),
-            }
+            },
+            # P4.0 — ingest là outbox riêng: document queued chưa gửi broker hoặc
+            # lease hết hạn cần được worker khác claim lại.
+            "recover-stuck-ingest-documents": {
+                "task": "app.worker.ingest.reconcile_ingest",
+                "schedule": float(_settings.generation_reconcile_interval_seconds),
+            },
+            # P4.1 — backfill embedding cho chunk thiếu/stale (ingest xong nhưng
+            # embedding lỗi tạm thời, hoặc vừa đổi model/version).
+            "backfill-chunk-embeddings": {
+                "task": "app.worker.ingest.reconcile_embeddings",
+                "schedule": float(_settings.generation_reconcile_interval_seconds),
+            },
         },
     )
 else:  # pragma: no cover

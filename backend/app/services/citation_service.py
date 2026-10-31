@@ -11,11 +11,16 @@ P3.0 chỉ có metadata nguồn (chưa ingest nội dung), vì vậy:
   - Không có so khớp ngữ nghĩa ⇒ KHÔNG BAO GIỜ tự đặt `evidence_supported`.
   - Model KHÔNG được cấp `sourceId`: citation chỉ do server tạo từ nguồn đã liên
     kết, nên không thể bịa source id từ output LLM.
+
+P4.0 thêm chunk store nhưng CHƯA có retrieval/locator: có nội dung đã ingest chỉ
+làm citation chuyển từ `unavailable` sang `unverified` (kèm lý do thật), tuyệt
+đối không nhảy lên `locator_verified`/`evidence_supported`.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 
 from fastapi import HTTPException, status
@@ -93,9 +98,16 @@ def validate_citation_locator(
         )
 
     if has_locator and has_ingested_content:
+        # P4.0 ĐÃ có chunk store, nhưng citation vẫn chưa được đối chiếu với chunk
+        # nào (list_lesson_citations tạo citation từ registry, không từ retrieval).
+        # Vì vậy CHỈ `unverified` — nâng lên `locator_verified` đòi hỏi kiểm tra thật
+        # rằng chunk/page/anchor tồn tại và thuộc nguồn (P4.1).
         return (
             CitationValidationStatus.unverified,
-            ["Đã có nội dung nguồn nhưng P3.0 chưa có chunk store để đối chiếu locator."],
+            [
+                "Nguồn đã có nội dung ingest, nhưng citation này chưa được đối chiếu "
+                "với chunk cụ thể ⇒ chưa phải locator_verified."
+            ],
         )
 
     reasons.append("Không có locator (chunk/page/anchor) ⇒ không thể xác minh vị trí.")
@@ -178,3 +190,104 @@ def to_citation_out(citation: LessonCitation, source: Source) -> CitationOut:
         sourceUrl=source.canonical_url,
         sourceVerificationStatus=source.verification_status.value,
     )
+
+
+# ---------------------------------------------------------------------------
+# P4.1 — citation verification cho câu trả lời tutor dựa trên retrieval
+# ---------------------------------------------------------------------------
+
+# Model chỉ được trích `[chk_<uuid>]`. Chấp nhận biến thể có/không ngoặc vuông,
+# và id trần chk_... để không phụ thuộc định dạng quá chặt.
+_CITATION_PATTERN = re.compile(
+    r"\[?(chk_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))\]?"
+)
+
+MAX_VERIFIED_CITATIONS = 8
+
+
+def extract_citation_ids(answer: str) -> list[uuid.UUID]:
+    """Id chunk model đã nêu trong câu trả lời, theo thứ tự xuất hiện, đã dedupe."""
+    seen: list[uuid.UUID] = []
+    for match in _CITATION_PATTERN.finditer(answer or ""):
+        try:
+            chunk_uuid = uuid.UUID(match.group(2))
+        except ValueError:
+            continue
+        if chunk_uuid not in seen:
+            seen.append(chunk_uuid)
+    return seen
+
+
+def verify_answer_citations(
+    answer: str,
+    *,
+    retrieved: list,
+    max_citations: int = MAX_VERIFIED_CITATIONS,
+) -> tuple[list[dict], list[uuid.UUID]]:
+    """Đối chiếu id model nêu với ĐÚNG danh sách retrieval của request này.
+
+    Trả `(citations, rejected_ids)`:
+
+      - `citations`: mỗi dict chứa chunkId/sourceId/page/offset/textHash + đoạn
+        trích THẬT lấy từ chunk đã retrieve; status `locator_verified` vì vị trí
+        đã đối chiếu được (KHÔNG hàm ý claim được chứng minh).
+      - `rejected_ids`: id model bịa hoặc ngoài allowlist — chỉ dùng để log/eval,
+        không bao giờ trả về client và không bao giờ làm hỏng câu trả lời.
+
+    Không truy vấn DB: danh sách `retrieved` đã bị scope theo owner/course ở
+    `retrieval_service`, nên id ngoài danh sách đó không thể là dữ liệu hợp lệ.
+    """
+    allowed = {item.chunk_id: item for item in retrieved}
+    citations: list[dict] = []
+    rejected: list[uuid.UUID] = []
+
+    for chunk_id in extract_citation_ids(answer):
+        item = allowed.get(chunk_id)
+        if item is None:
+            rejected.append(chunk_id)
+            continue
+        if len(citations) >= max(1, max_citations):
+            rejected.append(chunk_id)
+            continue
+        citations.append(
+            {
+                "chunkId": f"chk_{item.chunk_id}",
+                "sourceId": f"src_{item.source_id}",
+                "documentId": f"doc_{item.document_id}",
+                "pageNumber": item.page_number,
+                "charStart": item.char_start,
+                "charEnd": item.char_end,
+                "sectionAnchor": item.section_anchor,
+                "textHash": item.text_hash,
+                "sourceTitle": item.source_title,
+                "sourceVersion": item.source_version,
+                "evidenceText": item.text[:600],
+                "validationStatus": CitationValidationStatus.locator_verified.value,
+                # P4.1: đã xác minh VỊ TRÍ, chưa xác minh claim ⇒ luôn False ở đây.
+                "evidenceSupported": False,
+            }
+        )
+
+    return citations, rejected
+
+
+def unverified_source_pointers(retrieved: list, *, max_items: int = 5) -> list[dict]:
+    """Nguồn đã truy xuất nhưng model KHÔNG trích — hiển thị riêng, không verified.
+
+    Dùng khi câu trả lời không có citation hợp lệ: UI cần thấy "đã tìm thấy đoạn
+    này nhưng chưa được dẫn" thay vì im lặng hoặc tô hồng.
+    """
+    pointers: list[dict] = []
+    for item in retrieved[: max(0, max_items)]:
+        pointers.append(
+            {
+                "chunkId": f"chk_{item.chunk_id}",
+                "sourceId": f"src_{item.source_id}",
+                "sourceTitle": item.source_title,
+                "pageNumber": item.page_number,
+                "sectionAnchor": item.section_anchor,
+                "validationStatus": CitationValidationStatus.unverified.value,
+                "evidenceSupported": False,
+            }
+        )
+    return pointers

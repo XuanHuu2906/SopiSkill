@@ -1,6 +1,8 @@
 # 11 — PDF Source Ingestion, Hybrid RAG & Verified Citations
 
-**Trạng thái:** **PROPOSAL / P4.0–P4.1**; web/arXiv P4.2 tùy chọn; OCR P4.3 có điều kiện. Chưa có chứng cứ pipeline RAG của SopiSkill hoặc PolySkill thực sự chạy.
+**Trạng thái:** P4.0 **IMPLEMENTED + TESTED**; P4.1 **IMPLEMENTED + TESTED (offline baseline)** — chi tiết
+`docs/specs/20-P41-HYBRID-RAG.md`. P4.2 web/arXiv tùy chọn; P4.3 OCR có điều kiện. Không có chứng cứ
+nào về pipeline RAG/backend của PolySkill; toàn bộ ở đây là thiết kế của SopiSkill.
 
 ## 1. Requirements
 

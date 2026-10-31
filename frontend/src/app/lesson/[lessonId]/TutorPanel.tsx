@@ -10,6 +10,7 @@ import {
   stopTutorMessage,
   streamTutorMessage,
   TutorStreamError,
+  type TutorCitation,
   type TutorStreamEvent,
   type TutorThread,
 } from "@/lib/api";
@@ -22,12 +23,30 @@ interface ToolNote {
   code?: string;
 }
 
+interface UnverifiedPointer {
+  chunkId: string;
+  sourceId: string;
+  sourceTitle?: string | null;
+  pageNumber?: number | null;
+  sectionAnchor?: string | null;
+  validationStatus: string;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   status: "pending" | "streaming" | "completed" | "failed" | "cancelled";
   errorCode?: string | null;
+  citations?: TutorCitation[];
+  unverified?: UnverifiedPointer[];
+  insufficientEvidence?: boolean;
+}
+
+function citationLabel(citation: TutorCitation): string {
+  const title = citation.sourceTitle?.trim() || "Tài liệu";
+  const page = citation.pageNumber ? `tr.${citation.pageNumber}` : "";
+  return [title, page].filter(Boolean).join(" — ");
 }
 
 const STATUS_NOTE: Record<string, string> = {
@@ -114,6 +133,9 @@ export default function TutorPanel({
                     ? "cancelled"
                     : "pending",
             errorCode: m.errorCode,
+            citations: m.citations,
+            unverified: [],
+            insufficientEvidence: m.role === "assistant" && m.citations.length === 0,
           }))
         );
       } catch (err) {
@@ -140,6 +162,24 @@ export default function TutorPanel({
       setMessages((prev) =>
         prev.map((m) =>
           m.id === targetId ? { ...m, status: "completed" } : m
+        )
+      );
+      return;
+    }
+    if (event.event === "citations") {
+      const targetId = event.data.messageId ?? messageIdRef.current;
+      const citations = event.data.citations ?? [];
+      const unverified = event.data.unverified ?? [];
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === targetId
+            ? {
+                ...m,
+                citations,
+                unverified,
+                insufficientEvidence: event.data.insufficientEvidence ?? citations.length === 0,
+              }
+            : m
         )
       );
       return;
@@ -393,6 +433,48 @@ export default function TutorPanel({
             {message.status === "cancelled" && (
               <p className="muted">Đã dừng — nội dung một phần được giữ lại.</p>
             )}
+            {message.role === "assistant" && message.citations && message.citations.length > 0 && (
+              <div className="tutor-citations" aria-label="Trích dẫn đã xác minh vị trí">
+                <p className="muted">Nguồn đã xác minh vị trí (chưa chứng minh từng câu):</p>
+                <ul>
+                  {message.citations.map((citation) => (
+                    <li key={citation.chunkId}>
+                      <a href={`/sources#${citation.sourceId}`} rel="noreferrer">
+                        {citationLabel(citation)}
+                      </a>
+                      {citation.sectionAnchor ? ` · ${citation.sectionAnchor}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {message.role === "assistant" &&
+              message.insufficientEvidence &&
+              message.unverified &&
+              message.unverified.length > 0 && (
+                <div className="tutor-citations tutor-citations-unverified">
+                  <p className="muted">
+                    Câu trả lời chưa trích dẫn nguồn. Các đoạn liên quan đã tìm thấy
+                    nhưng CHƯA được dẫn — hãy tự đối chiếu trước khi tin:
+                  </p>
+                  <ul>
+                    {message.unverified.map((pointer) => (
+                      <li key={pointer.chunkId}>
+                        {pointer.sourceTitle ?? "Tài liệu"}
+                        {pointer.pageNumber ? ` — tr.${pointer.pageNumber}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            {message.role === "assistant" &&
+              message.insufficientEvidence &&
+              (!message.unverified || message.unverified.length === 0) &&
+              message.status === "completed" && (
+                <p className="muted">
+                  Chưa đủ thông tin từ tài liệu để trả lời có căn cứ.
+                </p>
+              )}
           </div>
         ))}
       </div>

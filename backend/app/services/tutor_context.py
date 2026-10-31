@@ -85,6 +85,7 @@ def build_tutor_system(
     block_index: int,
     linked_source_titles: list[str] | None = None,
     max_context_chars: int = 6000,
+    rag_context_active: bool = False,
 ) -> str:
     """Dựng system prompt từ lesson **public** blocks do server đọc.
 
@@ -118,11 +119,24 @@ def build_tutor_system(
     if lines:
         parts.append("Các đoạn giảng khác trong bài:\n" + "\n".join(lines))
 
+    if rag_context_active:
+        # P4.1: server đã truy xuất đoạn nguồn cho CHÍNH câu hỏi này và sẽ chèn
+        # khối ngữ cảnh sau system prompt. Không được nói "chưa có nguồn" (mâu
+        # thuẫn với dữ liệu thật), nhưng cũng không được hứa claim đã kiểm chứng.
+        parts.append(
+            "Hệ thống đã truy xuất các đoạn tài liệu liên quan cho câu hỏi này và cấp "
+            "id trích dẫn dạng [chk_...]. Chỉ dùng đúng id được cấp; không tạo id, "
+            "số trang hay URL khác. Trích dẫn xác minh VỊ TRÍ đoạn nguồn, không "
+            "chứng minh từng khẳng định đã đúng."
+        )
+        return "\n\n".join(parts)
+
     if linked_source_titles:
         listed = "; ".join(clip(t, 160) for t in linked_source_titles[:8])
         parts.append(
-            "Khóa học có nguồn tham khảo đã liên kết (CHƯA ingest nội dung): "
-            f"{listed}. Không được trích dẫn nội dung/URL/số trang từ các nguồn này."
+            "Khóa học có nguồn tham khảo đã liên kết nhưng CHƯA truy xuất nội dung cho "
+            f"câu hỏi này: {listed}. Không được trích dẫn nội dung/URL/số trang từ các "
+            "nguồn này."
         )
     else:
         parts.append("Không có nguồn tài liệu được liên kết cho khóa học này.")

@@ -274,3 +274,75 @@ POSTGRES_TEST_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p31b_r
 
 - `downgrade` mất **audit tool**. Thread/message/usage/allowance không bị đụng.
 - DB dev `ailp` đã backup (`backup_pre_p31b_20261031_142709.sql`) trước upgrade.
+
+## P4.0 — `0011_p40_source_ingest` (2026-10-31)
+
+Expand-only: 2 bảng mới (`source_documents`, `source_chunks`), enum `source_document_status`,
+index. Không sửa cột/bảng cũ. Ứng dụng tự chạy `alembic upgrade head` trong entrypoint container.
+
+**Trước khi upgrade (bắt buộc với DB thật):**
+
+```bash
+docker compose exec db pg_dump -U ailp ailp > backup_pre_p40_$(date +%Y%m%d_%H%M%S).sql
+grep -c "^COPY" backup_pre_p40_*.sql   # phải > 0
+```
+
+**Kiểm chứng đã chạy trên DB throwaway `p40_migration_check`:**
+
+```bash
+docker compose exec db psql -U ailp -d postgres -c "CREATE DATABASE p40_migration_check;"
+cd backend
+DATABASE_URL=postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p40_migration_check \
+  python -m alembic upgrade 0010_p31_tutor_tools
+# seed user + source (dữ liệu P3.0)
+DATABASE_URL=…/p40_migration_check python -m alembic upgrade head
+DATABASE_URL=…/p40_migration_check python -m alembic downgrade 0010_p31_tutor_tools
+docker compose exec db psql -U ailp -d postgres -c "DROP DATABASE p40_migration_check;"
+```
+
+Kết quả ghi nhận: upgrade → `0011_p40_source_ingest`, 21 cột `source_documents`, user/source cũ còn
+nguyên; downgrade → 2 bảng + enum biến mất, `sources`/`users` không đổi; upgrade lại thành công.
+
+**Downgrade làm mất** trạng thái ingest + text đã trích (không khôi phục từ schema). Object gốc trong
+MinIO vẫn còn nhưng không còn bản ghi tham chiếu — dọn thủ công nếu cần.
+
+## P4.1 — `0012_p41_rag` (2026-10-31)
+
+Expand-only: 1 bảng mới (`source_chunk_embeddings`), 1 cột nullable
+(`tutor_messages.citations`), 2 index btree, **1 GIN index biểu thức** chỉ trên PostgreSQL
+(`to_tsvector('simple', text)` cho lexical retrieval). Không sửa cột/bảng cũ, không cần
+extension `pgvector` (vector lưu JSON — xem `docs/specs/20-P41-HYBRID-RAG.md`).
+
+**Trước khi upgrade (bắt buộc với DB thật):**
+
+```bash
+docker compose exec db pg_dump -U ailp ailp > backup_pre_p41_$(date +%Y%m%d_%H%M%S).sql
+grep -c "^COPY" backup_pre_p41_*.sql   # phải > 0
+```
+
+**Kiểm chứng đã chạy trên DB throwaway `p41_migration_check`:**
+
+```bash
+docker compose exec db psql -U ailp -d postgres -c "CREATE DATABASE p41_migration_check;"
+cd backend
+DATABASE_URL=postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p41_migration_check \
+  python -m alembic upgrade 0011_p40_source_ingest
+# seed 1 user + 1 source (dữ liệu cũ)
+DATABASE_URL=…/p41_migration_check python -m alembic upgrade head
+DATABASE_URL=…/p41_migration_check python -m alembic downgrade 0011_p40_source_ingest
+DATABASE_URL=…/p41_migration_check python -m alembic upgrade head
+docker compose exec db psql -U ailp -d postgres -c "DROP DATABASE p41_migration_check;"
+```
+
+Kết quả ghi nhận: `0012_p41_rag (head)`; `source_chunk_embeddings` 11 cột + UNIQUE spec +
+2 FK CASCADE; `ix_source_chunks_fts_simple` là GIN `to_tsvector('simple', text)`;
+`tutor_messages.citations` = jsonb nullable. Downgrade xóa GIN index + bảng + cột, `users`/
+`sources` còn nguyên (1/1); upgrade lại thành công.
+
+**Downgrade làm mất** vector đã tính và citation đã lưu. Nội dung gốc (`sources`,
+`source_documents`, `source_chunks`, `tutor_messages.content`) **không** bị đụng; re-embed chạy
+lại được qua `app.worker.ingest.reconcile_embeddings` nhưng có chi phí nếu dùng provider thật.
+
+**Lưu ý vận hành:** thêm GIN index trên bảng lớn sẽ khóa ghi trong lúc build. Với DB có nhiều
+chunk, chạy ngoài giờ cao điểm hoặc đổi sang `CREATE INDEX CONCURRENTLY` thủ công trước khi
+`alembic upgrade head`.

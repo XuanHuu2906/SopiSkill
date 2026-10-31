@@ -129,6 +129,135 @@ class Settings(BaseSettings):
     # Trần ký tự kết quả tool đưa vào prompt.
     tutor_tool_max_result_chars: int = 3000
 
+    # P4.0 — PDF ingestion. Upload/ingest TẮT ngầm nếu kho lưu trữ chưa cấu hình:
+    # API trả 503 `STORAGE_NOT_CONFIGURED` thay vì ghi file vào chỗ không kiểm soát.
+    source_ingest_enabled: bool = True
+    # Trần byte của MỘT file PDF (streaming; vượt ⇒ 413, không đọc hết vào RAM).
+    source_max_pdf_bytes: int = 20 * 1024 * 1024
+    # Trần số trang đọc được. Vượt ⇒ `TOO_MANY_PAGES`.
+    source_max_pdf_pages: int = 300
+    # Trần thời gian trích text toàn bộ một tài liệu (giây).
+    source_extract_timeout_seconds: float = 120.0
+    # Kích thước chunk theo ký tự (không overlap giữa chunk ⇒ citation rõ ràng).
+    source_chunk_target_chars: int = 1000
+    source_chunk_min_chars: int = 200
+    # Phiên bản pipeline trích xuất/chunking. Đổi giá trị ⇒ document mới được
+    # ingest lại (không ghi đè chunk của pipeline cũ).
+    source_pipeline_version: str = "p4.0-v1"
+    # Số document ingest xử lý mỗi vòng reconciler.
+    source_ingest_reconcile_limit: int = 10
+    # Lease của một lượt ingest (giây) — hết hạn ⇒ reconciler cho worker khác claim.
+    source_ingest_lease_seconds: int = 300
+    source_ingest_max_attempts: int = 3
+
+    # Kho lưu trữ: `s3` (MinIO/S3-compatible) cho mọi môi trường thật;
+    # `memory` chỉ là backend test/dev (mất khi restart, KHÔNG dùng production).
+    # Rỗng = chưa cấu hình ⇒ upload bị từ chối 503, không ghi file cục bộ ngầm.
+    source_storage_backend: str = ""
+    source_storage_bucket: str = "sopiskill-sources"
+    source_storage_endpoint: str = ""
+    source_storage_access_key: str = ""
+    source_storage_secret_key: str = ""
+    source_storage_region: str = "us-east-1"
+    # secure=False cho MinIO local HTTP; bật True khi endpoint dùng HTTPS thật.
+    source_storage_secure: bool = False
+    # Tạo bucket nếu chưa có (dev/MinIO). Production nên tạo trước và tắt cờ này.
+    source_storage_auto_create_bucket: bool = True
+
+    # ---------- P4.1 Embedding + Hybrid RAG ----------
+    # Embedding mặc định là `hashing` (deterministic, KHÔNG network, KHÔNG tải
+    # model). Đây KHÔNG phải semantic embedding của model thật — chỉ là baseline
+    # lexical/subword để dev/test offline. Chất lượng phải được đo bằng eval.
+    embedding_enabled: bool = True
+    embedding_provider: str = "hashing"
+    embedding_model: str = "hashing-ngram-v1"
+    embedding_dimension: int = 256
+    embedding_version: str = "v1"
+    embedding_ngram_max: int = 2
+    embedding_char_ngram: int = 3
+    # `openai_compatible` — MẶC ĐỊNH TẮT vì cần key/chi phí. Thiếu cấu hình ⇒
+    # lỗi `EMBEDDING_NOT_CONFIGURED`, KHÔNG âm thầm quay về hashing.
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_timeout_seconds: float = 30.0
+    embedding_batch_size: int = 32
+    embedding_reconcile_limit: int = 200
+
+    # RAG (retrieval + citation trong tutor) — TẮT mặc định để không đổi hành vi
+    # P3.x. Bật khi đã ingest nguồn và muốn câu trả lời có căn cứ.
+    rag_enabled: bool = False
+    rag_top_k: int = 6
+    # Trần số chunk đưa vào bộ tính cosine/lexical (exact search có trần).
+    rag_candidate_limit: int = 2000
+    rag_lexical_limit: int = 40
+    rag_rrf_k: int = 60
+    # Ngưỡng điểm lexical tối thiểu (nhánh SQLite token-overlap VÀ PostgreSQL
+    # ts_rank_cd được chuẩn hoá về [0,1] trước khi so). Dưới ngưỡng ⇒ coi như
+    # "không khớp từ khoá" và chuyển sang nhánh vector-only (có ngưỡng riêng cao
+    # hơn). Hiệu chỉnh trên `evals/rag_dataset.py`: câu ngoài chủ đề ≤0.32, câu
+    # trong phạm vi ≥0.50. CẦN hiệu chỉnh lại khi đổi corpus/tokenizer.
+    rag_min_lexical_score: float = 0.40
+    # Ngưỡng cosine tối thiểu để một chunk vector-only được coi là liên quan,
+    # dùng khi lexical CÓ khớp (RRF sẽ tự cân).
+    rag_min_similarity: float = 0.10
+    # Ngưỡng CAO HƠN cho trường hợp lexical KHÔNG khớp từ nào (câu hỏi hoàn toàn
+    # paraphrase hoặc ngoài phạm vi). Hashing embedding cho câu ngoài chủ đề cosine
+    # ~0.17–0.38, nên ngưỡng thấp sẽ trả đoạn không liên quan. Giá trị này được
+    # hiệu chỉnh trên `evals/rag_dataset.py` (16 câu) — CẦN hiệu chỉnh lại khi đổi
+    # embedding model hoặc mở rộng corpus; xem docs/specs/20-P41-HYBRID-RAG.md.
+    rag_vector_only_min_similarity: float = 0.40
+    rag_context_max_chars: int = 6000
+    rag_max_citations: int = 5
+    rag_max_query_chars: int = 1000
+
+    @property
+    def source_storage_configured(self) -> bool:
+        if not self.source_ingest_enabled:
+            return False
+        backend = self.source_storage_backend.strip().lower()
+        if backend == "memory":
+            # Chỉ chấp nhận ngoài production: dữ liệu mất khi restart.
+            return self.env != "production"
+        if backend != "s3":
+            return False
+        return bool(
+            self.source_storage_bucket
+            and self.source_storage_endpoint
+            and self.source_storage_access_key
+            and self.source_storage_secret_key
+        )
+
+    @property
+    def embedding_spec(self) -> tuple[str, str, int, str]:
+        """Spec đang hoạt động. Vector khác spec KHÔNG được dùng để tính similarity."""
+        return (
+            (self.embedding_provider or "").strip().lower(),
+            (self.embedding_model or "").strip(),
+            int(self.embedding_dimension or 0),
+            (self.embedding_version or "").strip(),
+        )
+
+    @property
+    def embedding_configured(self) -> bool:
+        """Fail-fast cho adapter thật: thiếu key/base/model/dimension ⇒ False."""
+        if not self.embedding_enabled:
+            return False
+        provider = (self.embedding_provider or "").strip().lower()
+        if provider == "hashing":
+            return self.embedding_dimension > 0 and bool(self.embedding_model)
+        if provider in ("openai_compatible", "openai"):
+            return bool(
+                self.embedding_base_url
+                and self.embedding_api_key
+                and self.embedding_model
+                and self.embedding_dimension > 0
+            )
+        return False
+
+    @property
+    def rag_active(self) -> bool:
+        return bool(self.rag_enabled and self.embedding_configured)
+
     # Auth
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"

@@ -11,6 +11,9 @@ os.environ.setdefault("ALLOW_DEMO_HEADER", "false")
 # Chạy generation đồng bộ trong test: SQLite :memory: dùng chung một connection,
 # task nền fire-and-forget sẽ chồng transaction với session của request.
 os.environ.setdefault("GENERATION_INLINE_BLOCKING", "true")
+# P4.0 — ingest chạy đồng bộ + storage in-memory (không cần MinIO/network trong test).
+os.environ.setdefault("SOURCE_STORAGE_BACKEND", "memory")
+os.environ.setdefault("SOURCE_STORAGE_BUCKET", "test-sources")
 
 import pytest
 import pytest_asyncio

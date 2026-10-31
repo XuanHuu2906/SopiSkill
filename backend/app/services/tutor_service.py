@@ -92,6 +92,9 @@ def to_message_out(message: TutorMessage) -> dict:
         "contextRef": message.context_ref,
         "errorCode": message.error_code,
         "finishReason": message.finish_reason,
+        # Citation đã verify server-side (P4.1). Rỗng ⇒ không có căn cứ, không
+        # phải "citation đã bị ẩn".
+        "citations": message.citations or [],
         "createdAt": message.created_at.isoformat() if message.created_at else None,
     }
 
@@ -674,6 +677,9 @@ class FinalState:
     error_code: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # P4.1 — citation ĐÃ verify cho câu trả lời này (rỗng/None nếu RAG tắt hoặc
+    # không tìm thấy căn cứ). Không bao giờ chứa id do model tự bịa.
+    citations: list[dict] | None = None
 
 
 async def finalize(
@@ -696,6 +702,7 @@ async def finalize(
     message.error_code = state.error_code
     message.prompt_tokens = state.prompt_tokens
     message.completion_tokens = state.completion_tokens
+    message.citations = state.citations or None
     message.updated_at = datetime.now(UTC)
     await db.commit()
 

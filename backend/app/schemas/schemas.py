@@ -195,6 +195,102 @@ class SourceContextEntry(BaseModel):
     excerpt: str | None = None
 
 
+# ---------- Source Ingestion (P4.0) ----------
+SOURCE_DOCUMENT_STATUS = Literal["queued", "extracting", "ready", "no_text", "failed"]
+
+
+class SourceDocumentOut(BaseModel):
+    """Trạng thái ingest của MỘT file. Không bao giờ chứa text hay storage key.
+
+    `chunkCount` chỉ > 0 khi `status=ready`. `preview` là vài trăm ký tự đầu của
+    chunk đầu tiên, chỉ để người dùng nhận biết tài liệu — KHÔNG phải bằng chứng
+    và không được dùng làm citation.
+    """
+
+    id: str
+    sourceId: str
+    status: SOURCE_DOCUMENT_STATUS
+    mime: str
+    byteSize: int
+    pageCount: int | None
+    pipelineVersion: str
+    originalFilename: str | None
+    chunkCount: int = 0
+    preview: str | None = None
+    error: dict | None = None
+    attempts: int = 0
+    ingestedAt: str | None = None
+    createdAt: str | None = None
+
+
+class SourceDocumentListOut(BaseModel):
+    sourceId: str
+    items: list[SourceDocumentOut]
+    total: int
+    contentIngested: bool
+    notice: str | None = None
+
+
+class SourceIngestConfigOut(BaseModel):
+    """Cho UI biết upload có khả dụng hay không (không lộ endpoint/credential)."""
+
+    ingestEnabled: bool
+    storageConfigured: bool
+    maxPdfBytes: int
+    maxPdfPages: int
+    pipelineVersion: str
+    # P4.1 — trạng thái lập chỉ mục. `embeddingConfigured=false` ⇒ tìm kiếm
+    # ngữ nghĩa KHÔNG chạy; UI phải nói thật thay vì giả vờ có RAG.
+    embeddingEnabled: bool = True
+    embeddingConfigured: bool = True
+    embeddingProvider: str = "hashing"
+    embeddingModel: str = "hashing-ngram-v1"
+    embeddingDimension: int = 256
+    ragEnabled: bool = False
+
+
+class RagSearchRequest(BaseModel):
+    """Body của POST /v1/courses/{id}/sources/search.
+
+    `sourceIds` chỉ THU HẸP phạm vi: server luôn giao với các nguồn đã liên kết
+    và thuộc quyền user, nên client không thể mở rộng sang nguồn khác.
+    """
+
+    query: str = Field(min_length=1, max_length=1000)
+    sourceIds: list[str] = Field(default_factory=list, max_length=20)
+    topK: int = Field(default=6, ge=1, le=20)
+
+    model_config = {"extra": "forbid"}
+
+
+class RagChunkOut(BaseModel):
+    chunkId: str
+    sourceId: str
+    documentId: str
+    pageNumber: int
+    charStart: int
+    charEnd: int
+    sectionAnchor: str | None = None
+    textHash: str
+    sourceTitle: str
+    sourceVersion: str | None = None
+    snippet: str
+    lexicalRank: int | None = None
+    vectorRank: int | None = None
+    similarity: float | None = None
+    rrfScore: float
+
+
+class RagSearchOut(BaseModel):
+    query: str
+    embeddingSpec: str
+    items: list[RagChunkOut]
+    total: int
+    insufficientEvidence: bool
+    # Không đủ căn cứ ⇒ UI phải nói "chưa đủ thông tin", không hiển thị nguồn giả.
+    notice: str | None = None
+
+
 # ---------- Source Research Agent (P2.SR) ----------
 class ResearchRequestIn(BaseModel):
     """Body của POST /v1/courses/{id}/research-runs.
@@ -535,6 +631,25 @@ class TutorMessageRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class TutorCitationOut(BaseModel):
+    """Citation đã verify server-side (P4.1). Chỉ id do retrieval trả về."""
+
+    chunkId: str
+    sourceId: str
+    documentId: str | None = None
+    pageNumber: int | None = None
+    charStart: int | None = None
+    charEnd: int | None = None
+    sectionAnchor: str | None = None
+    textHash: str | None = None
+    sourceTitle: str | None = None
+    sourceVersion: str | None = None
+    evidenceText: str | None = None
+    validationStatus: str
+    # P4.1 LUÔN False: locator_verified chỉ xác minh vị trí, không xác minh claim.
+    evidenceSupported: bool = False
+
+
 class TutorMessageOut(BaseModel):
     id: str
     role: Literal["user", "assistant"]
@@ -543,6 +658,7 @@ class TutorMessageOut(BaseModel):
     contextRef: dict | None = None
     errorCode: str | None = None
     finishReason: str | None = None
+    citations: list[TutorCitationOut] = Field(default_factory=list)
     createdAt: str | None = None
 
 

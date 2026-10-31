@@ -25,6 +25,25 @@ services:
       timeout: 3s
       retries: 10
 
+  # P4.0 — private object storage cho PDF nguồn. Không expose console/API ra ngoài
+  # mạng tin cậy; chỉ backend/worker/beat truy cập qua mạng compose.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-sopiskill_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-sopiskill_minio_password}
+    ports:
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   backend:
     build: ./backend
     environment:
@@ -73,6 +92,41 @@ services:
       TUTOR_TOOL_MAX_CALLS: ${TUTOR_TOOL_MAX_CALLS:-2}
       TUTOR_TOOL_TIMEOUT_SECONDS: ${TUTOR_TOOL_TIMEOUT_SECONDS:-3}
       TUTOR_TOOL_MAX_RESULT_CHARS: ${TUTOR_TOOL_MAX_RESULT_CHARS:-3000}
+      # P4.0 — PDF ingest + private object storage (MinIO). Endpoint dùng DNS nội bộ
+      # compose; KHÔNG đưa access/secret key vào NEXT_PUBLIC_* hay bundle frontend.
+      SOURCE_INGEST_ENABLED: ${SOURCE_INGEST_ENABLED:-true}
+      SOURCE_MAX_PDF_BYTES: ${SOURCE_MAX_PDF_BYTES:-20971520}
+      SOURCE_MAX_PDF_PAGES: ${SOURCE_MAX_PDF_PAGES:-300}
+      SOURCE_EXTRACT_TIMEOUT_SECONDS: ${SOURCE_EXTRACT_TIMEOUT_SECONDS:-120}
+      SOURCE_CHUNK_TARGET_CHARS: ${SOURCE_CHUNK_TARGET_CHARS:-1000}
+      SOURCE_CHUNK_MIN_CHARS: ${SOURCE_CHUNK_MIN_CHARS:-200}
+      SOURCE_PIPELINE_VERSION: ${SOURCE_PIPELINE_VERSION:-p4.0-v1}
+      SOURCE_INGEST_LEASE_SECONDS: ${SOURCE_INGEST_LEASE_SECONDS:-300}
+      SOURCE_INGEST_MAX_ATTEMPTS: ${SOURCE_INGEST_MAX_ATTEMPTS:-3}
+      SOURCE_STORAGE_BACKEND: ${SOURCE_STORAGE_BACKEND:-s3}
+      SOURCE_STORAGE_BUCKET: ${SOURCE_STORAGE_BUCKET:-sopiskill-sources}
+      # Endpoint nội bộ compose luôn là DNS service `minio:9000`. Chạy backend
+      # trên host thì dùng SOURCE_STORAGE_ENDPOINT=localhost:9000 trong .env.
+      SOURCE_STORAGE_ENDPOINT: minio:9000
+      SOURCE_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-sopiskill_minio}
+      SOURCE_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-sopiskill_minio_password}
+      SOURCE_STORAGE_SECURE: ${SOURCE_STORAGE_SECURE:-false}
+      SOURCE_STORAGE_REGION: ${SOURCE_STORAGE_REGION:-us-east-1}
+      SOURCE_STORAGE_AUTO_CREATE_BUCKET: ${SOURCE_STORAGE_AUTO_CREATE_BUCKET:-true}
+      # P4.1 — Embedding + Hybrid RAG. `hashing` không network/không model;
+      # `openai_compatible` cần EMBEDDING_BASE_URL/API_KEY và KHÔNG fallback.
+      EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:-true}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hashing}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-hashing-ngram-v1}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
+      EMBEDDING_VERSION: ${EMBEDDING_VERSION:-v1}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      RAG_TOP_K: ${RAG_TOP_K:-6}
+      RAG_CANDIDATE_LIMIT: ${RAG_CANDIDATE_LIMIT:-2000}
+      RAG_MIN_LEXICAL_SCORE: ${RAG_MIN_LEXICAL_SCORE:-0.40}
+      RAG_VECTOR_ONLY_MIN_SIMILARITY: ${RAG_VECTOR_ONLY_MIN_SIMILARITY:-0.40}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENV: development
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (copy .env.example)}
@@ -137,12 +191,49 @@ services:
       TUTOR_TOOL_MAX_CALLS: ${TUTOR_TOOL_MAX_CALLS:-2}
       TUTOR_TOOL_TIMEOUT_SECONDS: ${TUTOR_TOOL_TIMEOUT_SECONDS:-3}
       TUTOR_TOOL_MAX_RESULT_CHARS: ${TUTOR_TOOL_MAX_RESULT_CHARS:-3000}
+      # P4.0 — PDF ingest + private object storage (MinIO). Endpoint dùng DNS nội bộ
+      # compose; KHÔNG đưa access/secret key vào NEXT_PUBLIC_* hay bundle frontend.
+      SOURCE_INGEST_ENABLED: ${SOURCE_INGEST_ENABLED:-true}
+      SOURCE_MAX_PDF_BYTES: ${SOURCE_MAX_PDF_BYTES:-20971520}
+      SOURCE_MAX_PDF_PAGES: ${SOURCE_MAX_PDF_PAGES:-300}
+      SOURCE_EXTRACT_TIMEOUT_SECONDS: ${SOURCE_EXTRACT_TIMEOUT_SECONDS:-120}
+      SOURCE_CHUNK_TARGET_CHARS: ${SOURCE_CHUNK_TARGET_CHARS:-1000}
+      SOURCE_CHUNK_MIN_CHARS: ${SOURCE_CHUNK_MIN_CHARS:-200}
+      SOURCE_PIPELINE_VERSION: ${SOURCE_PIPELINE_VERSION:-p4.0-v1}
+      SOURCE_INGEST_LEASE_SECONDS: ${SOURCE_INGEST_LEASE_SECONDS:-300}
+      SOURCE_INGEST_MAX_ATTEMPTS: ${SOURCE_INGEST_MAX_ATTEMPTS:-3}
+      SOURCE_STORAGE_BACKEND: ${SOURCE_STORAGE_BACKEND:-s3}
+      SOURCE_STORAGE_BUCKET: ${SOURCE_STORAGE_BUCKET:-sopiskill-sources}
+      # Endpoint nội bộ compose luôn là DNS service `minio:9000`. Chạy backend
+      # trên host thì dùng SOURCE_STORAGE_ENDPOINT=localhost:9000 trong .env.
+      SOURCE_STORAGE_ENDPOINT: minio:9000
+      SOURCE_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-sopiskill_minio}
+      SOURCE_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-sopiskill_minio_password}
+      SOURCE_STORAGE_SECURE: ${SOURCE_STORAGE_SECURE:-false}
+      SOURCE_STORAGE_REGION: ${SOURCE_STORAGE_REGION:-us-east-1}
+      SOURCE_STORAGE_AUTO_CREATE_BUCKET: ${SOURCE_STORAGE_AUTO_CREATE_BUCKET:-true}
+      # P4.1 — Embedding + Hybrid RAG. `hashing` không network/không model;
+      # `openai_compatible` cần EMBEDDING_BASE_URL/API_KEY và KHÔNG fallback.
+      EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:-true}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hashing}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-hashing-ngram-v1}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
+      EMBEDDING_VERSION: ${EMBEDDING_VERSION:-v1}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      RAG_TOP_K: ${RAG_TOP_K:-6}
+      RAG_CANDIDATE_LIMIT: ${RAG_CANDIDATE_LIMIT:-2000}
+      RAG_MIN_LEXICAL_SCORE: ${RAG_MIN_LEXICAL_SCORE:-0.40}
+      RAG_VECTOR_ONLY_MIN_SIMILARITY: ${RAG_VECTOR_ONLY_MIN_SIMILARITY:-0.40}
       # Worker thật: không fallback chạy generation inline trong request API.
       GENERATION_ALLOW_INLINE_FALLBACK: "false"
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
   # Reconciler/outbox: gửi lại job kẹt queued + requeue job có lease hết hạn.
@@ -195,11 +286,48 @@ services:
       TUTOR_TOOL_MAX_CALLS: ${TUTOR_TOOL_MAX_CALLS:-2}
       TUTOR_TOOL_TIMEOUT_SECONDS: ${TUTOR_TOOL_TIMEOUT_SECONDS:-3}
       TUTOR_TOOL_MAX_RESULT_CHARS: ${TUTOR_TOOL_MAX_RESULT_CHARS:-3000}
+      # P4.0 — PDF ingest + private object storage (MinIO). Endpoint dùng DNS nội bộ
+      # compose; KHÔNG đưa access/secret key vào NEXT_PUBLIC_* hay bundle frontend.
+      SOURCE_INGEST_ENABLED: ${SOURCE_INGEST_ENABLED:-true}
+      SOURCE_MAX_PDF_BYTES: ${SOURCE_MAX_PDF_BYTES:-20971520}
+      SOURCE_MAX_PDF_PAGES: ${SOURCE_MAX_PDF_PAGES:-300}
+      SOURCE_EXTRACT_TIMEOUT_SECONDS: ${SOURCE_EXTRACT_TIMEOUT_SECONDS:-120}
+      SOURCE_CHUNK_TARGET_CHARS: ${SOURCE_CHUNK_TARGET_CHARS:-1000}
+      SOURCE_CHUNK_MIN_CHARS: ${SOURCE_CHUNK_MIN_CHARS:-200}
+      SOURCE_PIPELINE_VERSION: ${SOURCE_PIPELINE_VERSION:-p4.0-v1}
+      SOURCE_INGEST_LEASE_SECONDS: ${SOURCE_INGEST_LEASE_SECONDS:-300}
+      SOURCE_INGEST_MAX_ATTEMPTS: ${SOURCE_INGEST_MAX_ATTEMPTS:-3}
+      SOURCE_STORAGE_BACKEND: ${SOURCE_STORAGE_BACKEND:-s3}
+      SOURCE_STORAGE_BUCKET: ${SOURCE_STORAGE_BUCKET:-sopiskill-sources}
+      # Endpoint nội bộ compose luôn là DNS service `minio:9000`. Chạy backend
+      # trên host thì dùng SOURCE_STORAGE_ENDPOINT=localhost:9000 trong .env.
+      SOURCE_STORAGE_ENDPOINT: minio:9000
+      SOURCE_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-sopiskill_minio}
+      SOURCE_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-sopiskill_minio_password}
+      SOURCE_STORAGE_SECURE: ${SOURCE_STORAGE_SECURE:-false}
+      SOURCE_STORAGE_REGION: ${SOURCE_STORAGE_REGION:-us-east-1}
+      SOURCE_STORAGE_AUTO_CREATE_BUCKET: ${SOURCE_STORAGE_AUTO_CREATE_BUCKET:-true}
+      # P4.1 — Embedding + Hybrid RAG. `hashing` không network/không model;
+      # `openai_compatible` cần EMBEDDING_BASE_URL/API_KEY và KHÔNG fallback.
+      EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:-true}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hashing}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-hashing-ngram-v1}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-256}
+      EMBEDDING_VERSION: ${EMBEDDING_VERSION:-v1}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      RAG_TOP_K: ${RAG_TOP_K:-6}
+      RAG_CANDIDATE_LIMIT: ${RAG_CANDIDATE_LIMIT:-2000}
+      RAG_MIN_LEXICAL_SCORE: ${RAG_MIN_LEXICAL_SCORE:-0.40}
+      RAG_VECTOR_ONLY_MIN_SIMILARITY: ${RAG_VECTOR_ONLY_MIN_SIMILARITY:-0.40}
       GENERATION_ALLOW_INLINE_FALLBACK: "false"
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
   frontend:
@@ -216,3 +344,4 @@ services:
 
 volumes:
   pgdata:
+  miniodata:

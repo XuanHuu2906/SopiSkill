@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,9 +47,9 @@ TOOL_PLANNER_SYSTEM_LINES = [
     '{"blockIndex": <int>}.',
     "- explain_deeper: mở rộng giải thích cho một block. args: "
     '{"blockIndex": <int>}.',
-    "- read_source: đọc nguồn tài liệu đã ingest. args: {}. "
-    "(P3.1 CHƯA có dữ liệu nguồn nên tool này sẽ từ chối; chỉ chọn khi "
-    "người học hỏi cần dẫn nguồn.)",
+    "- read_source: tìm trong tài liệu đã ingest của khóa học. args: {} hoặc "
+    '{"query": "<câu truy vấn ngắn>"}. Chỉ chọn khi người học hỏi cần dẫn nguồn '
+    "hoặc cần nội dung từ tài liệu. Server tự lọc quyền truy cập.",
     "Quy tắc: chỉ chọn tool khi thực sự cần thêm ngữ cảnh để trả lời câu hỏi.",
     "Không bao giờ bịa tên tool khác. Trả JSON đúng một object, ví dụ "
     '{"tool": "read_lesson", "args": {"blockIndex": 2}} hoặc '
@@ -69,9 +70,9 @@ class ToolSpec:
 TOOLS: dict[str, ToolSpec] = {
     "read_lesson": ToolSpec("read_lesson", True, "đọc bài học"),
     "explain_deeper": ToolSpec("explain_deeper", True, "mở rộng giải thích"),
-    # P3.1.3: chi bat that sau P4.1 (chunk ownership + provenance). Hien tai duoc
-    # allowlist de cau tu choi huu ich thay vi "tool khong ton tai".
-    "read_source": ToolSpec("read_source", False, "đọc nguồn tài liệu"),
+    # P4.1: chỉ thực thi được khi có `source_reader` (retrieval đã scope quyền)
+    # VÀ RAG đang bật. Không có hai điều kiện đó ⇒ từ chối hữu ích, không bịa.
+    "read_source": ToolSpec("read_source", True, "đọc nguồn tài liệu"),
 }
 
 
@@ -86,6 +87,8 @@ class ExplainDeeperArgs(BaseModel):
 
 
 class ReadSourceArgs(BaseModel):
+    # Query tuỳ chọn; planner có thể để trống ⇒ dùng câu hỏi của người học.
+    query: str | None = Field(default=None, max_length=300)
     model_config = {"extra": "forbid"}
 
 
@@ -206,9 +209,89 @@ def validate_request(name: str, args: dict, *, block_count: int) -> BaseModel:
 def _args_summary(name: str, parsed: BaseModel) -> str:
     """Mo ta ngan, khong chua noi dung nguoi hoc hay du lieu nhay cam."""
     index = getattr(parsed, "blockIndex", None)
-    if index is None:
-        return f"{name}()"
-    return f"{name}(blockIndex={index})"
+    if index is not None:
+        return f"{name}(blockIndex={index})"
+    query = getattr(parsed, "query", None)
+    if query:
+        # Không đưa query (có thể là câu hỏi người học) vào audit.
+        return f"{name}(query_chars={len(str(query))})"
+    return f"{name}()"
+
+
+# Callback truy xuất nguồn do tầng API cung cấp. Trả (content, error_code, summary).
+SourceReader = Callable[[str], Awaitable[tuple[str, str | None, str]]]
+
+
+async def execute_async(
+    name: str,
+    parsed: BaseModel,
+    *,
+    blocks: list[dict],
+    current_block_index: int,
+    max_chars: int,
+    source_reader: SourceReader | None = None,
+    question: str = "",
+) -> ToolExecution:
+    """Bản async của `execute` — chỉ khác ở `read_source` (cần DB/retrieval).
+
+    `source_reader` do tầng API truyền vào và **đã** scope theo user/course; tool
+    không tự nhận userId/courseId từ model nên không thể mở rộng quyền.
+    """
+    if name != "read_source":
+        return execute(
+            name,
+            parsed,
+            blocks=blocks,
+            current_block_index=current_block_index,
+            max_chars=max_chars,
+        )
+
+    started = time.perf_counter()
+    try:
+        if source_reader is None:
+            raise ToolRequestError(
+                TOOL_NOT_AVAILABLE, "Tool đọc nguồn chưa khả dụng ở lượt hỏi này."
+            )
+        query = getattr(parsed, "query", None) or question
+        content, error_code, summary = await source_reader(str(query))
+    except ToolRequestError as exc:
+        return ToolExecution(
+            name=name,
+            ok=False,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            summary=exc.message,
+            error_code=exc.code,
+            args_summary=_args_summary(name, parsed),
+        )
+    except Exception:  # noqa: BLE001 — lỗi truy xuất không được làm chết lượt hỏi
+        logger.warning("tutor read_source failed", exc_info=False)
+        return ToolExecution(
+            name=name,
+            ok=False,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            summary="Không truy xuất được nguồn tài liệu.",
+            error_code=TOOL_FAILED,
+            args_summary=_args_summary(name, parsed),
+        )
+
+    if error_code is not None:
+        return ToolExecution(
+            name=name,
+            ok=False,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            summary="Không tìm thấy đoạn nguồn phù hợp với câu hỏi.",
+            error_code=error_code,
+            args_summary=_args_summary(name, parsed),
+        )
+
+    return ToolExecution(
+        name=name,
+        ok=True,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        summary=summary,
+        content=content[: max(0, max_chars)],
+        args_summary=_args_summary(name, parsed),
+    )
 
 
 def execute(
@@ -219,11 +302,15 @@ def execute(
     current_block_index: int,
     max_chars: int,
 ) -> ToolExecution:
-    """Chay tool read-only. Khong co side-effect, khong truy cap mang/DB."""
+    """Chay tool read-only. Khong co side-effect, khong truy cap mang/DB.
+
+    `read_source` KHÔNG chạy được qua hàm này (cần DB/retrieval) ⇒ trả
+    `TUTOR_TOOL_NOT_AVAILABLE`; dùng `execute_async` cho đường tutor thật.
+    """
     started = time.perf_counter()
     spec = TOOLS[name]
 
-    if not spec.available:
+    if not spec.available or name == "read_source":
         return ToolExecution(
             name=name,
             ok=False,

@@ -477,6 +477,216 @@ step(
 leaked3 = [b["type"] for b in lesson3["blocks"] if public_answer_is_leaked(b)]
 step("11h. Citation khong lam lo answer key", not leaked3, f"leaked={leaked3}")
 
+
+# 11i. P4.0 — PDF ingestion qua HTTP thật + MinIO private storage.
+def make_test_pdf(pages: list[str]) -> bytes:
+    """Sinh PDF text tối giản (test harness, không phải code sản phẩm)."""
+    n = len(pages)
+    objects: dict[int, str] = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        3: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    objects[2] = (
+        f"<< /Type /Pages /Kids [{' '.join(f'{5 + 2 * i} 0 R' for i in range(n))}] "
+        f"/Count {n} >>"
+    )
+    for i, text in enumerate(pages):
+        content_no = 4 + 2 * i
+        page_no = 5 + 2 * i
+        body = ["BT", "/F1 11 Tf", "14 TL", "56 780 Td"]
+        for line in text.split("\n"):
+            escaped = line.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+            body.append(f"({escaped}) Tj T*")
+        body.append("ET")
+        stream = "\n".join(body)
+        objects[content_no] = (
+            f"<< /Length {len(stream.encode())} >>\nstream\n{stream}\nendstream"
+        )
+        objects[page_no] = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {content_no} 0 R >>"
+        )
+    out = io.BytesIO()
+    out.write(b"%PDF-1.4\n")
+    offsets: dict[int, int] = {}
+    for no in sorted(objects):
+        offsets[no] = out.tell()
+        out.write(f"{no} 0 obj\n{objects[no]}\nendobj\n".encode())
+    xref = out.tell()
+    total = max(objects) + 1
+    out.write(f"xref\n0 {total}\n".encode())
+    out.write(b"0000000000 65535 f \n")
+    for no in range(1, total):
+        out.write(f"{offsets[no]:010d} 00000 n \n".encode())
+    out.write(
+        f"trailer\n<< /Size {total} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return out.getvalue()
+
+
+def upload_pdf(source_id: str, data: bytes, filename: str = "e2e.pdf"):
+    boundary = f"----e2e{uuid.uuid4().hex}"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: application/pdf\r\n\r\n"
+    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    csrf = next((c.value for c in _jar if c.name == "csrf_token"), "")
+    req = urllib.request.Request(
+        f"{BASE}/v1/sources/{source_id}/document",
+        method="POST",
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "X-CSRF-Token": csrf,
+        },
+        data=body,
+    )
+
+    def _send(use_headers: bool):
+        if use_headers:
+            return _opener.open(req)
+        raw_req = urllib.request.Request(f"{BASE}/v1/sources/{source_id}/document", method="POST", data=body)
+        raw_req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        return urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(_jar)
+        ).open(raw_req)
+
+    try:
+        with _send(True) as res:
+            return res.status, json.loads(res.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode() or "{}")
+
+
+_pdf_pages = [
+    "Chapter 1: Introduction\n" + ("Python is readable and has a large ecosystem. " * 15),
+    "Chapter 2: Data types\n" + ("Variables hold values of different types. " * 15),
+]
+_pdf_bytes = make_test_pdf(_pdf_pages)
+
+st, ingest_cfg = call("GET", "/v1/sources/ingest-config", None, 200)
+step(
+    "11i. Ingest config cong khai, khong lo secret",
+    st == 200
+    and ingest_cfg["ingestEnabled"] is True
+    and ingest_cfg["storageConfigured"] is True
+    and not any(k in ingest_cfg for k in ("endpoint", "accessKey", "secretKey", "bucket")),
+    f"storage={ingest_cfg.get('storageConfigured')} maxPages={ingest_cfg.get('maxPdfPages')}",
+)
+
+st, upload_doc = upload_pdf(source["id"], _pdf_bytes, "python-e2e.pdf")
+assert st == 202 and upload_doc.get("id"), f"upload failed: {st} {upload_doc}"
+
+
+def wait_document(source_id: str, document_id: str, want=("ready", "no_text", "failed")):
+    """Poll trạng thái ingest (worker bất đồng bộ) — không đoán kết quả."""
+    _st, _doc = 200, {}
+    for _ in range(_POLL_ROUNDS):
+        _st, _doc = call("GET", f"/v1/sources/{source_id}/documents/{document_id}")
+        if _st != 200 or _doc.get("status") in want:
+            return _st, _doc
+        time.sleep(0.5)
+    return _st, _doc
+
+
+st, upload_doc = wait_document(source["id"], upload_doc["id"])
+step(
+    "11j. Upload PDF text -> ready + chunk",
+    st == 200 and upload_doc.get("status") == "ready" and upload_doc.get("chunkCount", 0) > 0,
+    f"status={upload_doc.get('status')} chunks={upload_doc.get('chunkCount')}",
+)
+
+st, upload_dup = upload_pdf(source["id"], _pdf_bytes, "python-e2e.pdf")
+step(
+    "11k. Upload lai cung bytes -> cung document, khong nhan ban",
+    st == 202
+    and upload_dup.get("id") == upload_doc.get("id")
+    and upload_dup.get("status") == "ready",
+    f"same={upload_dup.get('id') == upload_doc.get('id')} status={upload_dup.get('status')}",
+)
+
+st, doc_detail = call("GET", f"/v1/sources/{source['id']}/documents/{upload_doc['id']}", None, 200)
+step(
+    "11l. Document ready co provenance (pages) va preview ngan",
+    st == 200
+    and doc_detail["status"] == "ready"
+    and doc_detail["pageCount"] == len(_pdf_pages)
+    and doc_detail.get("preview")
+    and len(doc_detail["preview"]) <= 200,
+    f"pages={doc_detail.get('pageCount')} preview_len={len(doc_detail.get('preview') or '')}",
+)
+
+st, upload_bad = upload_pdf(source["id"], b"definitely not a pdf", "fake.pdf")
+step(
+    "11m. File khong phai PDF bi tu choi (422, khong tao document)",
+    st == 422 and upload_bad.get("detail", {}).get("code") == "INVALID_PDF_MIME",
+    f"status={st} code={upload_bad.get('detail', {}).get('code')}",
+)
+
+st, upload_blank = upload_pdf(source["id"], make_test_pdf([""]), "scan.pdf")
+assert st == 202 and upload_blank.get("id"), f"blank upload failed: {st} {upload_blank}"
+st, upload_blank = wait_document(source["id"], upload_blank["id"])
+step(
+    "11n. PDF khong co text -> no_text (khong gia OCR)",
+    st == 200
+    and upload_blank.get("status") == "no_text"
+    and (upload_blank.get("error") or {}).get("code") == "NO_EXTRACTABLE_TEXT",
+    f"status={upload_blank.get('status')}",
+)
+
+st, course_sources = call("GET", f"/v1/courses/{course_id}/sources", None, 200)
+step(
+    "11o. contentIngested=true nhung citation van chua xac minh (chua co P4.1)",
+    st == 200 and course_sources["contentIngested"] is True and course_sources["groundingAvailable"] is False,
+    f"ingested={course_sources.get('contentIngested')}",
+)
+
+# 11p. P4.1 — retrieval/citation. Flag RAG_ENABLED quyết định hành vi; không tự
+# bật, và không đoán kết quả: nếu tắt thì kiểm mã lỗi, nếu bật thì kiểm provenance.
+_search_body = {"query": "Python variables and data types"}
+st, search_out = call(
+    "POST", f"/v1/courses/{course_id}/sources/search", _search_body
+)
+_RAG_STATUS = "RAG_DISABLED" if st == 503 else "OK"
+if st == 503:
+    _code = (search_out.get("detail") or {}).get("code")
+    step(
+        "11p. RAG tat -> 503 co ma ro rang (khong gia ket qua)",
+        _code in ("RAG_NOT_ENABLED", "EMBEDDING_NOT_CONFIGURED"),
+        f"status={st} code={_code}",
+    )
+else:
+    _items = search_out.get("items") or []
+    _has_provenance = bool(_items) and all(
+        item.get("chunkId", "").startswith("chk_")
+        and item.get("sourceId", "").startswith("src_")
+        and item.get("documentId", "").startswith("doc_")
+        and isinstance(item.get("pageNumber"), int)
+        and item.get("textHash")
+        for item in _items
+    )
+    step(
+        "11p. RAG bat -> search tra provenance day du (chunk/page/hash)",
+        st == 200
+        and _has_provenance
+        and search_out.get("embeddingSpec")
+        and search_out.get("insufficientEvidence") is False,
+        f"status={st} items={len(_items)} spec={search_out.get('embeddingSpec')}",
+    )
+
+    _st_weak, _weak = call(
+        "POST",
+        f"/v1/courses/{course_id}/sources/search",
+        {"query": "zzz qqq xxx không có trong tài liệu"},
+    )
+    step(
+        "11q. Query ngoai pham vi -> insufficientEvidence (khong tra doan bua)",
+        _st_weak == 200
+        and _weak.get("insufficientEvidence") is True
+        and not _weak.get("items"),
+        f"status={_st_weak} items={len(_weak.get('items') or [])}",
+    )
+
 # 12. P3.0 — AI Tutor: SSE stream, history, idempotency, ownership.
 #    Flag TẮT (mặc định) ⇒ 503 có mã và không đổi flow. Flag BẬT ⇒ stream thật
 #    qua HTTP (SSE), lịch sử đọc lại được, retry cùng clientMessageId không gọi
