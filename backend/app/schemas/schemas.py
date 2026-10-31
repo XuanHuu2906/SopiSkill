@@ -395,6 +395,13 @@ class GenerationOut(BaseModel):
     attempts: int = 0
     dispatched: bool = True
     lastErrorCode: str | None = None
+    # P2.2 — usage/cost của job. KHÔNG chứa prompt. `costEstimateUsd = null` và
+    # `costKnown = false` nghĩa là chưa cấu hình giá model (không phải miễn phí).
+    llmCalls: int = 0
+    promptTokens: int | None = None
+    completionTokens: int | None = None
+    costEstimateUsd: float | None = None
+    costKnown: bool = False
 
 
 class UnitOut(BaseModel):

@@ -2,6 +2,115 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-10-31 — P2.2 AI Evaluation, Safety, Quality & Cost Control
+- Base commit: `0f2fd31886338620cc3967e4f5685bf4a54a32ec` (branch `main`, working tree)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Scope & decisions:
+  - **Tách 3 tầng đánh giá, không trộn**: (1) rubric **deterministic** (schema/lint/DAG/quiz/
+    độ dài/trùng lặp/ngôn ngữ) là **cổng pass/fail duy nhất**; (2) `HUMAN_RUBRIC` 9 tiêu chí 0–4
+    cho **người chấm**; (3) **LLM-as-judge** chỉ là tín hiệu tham khảo có metadata, không là
+    ground truth. Không claim "AI chính xác" từ JSON hợp lệ.
+  - **Cost trung thực**: `cost_estimate_usd = NULL` khi chưa cấu hình giá model ⇒ nghĩa là
+    *chưa biết*, **không phải 0/miễn phí**. API trả kèm `costKnown` để client/report phân biệt.
+  - **Usage là metadata, không phải nội dung**: bảng `llm_usage_events` không lưu prompt, câu trả
+    lời người học hay nội dung sinh ra; chỉ provider/model/kind/token/latency/finish_reason/cost.
+  - **Budget chặn trước khi đốt thêm tiền**: vượt `GENERATION_MAX_TOKENS_PER_JOB` hoặc
+    `GENERATION_MAX_COST_USD_PER_JOB` ⇒ job `failed` `BUDGET_EXCEEDED`, **fatal** (retry chỉ tốn
+    thêm). Mock (không báo usage) không bị chặn oan.
+  - **Đo cả chi phí ngoài job**: interview/proposal xảy ra trong request, không thuộc job — vẫn
+    ghi usage bằng session riêng (best-effort) vì chi phí đã phát sinh kể cả khi request rollback.
+  - **Proposal/lesson cũng có bounded schema repair** (trước P2.2 chỉ interview): giảm việc cả
+    job fail vì một block sai trong khi `LLM_MAX_SCHEMA_RETRIES` vẫn chặn số request.
+  - Dataset 12 topic cố định (vi/en, beginner→advanced, có `ambiguous`) với kỳ vọng **thuộc tính
+    cấu trúc**, không so khớp chuỗi tự do; ngưỡng rubric/regression là **PROPOSAL**.
+- IMPLEMENTED:
+  - `backend/app/providers/usage.py` (mới): `UsageRecord`/`UsageCollector` (ContextVar, cô lập
+    theo task), `parse_pricing`/`resolve_price`/`estimate_cost_usd`, `Stopwatch`.
+  - `backend/app/services/llm_usage_service.py` (mới): `flush_usage` (event + cộng dồn job),
+    `record_standalone` (session riêng, best-effort), `enforce_job_budget`, `JobBudgetExceeded`.
+  - `backend/app/providers/openai_compatible_provider.py`: ghi usage mỗi lời gọi, `kind="judge"`,
+    `request_json()` cho evaluator, bounded schema repair cho proposal/lesson.
+  - `backend/app/providers/base.py`: hook `request_json` mặc định từ chối (không giả điểm judge).
+  - `backend/app/models/models.py`: `LlmUsageEvent` + 4 cột usage trên `GenerationJob`.
+  - `backend/alembic/versions/0007_p22_eval_cost.py` (mới): bảng + 2 index + 4 cột (expand-only).
+  - `backend/app/worker/generation.py`: `collect_usage()` quanh generation, flush sau mỗi bài,
+    flush cả khi lỗi (rollback nội dung trước, ghi usage sau), enforce budget.
+  - `backend/app/services/course_service.py`: ghi usage interview/proposal qua session riêng.
+  - `backend/app/services/job_service.py`: `BUDGET_EXCEEDED` là lỗi fatal.
+  - `backend/app/schemas/schemas.py` + `api/v1/routes.py`: `GenerationOut` có
+    `llmCalls/promptTokens/completionTokens/costEstimateUsd/costKnown`.
+  - `backend/evals/`: `dataset.py` (12 topic), `rubric.py` (deterministic + `HUMAN_RUBRIC` +
+    `THRESHOLDS`), `judges.py` (LLM-as-judge có metadata + `not_run`), `pipeline.py`,
+    `regression.py` (ngưỡng, `comparable=False` khi khác provider/prompt/dataset), `runner.py` (CLI
+    `--provider/--all/--topics/--judge/--yes/--compare`).
+  - `backend/app/core/config.py`, `.env.example`, `docker-compose.yml`: `LLM_PRICING_JSON`,
+    `LLM_MAX_OUTPUT_TOKENS_JUDGE`, `GENERATION_MAX_TOKENS_PER_JOB`,
+    `GENERATION_MAX_COST_USD_PER_JOB` cho cả backend/worker/beat.
+  - Frontend `new/generating`: hiển thị số lời gọi/token và cảnh báo "chưa cấu hình giá model".
+  - `backend/e2e_acceptance.py`: +1 check (5e usage/cost metadata) → **51 check**.
+- TESTED (offline, SQLite):
+  - `cd backend && python -m pytest -q` → **270 passed, 10 skipped** (22.1s; trước 232/10).
+    Mới: `tests/test_p22_eval.py` (**18 test**: dataset ≥10/đa dạng/5 đáp án/id lạ, rubric pass
+    clean course, fail thiếu quiz/thiếu bài/teach quá ngắn/cảnh báo trùng câu hỏi, thresholds hợp
+    lệ, judge mock ⇒ `not_run` không điểm giả, judge parse 0–4 bỏ giá trị ngoài range/khoá lạ,
+    pipeline mock deterministic + label `mock`, summary, regression identical/major drop/judge
+    drop/incomparable) và `tests/test_p22_cost_budget.py` (**18 test**: pricing parse/resolve
+    wildcard/giá âm, cost NULL≠0, adapter ghi usage đúng kind/token/reasoning/finish_reason,
+    collector cô lập, budget token/cost, `BUDGET_EXCEEDED` fatal, flush ghi event + cộng dồn job,
+    pricing thiếu ⇒ NULL, flush không nhân bản, migration 0007 chain/expand-only, metadata columns,
+    `GenerationOut` usage fields, worker ghi usage thật + job dừng khi vượt budget, request path
+    ghi usage dù provider lỗi).
+  - `python -m evals.runner --provider mock --all` → **12/12 topic pass**, 0 request, cost
+    `None` (mock không tốn tiền, không có usage).
+  - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK (9 routes).
+- TESTED (PostgreSQL throwaway `p22_migration_check`):
+  - `alembic upgrade head` → `0007_p22_eval_cost (head)`; `\d llm_usage_events` có đủ cột + 2
+    index + FK job/user; `generation_jobs.llm_calls` NOT NULL default 0.
+  - `alembic downgrade 0006_p2sr_source_research` → bảng và 4 cột bị drop (đếm = 0).
+  - Seed legacy ở 0006 (user/course/job `ready`) → upgrade head → `llm_calls=0`, các cột token/
+    cost NULL ⇒ **không mất dữ liệu**.
+- TESTED (Docker full stack, mock): `docker compose up -d --build backend worker` +
+  `E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py` → **51/51 PASS**, backend tự
+  upgrade DB dev `ailp` lên 0007 (backup `backup_pre_p22_20261031_192458.sql`, 14 COPY).
+- TESTED (real provider — Deploy.com `deepseek-ai/deepseek-v4.1-flash-1017`, người dùng đã duyệt):
+  - `python -m evals.runner --provider openai --all --judge --yes` → **12/12 topic pass**
+    (deterministic), 149 request (không tính judge), **103.984 prompt / 339.926 completion** tokens;
+    thời gian 105–223s/topic. `costEstimateUsd=null` vì `.env` không cấu hình `LLM_PRICING_JSON`
+    ⇒ báo cáo ghi đúng "chưa biết giá".
+  - Judge: **11/12 scored**, trung bình **3.17/4**; `en-beginner-excel` **`status=error`**
+    (`PROVIDER_BUDGET_EXCEEDED` do output bị cắt ở trần judge) — **không** sinh điểm giả.
+    So sánh mock↔real: `comparable=false`, `passed=true` (không kết luận regression chéo provider).
+  - Real Docker E2E (`LLM_PROVIDER=openai`, `E2E_GENERATION_TIMEOUT=1800`,
+    `LLM_PRICING_JSON` set): **51/51 PASS**; DB ghi job thật
+    `llm_calls=10, prompt=7551, completion=23146, cost≈$0.027498`; tổng `llm_usage_events`
+    lesson 23 / proposal 1 / interview 1, cost ≈ $0.0638 trong phiên test.
+  - Trường hợp biên gặp và xử lý: một job `PROVIDER_SCHEMA_INVALID` "mc có option trùng" ở unit_2
+    (retry thủ công trong E2E chạy lại thành công); output cắt `finish_reason=length` được escalate
+    budget provider như thiết kế. Đã trả `LLM_PROVIDER` về `mock` và bỏ `LLM_PRICING_JSON` sau test.
+- NOT TESTED:
+  - **Điểm rubric của người chấm** cho 12 topic (không có người chấm thật trong phiên này); judge
+    không thay thế.
+  - Độ chính xác **factual** của nội dung: rubric deterministic không kiểm tra đúng/sai chuyên môn.
+  - Cost tuyệt đối chỉ đúng khi `LLM_PRICING_JSON` khớp bảng giá thực của provider.
+  - Regression giữa 2 prompt version thật (chưa có baseline prompt khác).
+- BLOCKED: none cho hạ tầng P2.2. Chấm chất lượng bằng người là việc cần người thật.
+- Database: **có migration** `0007_p22_eval_cost` (expand-only; upgrade/downgrade/legacy-row đã
+  kiểm chứng trên DB throwaway; DB dev đã backup + upgrade).
+- Security: usage chỉ chứa metadata, không prompt/PII/key; `LLM_PRICING_JSON` và `LLM_API_KEY` chỉ
+  ở env server; judge là evaluator, không nằm trên đường đi của người học; budget chặn job thay vì
+  để tiêu vô hạn; API không lộ chi tiết provider.
+- Regressions: 0. pytest 232 → **270 passed**; E2E 50 → **51/51**; build OK.
+- Known limitations:
+  - Judge có thể bị cắt output với course 9 bài; hiện ghi `status=error` (trung thực) chứ không
+    tự chia nhỏ. Có thể nâng `LLM_MAX_OUTPUT_TOKENS_JUDGE` hoặc chấm theo batch sau.
+  - `minTeachRatio`/`lessonQuizAlignment`/ngôn ngữ là **warning** (không chặn) vì mock hợp lệ có
+    1 teach + 5 quiz; ngưỡng cần hiệu chỉnh bằng dữ liệu thật.
+  - Chưa có dashboard chi phí tổng hợp theo user/thời gian (bảng event đã sẵn sàng truy vấn).
+- PHASE GATE: **PASS cho P2.2** (rubric deterministic + dataset + cost/budget + regression + real
+  eval 12/12 có bằng chứng; human rubric ghi rõ NOT TESTED/BLOCKED).
+- NEXT: **P3.0 AI Tutor Core** (SSE + lesson grounding, nền P3.0b đã có) — hoặc P4.0 PDF ingestion
+  nếu ưu tiên nguồn tài liệu.
+
 ## 2026-10-31 — P2.SR Source Research Agent Foundation
 - Base commit: `5e5f9cd496a22e6c1b10b535efd1fdeece43c6c9` (branch `main`, working tree có P2.1 + P3.0b chưa commit)
 - New commit/branch: **NOT COMMITTED** (working tree)

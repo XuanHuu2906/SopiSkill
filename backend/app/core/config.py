@@ -25,10 +25,21 @@ class Settings(BaseSettings):
     llm_max_output_tokens_interview: int = 800
     llm_max_output_tokens_proposal: int = 4500
     llm_max_output_tokens_lesson: int = 3000
+    # P2.2 — LLM-as-judge (rubric chấm chất lượng). Chỉ dùng khi eval, không
+    # nằm trên đường đi của người học.
+    llm_max_output_tokens_judge: int = 3000
     llm_max_input_chars: int = 12_000
     # Số lần thử lại khi LLM trả JSON đúng cú pháp nhưng sai schema/semantic
     # (1 = tối đa 2 request cho một bước). Bounded để không đốt tiền.
     llm_max_schema_retries: int = 1
+    # P2.2 — cost control. Giá để trống ⇒ `costEstimateUsd = None` (chưa biết),
+    # KHÔNG báo 0. Định dạng: {"model": {"inputPerMTok": 0.27, "outputPerMTok": 1.1}}.
+    llm_pricing_json: str = ""
+    # Trần token (prompt+completion) cho MỘT generation job. 0 = không giới hạn.
+    # Job vượt trần ⇒ dừng giữa chừng với lỗi `BUDGET_EXCEEDED` (không retry).
+    generation_max_tokens_per_job: int = 400_000
+    # Trần chi phí ước tính cho một job (USD). 0 = không giới hạn.
+    generation_max_cost_usd_per_job: float = 0.0
     # Giữ lại cho tương thích .env cũ (không dùng trực tiếp trong adapter).
     openai_api_key: str = ""
     anthropic_api_key: str = ""

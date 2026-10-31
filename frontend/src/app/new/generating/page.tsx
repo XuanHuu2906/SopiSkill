@@ -16,6 +16,11 @@ interface GenerationOut {
   attempts: number;
   dispatched: boolean;
   lastErrorCode: string | null;
+  llmCalls: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  costEstimateUsd: number | null;
+  costKnown: boolean;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -87,6 +92,16 @@ function GeneratingInner() {
         {gen.data?.status === "queued" && !gen.data.dispatched && (
           <p>
             Đang chờ worker nhận việc… (hệ thống sẽ tự thử lại, không cần thao tác)
+          </p>
+        )}
+
+        {gen.data && gen.data.llmCalls > 0 && (
+          <p className="muted">
+            Đã gọi AI {gen.data.llmCalls} lần · {gen.data.promptTokens ?? 0} token vào /{" "}
+            {gen.data.completionTokens ?? 0} token ra
+            {gen.data.costKnown && gen.data.costEstimateUsd != null
+              ? ` · ~$${gen.data.costEstimateUsd.toFixed(4)}`
+              : " · chưa cấu hình giá model"}
           </p>
         )}
 

@@ -21,8 +21,9 @@ from app.models import (
     Unit,
 )
 from app.providers import LLMProvider, ProviderError, SchemaInvalidError
+from app.providers.usage import collect_usage
 from app.schemas.schemas import ProposalPayload
-from app.services import pedagogy
+from app.services import llm_usage_service, pedagogy
 from app.services.lesson_content import COMPLETION_THRESHOLD_PERCENT
 
 INTERVIEW_QUESTIONS_COUNT = 5
@@ -84,7 +85,11 @@ async def create_course(
     db.add(course)
     await db.flush()
 
-    questions = await provider.generate_interview_questions(topic)
+    # Interview questions do NOT consume provider tokens for mock provider, but do
+    # for real providers — record usage so cost reports don't silently omit it.
+    with collect_usage() as usage:
+        questions = await provider.generate_interview_questions(topic)
+    await llm_usage_service.record_standalone(usage, user_id=user_id)
     interview = CourseInterview(
         course_id=course.id, questions=questions[:INTERVIEW_QUESTIONS_COUNT], answers=[], completed_count=0
     )
@@ -138,9 +143,17 @@ async def _generate_proposal(
 ) -> None:
     clean_answers = [a for a in (interview.answers or []) if a]
     try:
-        payload = await provider.generate_proposal(
-            course.topic, interview.questions or [], clean_answers
-        )
+        with collect_usage() as harness:
+            try:
+                payload = await provider.generate_proposal(
+                    course.topic, interview.questions or [], clean_answers
+                )
+            finally:
+                # Chi phí đã phát sinh kể cả khi provider lỗi/sai schema. Ghi bằng
+                # session riêng: request này có thể rollback sau đó.
+                await llm_usage_service.record_standalone(
+                    harness, user_id=course.user_id
+                )
     except SchemaInvalidError as exc:
         course.status = CourseStatus.failed
         raise HTTPException(

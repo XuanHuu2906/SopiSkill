@@ -141,3 +141,22 @@ head → ORM đọc `grounding=general_ai_knowledge`, `content_version=3`, cours
 dữ liệu. DB dev `ailp` đã upgrade lên 0006 sau backup `backup_pre_p2sr_*.sql`.
 
 Rollback mất **lịch sử research run** (không ảnh hưởng course/lesson/attempt/citation).
+
+## P2.2 — revision `0007_p22_eval_cost`
+
+```bash
+# throwaway check (đã chạy 2026-10-31)
+docker exec <db> psql -U ailp -d postgres -c "CREATE DATABASE p22_migration_check;"
+cd backend
+DATABASE_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p22_migration_check"   python -m alembic upgrade head             # → 0007_p22_eval_cost (head)
+# introspection: bảng llm_usage_events + 4 cột trên generation_jobs (llm_calls NOT NULL default 0)
+DATABASE_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p22_migration_check"   python -m alembic downgrade 0006_p2sr_source_research   # drop bảng + 4 cột (đã kiểm chứng)
+```
+
+Seed legacy ở revision 0006 (user/course/generation_job `ready`) → upgrade head →
+`llm_calls=0`, `prompt_tokens/completion_tokens/cost_estimate_usd = NULL` ⇒ **không mất dữ liệu**,
+và `cost_estimate_usd = NULL` được đọc đúng nghĩa "chưa biết giá" (không phải 0).
+
+DB dev `ailp` đã backup (`backup_pre_p22_*.sql`, 14 COPY) và upgrade lên 0007.
+
+Rollback mất **lịch sử usage/chi phí** (không ảnh hưởng course/lesson/attempt/job/citation).

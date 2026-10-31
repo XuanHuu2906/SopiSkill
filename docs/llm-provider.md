@@ -78,7 +78,8 @@ Vi phạm ⇒ `SchemaInvalidError` ⇒ job failed với mã rõ ràng (không đ
 | `LLM_MAX_OUTPUT_TOKENS_INTERVIEW` | 800 | 5 câu hỏi phỏng vấn |
 | `LLM_MAX_OUTPUT_TOKENS_PROPOSAL` | 4500 | proposal + skills + prerequisites |
 | `LLM_MAX_OUTPUT_TOKENS_LESSON` | 3000 | một bài học blocks |
-| `LLM_MAX_SCHEMA_RETRIES` | 1 | số lần sửa schema tối đa |
+| `LLM_MAX_OUTPUT_TOKENS_JUDGE` | 3000 | LLM-as-judge (chỉ eval, không trên đường học) |
+| `LLM_MAX_SCHEMA_RETRIES` | 1 | số lần sửa schema tối đa (áp dụng cả proposal/lesson từ P2.2) |
 
 `LLM_MAX_OUTPUT_TOKENS` cũ vẫn giữ làm fallback chung. Compose truyền đủ các
 biến này cho `backend`, `worker`, `beat` (sửa P2.1: trước đây thiếu nên container
@@ -94,19 +95,45 @@ dùng default, gây `PROVIDER_BUDGET_EXCEEDED` khi chạy thật).
   curriculum được `fill_skills` lấp để mỗi bài có đúng 1 skill.
 - Prompt version: `p2.1-v1` (thay `p2.0-v1`).
 
-## Eval provider thật (P2.1.8)
+## Usage / cost / budget (P2.2)
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `LLM_PRICING_JSON` | rỗng | Giá USD / 1 triệu token theo model. Rỗng ⇒ `costEstimateUsd=null` + `costKnown=false` (**không phải 0**) |
+| `GENERATION_MAX_TOKENS_PER_JOB` | 400000 | Trần token (prompt+completion) cho một job; 0 = không giới hạn |
+| `GENERATION_MAX_COST_USD_PER_JOB` | 0 | Trần chi phí ước tính cho một job; 0 = không giới hạn |
+
+- Adapter ghi usage vào collector của task (`app/providers/usage.py`). Worker flush vào
+  `llm_usage_events` và cộng dồn cột usage trên `generation_jobs`; `GET /v1/courses/{id}/generation`
+  trả `llmCalls/promptTokens/completionTokens/costEstimateUsd/costKnown`.
+- Interview/proposal trong request cũng ghi usage bằng session riêng (best-effort) vì chi phí phát
+  sinh kể cả khi request rollback.
+- Vượt trần ⇒ job `failed` với `BUDGET_EXCEEDED` (fatal, không retry — retry chỉ đốt thêm tiền).
+- Không lưu prompt/nội dung người học trong bảng usage.
+
+## Eval chất lượng (P2.2)
 
 ```powershell
 cd backend
-$env:LLM_PROVIDER="openai"       # + LLM_API_KEY / LLM_BASE_URL / LLM_MODEL như trên
-python -m evals.real_provider_eval --topics 3 --yes
+# Offline, không tốn tiền
+python -m evals.runner --provider mock --all
+
+# Real provider (cần --yes). Judge = LLM-as-judge, chỉ là tín hiệu tham khảo.
+$env:LLM_PROVIDER="openai"
+python -m evals.runner --all --judge --yes
+
+# So sánh 2 report (regression theo ngưỡng, bỏ qua khi khác provider/prompt/dataset)
+python -m evals.runner --compare evals/reports/a.json evals/reports/b.json
 ```
 
-Script đo schema/curriculum/lint + latency/token per topic, ghi report JSON vào
-`backend/evals/reports/` (gitignored). Cần `--yes` để xác nhận phát sinh chi phí.
-**Không** kết luận chất lượng sư phạm từ script này (đó là phạm vi P2.2).
-- Trước khi bật provider thật, cần xác nhận: dữ liệu nào được gửi ra ngoài, ngân
-  sách, và nhà cung cấp (xem Decision Log trong master plan).
+- Dataset 12 topic (`evals/dataset.py`): vi/en, beginner→advanced, có chủ đề mơ hồ; kỳ vọng là
+  **thuộc tính cấu trúc**, không so khớp chuỗi.
+- Rubric deterministic (`evals/rubric.py`) là **cổng pass/fail**: schema/lint/DAG/quiz-per-lesson/
+  độ dài teach/trùng lặp/số bài/ngôn ngữ. Ngưỡng trong `THRESHOLDS` là PROPOSAL.
+- `HUMAN_RUBRIC` (9 tiêu chí 0–4) dành cho **người chấm**; chưa có điểm người chấm trong repo.
+- LLM-as-judge lưu `status/usedLlm/judgeModel/promptVersion/scores/notes/disclaimer`; provider
+  không hỗ trợ (mock) ⇒ `status=not_run`, không tạo điểm giả.
+- `real_provider_eval.py` (P2.1) vẫn tồn tại cho smoke nhanh; `runner.py` là công cụ P2.2 đầy đủ.
 
 ## Trạng thái P2.0
 
@@ -120,8 +147,15 @@ Script đo schema/curriculum/lint + latency/token per topic, ghi report JSON và
 - **P2.1 TESTED (real)**: eval 3 topic (`vi-beginner-tech`, `vi-advanced-social`,
   `en-advanced-eng`) → **3/3 pass**, 31 request, 18.365 prompt / 63.163 completion
   tokens; real E2E qua Docker + Celery worker **37/37 PASS** (9 bài học thật).
-- **BLOCKED**: real-provider E2E tự động trong CI (không đưa key vào CI); eval
-  chất lượng sư phạm bằng rubric người chấm thuộc P2.2.
+- **P2.2 TESTED (real, có duyệt ngân sách)**: `evals.runner --all --judge --yes` trên
+  Deploy.com `deepseek-ai/deepseek-v4.1-flash-1017` → **12/12 topic pass** rubric deterministic,
+  149 request (không tính judge), 103.984 prompt / 339.926 completion tokens. Judge chấm được
+  **11/12** topic (1 topic `en-beginner-excel` bị cắt output ở trần judge 4800 token ⇒
+  `status=error`, **không** bịa điểm); điểm trung bình các topic chấm được = **3.17/4**.
+  Real Docker E2E (mock→provider thật) **51/51 PASS**, job usage thật
+  `llm_calls=10, 7551 prompt / 23146 completion, cost≈$0.0275` khi cấu hình giá.
+- **BLOCKED**: real-provider E2E tự động trong CI (không đưa key vào CI); điểm rubric **người
+  chấm** cho 12 topic (chưa có người chấm thật; judge không thay thế).
 
 Sau smoke test, `LLM_PROVIDER` đã đặt lại `mock` trong `.env` để tránh chi phí
 ngoài ý muốn. Muốn chạy thật lại: đổi `LLM_PROVIDER=openai` rồi restart

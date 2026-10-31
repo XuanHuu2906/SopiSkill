@@ -106,3 +106,14 @@ class LLMProvider(ABC):
         số trang hay đoạn trích. Nội dung không có nguồn ⇒ vẫn sinh bình thường và
         bài học được đánh dấu `general_ai_knowledge`.
         """
+
+    async def request_json(self, *, system: str, user: str, max_input_chars: int) -> dict:
+        """Lời gọi JSON tự do cho evaluator (LLM-as-judge, P2.2).
+
+        Không nằm trên đường đi của người học. Provider không hỗ trợ phải raise
+        `ProviderConfigError` thay vì trả kết quả giả — evaluator sẽ ghi
+        `judge=not_run` chứ không tạo điểm số không có thật.
+        """
+        raise ProviderConfigError(
+            f"Provider '{self.name}' không hỗ trợ lời gọi JSON cho evaluator."
+        )

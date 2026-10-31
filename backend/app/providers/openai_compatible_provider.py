@@ -35,6 +35,7 @@ from app.providers.validation import (
     validate_lesson,
     validate_proposal,
 )
+from app.providers.usage import Stopwatch, record_usage
 from app.schemas.schemas import LessonContent, ProposalPayload, SourceContextEntry
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "interview": settings.llm_max_output_tokens_interview,
             "proposal": settings.llm_max_output_tokens_proposal,
             "lesson": settings.llm_max_output_tokens_lesson,
+            "judge": settings.llm_max_output_tokens_judge,
         }
         self.max_input_chars = settings.llm_max_input_chars
         self.max_schema_retries = max(0, settings.llm_max_schema_retries)
@@ -157,7 +159,14 @@ class OpenAICompatibleProvider(LLMProvider):
             f"{profile.weeklyMinutes if profile.weeklyMinutes is not None else 'chưa rõ'} phút; "
             f"phong cách: {', '.join(profile.preferredStyles) or 'chưa rõ'}"
         )
-        data = await self._chat_json(
+        def parse(data: dict[str, Any]) -> ProposalPayload:
+            try:
+                payload = ProposalPayload.model_validate(data)
+            except Exception as exc:  # noqa: BLE001 — biến lỗi Pydantic thành taxonomy
+                raise SchemaInvalidError(f"Proposal sai schema: {str(exc)[:200]}") from exc
+            return validate_proposal(payload)
+
+        return await self._structured(
             kind="proposal",
             system=PROPOSAL_SYSTEM,
             user=(
@@ -165,12 +174,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 f"Hồ sơ tóm tắt: {profile_line}\n\n"
                 f"Phỏng vấn:\n{qa}"
             ),
+            parse=parse,
         )
-        try:
-            payload = ProposalPayload.model_validate(data)
-        except Exception as exc:  # noqa: BLE001 — biến lỗi Pydantic thành taxonomy của provider
-            raise SchemaInvalidError(f"Proposal sai schema: {str(exc)[:200]}") from exc
-        return validate_proposal(payload)
 
     async def generate_lesson(
         self,
@@ -199,7 +204,14 @@ class OpenAICompatibleProvider(LLMProvider):
             if prerequisites
             else ""
         )
-        data = await self._chat_json(
+        def parse(data: dict[str, Any]) -> LessonContent:
+            try:
+                content = LessonContent.model_validate(data)
+            except Exception as exc:  # noqa: BLE001
+                raise SchemaInvalidError(f"Lesson sai schema: {str(exc)[:200]}") from exc
+            return validate_lesson(content)
+
+        return await self._structured(
             kind="lesson",
             system=LESSON_SYSTEM,
             user=(
@@ -213,12 +225,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 "Soạn 1 bài học ngắn (3-5 block), tiếng Việt, có ví dụ cụ thể, "
                 "bám đúng kết quả học tập của bài."
             ),
+            parse=parse,
         )
-        try:
-            content = LessonContent.model_validate(data)
-        except Exception as exc:  # noqa: BLE001
-            raise SchemaInvalidError(f"Lesson sai schema: {str(exc)[:200]}") from exc
-        return validate_lesson(content)
 
     @staticmethod
     def _source_context_line(source_context: list[SourceContextEntry] | None) -> str:
@@ -249,8 +257,18 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         return "\n".join(lines) + "\n"
 
-    # ---------- structured call with bounded schema repair ----------
+    # ---------- evaluator hook (P2.2) ----------
 
+    async def request_json(self, *, system: str, user: str, max_input_chars: int) -> dict:
+        """Lời gọi JSON một lần cho evaluator. Không retry, không sửa schema.
+
+        Evaluator phải phân biệt "judge không chạy được" với "judge cho điểm thấp",
+        nên lỗi ở đây được raise nguyên taxonomy provider.
+        """
+        trimmed = user[: max(1, max_input_chars)]
+        return await self._chat_json(kind="judge", system=system, user=trimmed)
+
+    # ---------- structured call with bounded schema repair ----------
     async def _structured(
         self, *, kind: str, system: str, user: str, parse
     ):
@@ -318,7 +336,7 @@ class OpenAICompatibleProvider(LLMProvider):
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                raw = await self._post(payload, max_tokens)
+                raw = await self._post(payload, max_tokens, kind=kind)
                 return self._parse_json(raw)
             except (ProviderTimeoutError, ProviderTransientError, ProviderRateLimitError) as exc:
                 last_error = exc
@@ -360,12 +378,13 @@ class OpenAICompatibleProvider(LLMProvider):
         base = min(30.0, 0.5 * (2**attempt))
         return base + random.uniform(0, base * 0.25)
 
-    async def _post(self, payload: dict[str, Any], max_tokens: int) -> str:
+    async def _post(self, payload: dict[str, Any], max_tokens: int, *, kind: str = "other") -> str:
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        stopwatch = Stopwatch()
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout), transport=self._transport
@@ -405,6 +424,18 @@ class OpenAICompatibleProvider(LLMProvider):
         usage = body.get("usage") or {}
         completion_tokens = usage.get("completion_tokens")
         reasoning_tokens = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        # P2.2 — ghi usage vào collector của task (nếu có). Không chứa prompt/nội
+        # dung; collector do worker/API/eval mở quanh lời gọi.
+        record_usage(
+            provider=self.name,
+            model=self.model,
+            kind=kind,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=completion_tokens,
+            reasoning_tokens=reasoning_tokens,
+            latency_ms=stopwatch.elapsed_ms,
+            finish_reason=finish_reason,
+        )
         # Log metadata TRƯỚC khi kiểm tra budget: request đã tốn tiền dù output bị
         # cắt, nên vẫn phải nhìn thấy token/latency trong log.
         logger.info(

@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Index, Integer, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, Enum, Float, ForeignKey, Index, Integer, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -189,6 +189,12 @@ class GenerationJob(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     last_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # P2.2 — usage/cost tổng hợp của job (cập nhật dần khi sinh bài). Để NULL khi
+    # chưa cấu hình giá model: NULL = chưa biết, KHÔNG phải miễn phí.
+    llm_calls: Mapped[int] = mapped_column(Integer, default=0)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_estimate_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -399,6 +405,43 @@ class SourceResearchRun(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class LlmUsageEvent(Base):
+    """Một lời gọi LLM đã phát sinh (P2.2).
+
+    Chỉ lưu **metadata** (provider/model/loại call/token/latency/chi phí ước tính).
+    KHÔNG lưu prompt, câu trả lời của người học hay nội dung sinh ra.
+    """
+
+    __tablename__ = "llm_usage_events"
+    __table_args__ = (
+        Index("ix_llm_usage_events_job_id", "job_id"),
+        Index("ix_llm_usage_events_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    # Gắn với job khi lời gọi xảy ra trong generation; NULL cho eval/API.
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("generation_jobs.id"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    provider: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(Text)
+    # interview | proposal | lesson | judge | other
+    kind: Mapped[str] = mapped_column(Text)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    finish_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # NULL = chưa biết giá model, KHÔNG phải miễn phí.
+    cost_estimate_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
 

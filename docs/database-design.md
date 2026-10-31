@@ -77,6 +77,9 @@ payload.units: `[{title, blurb, lessonTitles: string[]}]` — 2..6 units, tổng
 | lessons_total | int nullable | |
 | error | jsonb nullable | {code, message} |
 | attempts_count | int default 1 | |
+| llm_calls | int default 0 | P2.2; số lời gọi LLM của job |
+| prompt_tokens / completion_tokens | int nullable | P2.2; NULL = chưa có / chưa báo cáo |
+| cost_estimate_usd | float nullable | P2.2; **NULL = chưa biết giá model**, không phải 0 |
 | created_at / updated_at | | |
 
 Retry tạo job mới với `attempts_count = prev + 1`.
@@ -107,6 +110,21 @@ Retry tạo job mới với `attempts_count = prev + 1`.
 | UNIQUE(unit_id, order_index) | | |
 
 Block types: `teach` (paragraphs), `mc` (question, options, answerIndex), `blank` (sentence, answer), `order` (items đúng thứ tự), `match` (pairs), `short` (question, acceptedAnswers[]).
+
+### llm_usage_events (P2.2)
+| cột | kiểu | ghi chú |
+|---|---|---|
+| id | UUID PK | |
+| job_id | UUID FK generation_jobs nullable | NULL cho lời gọi trong request (interview/proposal) |
+| user_id | UUID FK users nullable | owner khi biết; không chứa PII |
+| provider, model, kind | text | kind: interview/proposal/lesson/judge/other |
+| prompt_tokens / completion_tokens / reasoning_tokens | int nullable | provider trả gì lưu nấy |
+| latency_ms | int nullable | đo tại adapter |
+| finish_reason | text nullable | stop/length/... |
+| cost_estimate_usd | float nullable | NULL = chưa cấu hình giá, không phải miễn phí |
+| created_at | timestamptz | index `created_at`, index `job_id` |
+
+Không lưu prompt, câu trả lời người học hay nội dung sinh ra.
 
 ### lesson_attempts
 | cột | kiểu | ghi chú |

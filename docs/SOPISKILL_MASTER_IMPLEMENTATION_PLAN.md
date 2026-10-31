@@ -249,7 +249,7 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P1.3 | TODO | High | Auth session/UI & navigation đúng |
 | P2.0 | TODO | High | Adapter real configured fail-fast; offline tests |
 | P2.1 | TODO | High | Generation bằng LLM thật có kiểm chứng nếu có credentials |
-| P2.2 | TODO | High | Rubric, evaluation, budget/latency metrics |
+| P2.2 | **DONE 2026-10-31** | High | `0007_p22_eval_cost`; dataset 12 topic + rubric deterministic + LLM-as-judge + cost/budget guard; 270 pytest, 51/51 E2E, real eval 12/12 |
 | P3.0–P3.1 | TODO | High | Tutor grounded, secure, SSE/cancel/quota |
 | P3.0b (Source Registry + Evidence Contract) | **DONE 2026-10-31** | High | `0005_p30_source_registry`; 190 pytest + 3 race + 47/47 E2E |
 | P2.SR (Source Research Agent) | **DONE 2026-10-31** | High | `0006_p2sr_source_research`; agent độc lập + registry/idempotency + flag off/on; offline adapter (mock/curated) |
@@ -788,6 +788,9 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-10-31 | Bài học chưa có nguồn ingest ⇒ luôn `general_ai_knowledge`; không tạo `evidence_supported` giả | **CHỌN (trung thực với bằng chứng)** | `services/source_context.lesson_grounding`, `tests/test_p30_source_first.py` |
 | 2026-10-31 | Citation do **server** sinh từ registry; LLM không nhận/không trả `sourceId` | **CHỌN (chống citation giả)** | `services/citation_service`, prompt `p3.0-v1` |
 | 2026-10-31 | Discovery mặc định `curated`/`mock`, **không network**; `web` trả 503 tới khi có SSRF guard P4.2 | **CHỌN (an toàn)** | `services/source_discovery` |
+| 2026-10-31 | P2.2 tách 3 tầng: rubric deterministic = cổng pass/fail; human rubric cho người chấm; LLM-as-judge chỉ tham khảo | **CHỌN (trung thực đánh giá)** | `evals/rubric.py`, `evals/judges.py` |
+| 2026-10-31 | `cost_estimate_usd = NULL` khi chưa cấu hình giá model — NULL = chưa biết, không phải miễn phí | **CHỌN (trung thực chi phí)** | `services/llm_usage_service.py`, `GenerationOut.costKnown` |
+| 2026-10-31 | Budget job vượt trần ⇒ `BUDGET_EXCEEDED` fatal, không retry | **CHỌN (kiểm soát chi phí)** | `worker/generation.py`, `job_service.classify_error` |
 
 ---
 

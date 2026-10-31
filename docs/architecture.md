@@ -95,6 +95,14 @@ class LLMProvider(ABC):
 - **MockProvider:** deterministic, không network — dùng cho dev/test và acceptance E2E.
 - Adapter OpenAI/Anthropic thêm sau với cùng interface; API key qua env, **không hardcode**.
 - Sai schema → retry có giới hạn → job failed với error có cấu trúc.
+- **P2.2 usage/cost:** adapter ghi `UsageRecord` (provider/model/kind/token/latency) vào
+  `ContextVar` collector của task. Worker flush vào `llm_usage_events` + cộng dồn
+  `generation_jobs.{llm_calls,prompt_tokens,completion_tokens,cost_estimate_usd}` sau mỗi bài.
+  Lời gọi interview/proposal trong request cũng được ghi (session riêng, best-effort) vì chi phí
+  đã phát sinh dù request sau đó rollback. `cost_estimate_usd = NULL` = **chưa cấu hình giá**,
+  không phải miễn phí.
+- **P2.2 budget guard:** `GENERATION_MAX_TOKENS_PER_JOB` / `GENERATION_MAX_COST_USD_PER_JOB`
+  chặn job vượt trần với `BUDGET_EXCEEDED` (fatal, không retry).
 
 ### 3.4. Background Generation (Celery + Redis)
 
@@ -197,6 +205,9 @@ Trạng thái course: `interview → proposed → approved → generating → re
 
 ## 6. Giới hạn đã biết (giai đoạn này)
 
+0. P2.2: chất lượng sư phạm/factual **chưa được đo bằng người chấm** trong repo; rubric deterministic
+   (schema/DAG/lint/quiz) đã có, LLM-as-judge chỉ là tín hiệu tham khảo. Cost chỉ đúng khi
+   `LLM_PRICING_JSON` được cấu hình đúng giá thực tế của model.
 1. P3.0: Source Registry chỉ lưu **metadata**; chưa có ingestion nội dung, chunking, embedding hay
    vector search ⇒ bài học luôn `general_ai_knowledge` và citation chưa thể `locator_verified`.
 2. Chưa có Tutor, RAG, gamification nâng cao (thiết kế trong docs, chưa code).

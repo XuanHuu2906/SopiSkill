@@ -561,7 +561,9 @@ async def test_max_tokens_is_per_call_kind():
 
     kinds = provider.max_tokens_by_kind
     assert kinds["interview"] < kinds["lesson"] < kinds["proposal"]
-    assert seen == kinds
+    # `judge` (P2.2) chỉ dùng cho evaluator, không nằm trong 3 call sinh nội dung.
+    assert seen == {kind: kinds[kind] for kind in seen}
+    assert kinds["judge"] > 0
 
 
 async def test_budget_check_uses_call_specific_limit():
@@ -727,3 +729,40 @@ async def test_schema_repair_can_be_disabled():
     with pytest.raises(SchemaInvalidError):
         await provider.generate_interview_questions("x")
     assert calls["n"] == 1
+
+
+# ---------- P2.2 — bounded schema repair for proposal/lesson ----------
+
+
+async def test_proposal_schema_repair_is_bounded_and_requests_fix():
+    calls: list[str] = []
+    bad = json.loads(json.dumps(VALID_PROPOSAL))
+    bad["units"][0]["lessonTitles"] = []  # sai schema (Pydantic min_length=1)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        user = json.loads(request.content)["messages"][1]["content"]
+        calls.append(user)
+        if len(calls) == 1:
+            return _chat_response(bad)
+        return _chat_response(_valid_curriculum_proposal())
+
+    payload = await _provider(handler).generate_proposal("x", ["q"] * 5, ["a"] * 5)
+    assert len(calls) == 2
+    assert "KHÔNG hợp lệ" in calls[1]
+    assert payload.units
+
+
+async def test_lesson_schema_repair_is_bounded():
+    calls = {"n": 0}
+    bad = json.loads(json.dumps(VALID_LESSON))
+    bad["blocks"] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return _chat_response(bad)
+
+    provider = _provider(handler)
+    provider.max_schema_retries = 1
+    with pytest.raises(SchemaInvalidError):
+        await provider.generate_lesson("x", ProposalPayload(**VALID_PROPOSAL), "u", "l", [])
+    assert calls["n"] == 2  # 1 lần + 1 lần sửa, không hơn

@@ -168,6 +168,11 @@ async def get_generation(
         attempts=job.attempts_count,
         dispatched=job.dispatched_at is not None,
         lastErrorCode=job.last_error_code,
+        llmCalls=job.llm_calls or 0,
+        promptTokens=job.prompt_tokens,
+        completionTokens=job.completion_tokens,
+        costEstimateUsd=job.cost_estimate_usd,
+        costKnown=job.cost_estimate_usd is not None,
     )
 
 

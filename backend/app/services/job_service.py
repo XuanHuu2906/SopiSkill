@@ -63,6 +63,9 @@ def classify_error(exc: BaseException) -> tuple[str, bool]:
     if isinstance(exc, TRANSIENT_EXCEPTIONS):
         return "PROVIDER_TIMEOUT" if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) else "TRANSIENT_ERROR", True
     message = str(exc)
+    # P2.2 — vượt trần token/chi phí của job: retry chỉ đốt thêm tiền ⇒ fatal.
+    if message.startswith("BUDGET_EXCEEDED"):
+        return "BUDGET_EXCEEDED", False
     if message.startswith("NO_PROPOSAL"):
         return "NO_PROPOSAL", False
     if message.startswith("LEASE_LOST"):

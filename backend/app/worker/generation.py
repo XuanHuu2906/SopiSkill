@@ -28,8 +28,10 @@ from app.models import (
     Unit,
 )
 from app.providers import SchemaInvalidError, get_provider
+from app.providers.usage import collect_usage
 from app.schemas.schemas import ProposalPayload
 from app.services import citation_service, source_evaluation, source_service
+from app.services import llm_usage_service
 from app.services import source_context as source_context_service
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,20 @@ def _content_signature(blocks) -> str:
     trực tiếp sẽ luôn "khác". Chuẩn hoá qua JSON trước khi so.
     """
     return json.dumps(blocks or [], sort_keys=True, ensure_ascii=False)
+
+
+async def _flush_usage_safely(db, usage, job_id, user_id) -> None:
+    """Ghi usage event; lỗi accounting KHÔNG được làm hỏng job sinh bài."""
+    if usage is None:
+        return
+    try:
+        await llm_usage_service.flush_usage(
+            db, usage, job_id=job_id, user_id=user_id
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001 — accounting là best-effort, không phải nội dung
+        logger.warning("llm usage flush failed job_id=%s", job_id, exc_info=False)
+        await db.rollback()
 
 
 async def _run_generation_async(job_id: str) -> None:
@@ -114,9 +130,20 @@ async def _generate(WorkerSession, job_id: str) -> None:
         if course is None:
             await job_service.fail_or_requeue(db, jid, course_id, RuntimeError("COURSE_MISSING"))
             return
+        # Scalar owner id phải đọc TRƯỚC rollback (P2.2 usage attribution).
+        course_user_id = course.user_id
 
         try:
-            await _generate_lessons(db, job, course)
+            with collect_usage() as usage:
+                try:
+                    await _generate_lessons(db, job, course, usage)
+                except Exception:
+                    # Chi phí đã phát sinh dù job lỗi → ghi usage trong transaction
+                    # mới (transaction nội dung đã ở trạng thái lỗi) để không mất
+                    # dấu chi phí, rồi mới rollback phần nội dung dở dang.
+                    await db.rollback()
+                    await _flush_usage_safely(db, usage, jid, course_user_id)
+                    raise
         except Exception as exc:  # noqa: BLE001 — mọi lỗi phải phân loại rõ ràng
             await db.rollback()
             outcome = await job_service.fail_or_requeue(db, jid, course_id, exc)
@@ -133,7 +160,7 @@ async def _generate(WorkerSession, job_id: str) -> None:
             )
 
 
-async def _generate_lessons(db, job: GenerationJob, course: Course) -> None:
+async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) -> None:
     from sqlalchemy import select
 
     from app.services import job_service
@@ -297,6 +324,13 @@ async def _generate_lessons(db, job: GenerationJob, course: Course) -> None:
             job.lessons_done = lesson_index
             job.heartbeat_at = datetime.now(UTC)
             await db.commit()
+
+            # P2.2 — token/cost accounting. Flush sau mỗi bài để job luôn có số
+            # liệu chi phí ngay cả khi worker chết giữa chừng; sau đó chặn job
+            # vượt trần token/chi phí (fatal, không retry vì retry đốt thêm tiền).
+            if usage is not None:
+                await _flush_usage_safely(db, usage, job.id, course.user_id)
+            await llm_usage_service.enforce_job_budget(db, job.id)
 
     if await job_service.is_superseded(db, job):
         raise RuntimeError("SUPERSEDED")

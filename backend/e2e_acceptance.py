@@ -256,6 +256,19 @@ step(
     f"status={gen2['status']} attempts={gen2.get('attempts')}",
 )
 
+_usage_fields = {"llmCalls", "promptTokens", "completionTokens", "costEstimateUsd", "costKnown"}
+# 5e. P2.2 — response generation có usage/cost và KHÔNG lộ prompt/nội dung.
+# Mock không phát sinh usage ⇒ llmCalls=0; real provider ⇒ llmCalls>0. `costKnown`
+# phản ánh việc server có cấu hình giá model hay không (false ≠ miễn phí).
+step(
+    "5e. Generation co usage/cost metadata",
+    _usage_fields <= set(gen2.keys())
+    and isinstance(gen2.get("llmCalls"), int)
+    and isinstance(gen2.get("costKnown"), bool),
+    f"llmCalls={gen2.get('llmCalls')} costKnown={gen2.get('costKnown')} "
+    f"cost={gen2.get('costEstimateUsd')}",
+)
+
 # 6. Course detail >= 2 lessons
 st, detail = call("GET", f"/v1/courses/{course_id}", None, 200)
 lessons = [l for u in detail["units"] for l in u["lessons"]]
