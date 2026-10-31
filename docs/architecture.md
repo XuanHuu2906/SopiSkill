@@ -156,7 +156,7 @@ Chi tiết: `docs/source-research-agent.md`.
 Trợ giảng trong bài học: hỏi đáp stream theo **thread**, ngữ cảnh do server dựng.
 
 ```
-POST /v1/courses/{c}/tutor/messages                    → SSE (delta/done/error/heartbeat/cancelled)
+POST /v1/courses/{c}/tutor/messages                    → SSE (delta/tool/done/error/heartbeat/cancelled)
 POST /v1/courses/{c}/tutor/messages/{m}/stop           → cờ dừng server-side (P3.1)
 GET  /v1/courses/{c}/tutor/usage                       → allowance 24h (P3.1)
 GET  /v1/courses/{c}/tutor/threads                     → thread của user trong course
@@ -193,6 +193,21 @@ GET  /v1/courses/{c}/tutor/threads/{t}                 → lịch sử đầy đ
 - **Replay semantics (chốt):** explicit restart — **không** `Last-Event-ID`, `replaySupported=false`.
 - **Giới hạn đã biết:** tool allowlist (`read_lesson`/`explain_deeper`) là P3.1 lát B; rate limit
   chưa phân tán; stop không bảo đảm dừng tính phí phía provider.
+### 3.10. Tutor tools (P3.1 lát B — đã triển khai, mặc định TẮT)
+
+- **Allowlist cố định** trong `app/services/tutor_tools.py`: `read_lesson`, `explain_deeper`
+  (dùng được), `read_source` (allowlist nhưng trả `TUTOR_TOOL_NOT_AVAILABLE` tới P4.1).
+- **Không dùng native tool-calling**: model trả JSON `{tool, args}` qua `plan_tutor_tool`; server
+  parse → validate (`extra=forbid`, `blockIndex` trong biên public blocks) → execute. Nhờ vậy mock,
+  provider OpenAI-compatible và provider tương lai dùng chung một contract, và server luôn là bên
+  quyết định — không có tool nào model tự chạy.
+- **Bounded loop:** `TUTOR_TOOL_MAX_CALLS` (2), planner timeout `TUTOR_TOOL_TIMEOUT_SECONDS` (3s);
+  dừng sau kết quả đầu tiên. Planner lỗi/không hỗ trợ ⇒ lượt hỏi vẫn trả lời, không có frame `tool`.
+- **Kết quả tool là dữ liệu không tin cậy:** đưa vào prompt sau system prompt trong delimiter
+  `<<<TOOL_BAT_DAU>>>`; chỉ public blocks nên không có answer key.
+- **Audit** `tutor_tool_calls`: name/ok/duration/summary(server dựng)/error_code; **không** lưu nội
+  dung tool hay prompt.
+- Flag `TUTOR_TOOLS_ENABLED=false` (mặc định) ⇒ không gọi planner, không frame `tool`.
 - Feature flag `TUTOR_ENABLED=false` ⇒ endpoint trả `503 TUTOR_DISABLED`, flow cũ không đổi.
 
 ## 4. Luồng nghiệp vụ

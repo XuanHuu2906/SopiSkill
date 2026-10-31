@@ -251,7 +251,7 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P2.1 | TODO | High | Generation bằng LLM thật có kiểm chứng nếu có credentials |
 | P2.2 | **DONE 2026-10-31** | High | `0007_p22_eval_cost`; dataset 12 topic + rubric deterministic + LLM-as-judge + cost/budget guard; 270 pytest, 51/51 E2E, real eval 12/12 |
 | P3.0 (Tutor Core) | **DONE 2026-10-31** | High | `0008_p30_tutor_core`; 306 pytest + 2 race + 58/58 E2E (tutor on) / 52/52 (off) |
-| P3.1 (Tools/cancel/quota) | **PARTIAL — lát A DONE 2026-10-31** | High | `0009_p31_tutor_controls`; stop server-side + allowance + stale reap + usage; tools allowlist = lát B |
+| P3.1 (Tools/cancel/quota) | **DONE (lát A + B) 2026-10-31** | High | `0009_p31_tutor_controls` + `0010_p31_tutor_tools`; stop/allowance/stale/usage + tool allowlist/audit |
 | P3.0b (Source Registry + Evidence Contract) | **DONE 2026-10-31** | High | `0005_p30_source_registry`; 190 pytest + 3 race + 47/47 E2E |
 | P2.SR (Source Research Agent) | **DONE 2026-10-31** | High | `0006_p2sr_source_research`; agent độc lập + registry/idempotency + flag off/on; offline adapter (mock/curated) |
 | P4.0–P4.1 | TODO (nền P3.0b + P2.SR đã sẵn) | High | PDF → hybrid RAG → citations xác thực |
@@ -479,14 +479,14 @@ POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop  (P3.1)
 
 **Chia 2 lát.** Lát A (đã xong 2026-10-31) không đổi provider contract; lát B (tools) cần mở rộng re-export/tool schema.
 
-- [ ] P3.1.1 Tool allowlist **read-only** lúc đầu: `read_lesson`, `explain_deeper`; validate JSON arguments và authorization trước mỗi tool call. *(lát B)*
-- [ ] P3.1.2 Tool max-iterations/time budget, audit `tool_calls` (name, safe summary, ok, duration); model không được gọi tool ngoài allowlist. *(lát B)*
+- [x] P3.1.1 Tool allowlist **read-only**: `read_lesson`, `explain_deeper` (allowlist cố định trong `services/tutor_tools.py`); tên lạ ⇒ `TUTOR_TOOL_NOT_ALLOWED` trước khi execute; args `extra=forbid` + `blockIndex` trong biên public blocks; authorization dựa trên course/lesson đã resolve server-side ở bước prepare.
+- [x] P3.1.2 Tool loop bounded: `TUTOR_TOOL_MAX_CALLS` (mặc định 2, dừng sau khi có 1 kết quả), `TUTOR_TOOL_TIMEOUT_SECONDS` cho planner, audit `tutor_tool_calls` (name/ok/duration_ms/summary server-dựng/error_code), nội dung tool **không** lưu DB.
 - [ ] P3.1.3 `read_source` **chỉ bật sau P4.1** khi source/chunk ownership & provenance hoạt động; không có source thì từ chối hữu ích. *(sau P4.1)*
 - [x] P3.1.4 Cancel/stop server-side: `POST .../tutor/messages/{messageId}/stop` ghi `cancel_requested_at`; vòng stream kiểm cờ theo thời gian (kể cả khi provider trả token liên tục) và ghi `cancelled` giữ phần đã nhận. Response nói rõ `providerStopGuaranteed=false` — không hoàn chi phí đã sinh. Đã test stop giữa stream (offline) + stop-vs-completed race (PostgreSQL).
 - [x] P3.1.5 SSE replay/resume: **chọn explicit restart, KHÔNG hứa resume**. `id = streamId:seq` giữ nguyên nhưng không có event log bền vững ⇒ không hỗ trợ `Last-Event-ID`; `replaySupported=false` trong thread detail và UI nói "tải lại lịch sử". Ghi rõ trong `docs/specs/10-AI-TUTOR-SSE.md`.
 - [x] P3.1.6 Usage allowance: trần lượt/24h + trần token/24h theo user, lưu ở `tutor_usage_events` (metadata-only); `GET .../tutor/usage` trả `used/limits/remaining/runningStreams/tokensKnown`; lỗi 429 kèm `quota` có cấu trúc và chặn TRƯỚC khi tạo message/gọi provider. Thêm trần stream đồng thời/user (`TUTOR_CONCURRENCY_LIMIT`). Rate limit phân tán vẫn để P6.
 - [x] P3.1.7 Safety (lát A): prompt injection vẫn chỉ là user data (test cũ giữ nguyên); chặn runaway bằng `TUTOR_MAX_CONCURRENT_STREAMS` + timeout stream + heartbeat; message mồ côi (server restart) được reap thành `failed/TUTOR_STALE` thay vì treo `running`; log không chứa prompt/nội dung/key.
-- [ ] P3.1.8 UI “giải thích sâu hơn” hoặc gợi mở từ block đang học. *(lát B — phụ thuộc tool)* — Lát A đã có UI nút **Dừng** gọi server-side và hiển thị quota/remaining.
+- [x] P3.1.8 UI tool: khung “Công cụ trợ giảng đã dùng” hiển thị frame `tool` (tên + đã dùng/bị từ chối + mã lỗi), có `aria-label`; panel gợi ý hỏi “giải thích sâu hơn”. Không sao chép interaction/design từ sản phẩm khác.
 
 **Acceptance / Gate:** 0 cross-user leakage trong negative test; tool gọi đúng allowlist; cancel behavior trung thực; quota vượt trả response rõ và không gọi provider; no duplicate messages on retry.  
 **Không làm:** Tool cho model tùy ý thực thi code, truy cập web nội bộ hay cập nhật lesson không có xác nhận người dùng.

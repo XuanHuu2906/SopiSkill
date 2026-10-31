@@ -31,6 +31,8 @@
 | T-014 Tutor server-side stop | P3.1 lát A | Flag honoured while tokens flow; `cancelled` frame; partial kept; stop-vs-completed race |
 | T-015 Tutor allowance accounting | P3.1 lát A | Message/token/concurrency limits block before provider; `quota` in error body |
 | T-016 Tutor stale stream recovery | P3.1 lát A | Orphan `running` → `failed/TUTOR_STALE`, user not locked |
+| T-017 Tutor tool allowlist | P3.1 lát B | Unknown tool/args/OOB blocked before execute; audit metadata-only |
+| T-018 Tutor tool resilience | P3.1 lát B | Planner error/unsupported ⇒ turn still answers, no `tool` frame |
 | T-014 Tool allowlist/cancel | P3.1 | Unauthorized tool blocked, stop semantics observed |
 | T-015 PDF ingest failcases | P4.0 | Reject corrupt/oversize, no cross-user data |
 | T-016 Citation integrity | P4.1 | All display citations resolve valid authorized chunks |

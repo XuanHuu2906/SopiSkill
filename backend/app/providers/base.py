@@ -119,6 +119,30 @@ class LLMProvider(ABC):
             f"Provider '{self.name}' không hỗ trợ lời gọi JSON cho evaluator."
         )
 
+    async def plan_tutor_tool(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        available_tools: list[str],
+        max_input_chars: int,
+    ) -> dict:
+        """Chọn tool read-only cho một lượt tutor (P3.1 lát B).
+
+        Contract:
+          - Trả `{"tool": <name> | None, "args": {...}}`; server **luôn** validate
+            lại tên/args (không tin output model).
+          - Không được thực thi gì: chỉ đề xuất. Executor nằm ở
+            `services/tutor_tools.py` với allowlist cố định.
+          - Provider không hỗ trợ phải raise `ProviderConfigError` thay vì trả
+            tool bịa — tầng trên sẽ coi như "không dùng tool" và vẫn trả lời.
+
+        Mặc định không hỗ trợ: adapter cũ không tự nhiên có năng lực này.
+        """
+        raise ProviderConfigError(
+            f"Provider '{self.name}' không hỗ trợ tool planning cho tutor."
+        )
+
     async def stream_tutor_reply(
         self,
         *,

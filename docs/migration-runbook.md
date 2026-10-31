@@ -241,3 +241,36 @@ POSTGRES_TEST_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p31_tu
 - `downgrade` mất **usage event** của tutor và cờ stop đang chờ (không khôi phục từ schema).
 - Thread/message/course/lesson/source/citation **không** bị đụng.
 - DB dev `ailp` đã backup (`backup_pre_p31_20261031_140156.sql`, trong container db) trước upgrade.
+
+## P3.1 lát B Tutor tool audit — revision `0010_p31_tutor_tools`
+
+Thay đổi (expand-only): thêm bảng `tutor_tool_calls` + 4 index; **không** sửa cột/bảng cũ.
+
+```bash
+# throwaway check (đã chạy 2026-10-31)
+docker exec reverseengineer-db-1 psql -U ailp -d postgres   -c "DROP DATABASE IF EXISTS p31b_migration_check"   -c "CREATE DATABASE p31b_migration_check"
+cd backend
+DATABASE_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p31b_migration_check"   python -m alembic upgrade head                          # → 0010_p31_tutor_tools (head), 19 bảng
+DATABASE_URL=… python -m alembic downgrade 0009_p31_tutor_controls   # → 18 bảng, tutor_tool_calls biến mất
+DATABASE_URL=… python -m alembic upgrade head                        # forward recovery OK
+```
+
+Introspection đã kiểm: `tutor_tool_calls` 10 cột (không có cột nội dung/args thô), FK
+`users`/`courses`/`tutor_messages` (`ON DELETE CASCADE`), index `(message_id)`, `created_at`,
+`user_id`, `course_id`.
+
+### Dữ liệu cũ vẫn đọc được (đã kiểm chứng)
+
+Seed thread + assistant message `completed` + 1 audit row ở revision 0009 → `downgrade 0009` (audit
+biến mất) → `upgrade head` → `tutor_messages.content/status` giữ nguyên ⇒ **không mất dữ liệu hội thoại**.
+
+### Race test (PostgreSQL throwaway `p31b_race_check`)
+
+```bash
+POSTGRES_TEST_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p31b_race_check"   python -m pytest tests/test_p31_tutor_postgres_concurrency.py -q     # 5 passed
+```
+
+### Giới hạn rollback
+
+- `downgrade` mất **audit tool**. Thread/message/usage/allowance không bị đụng.
+- DB dev `ailp` đã backup (`backup_pre_p31b_20261031_142709.sql`) trước upgrade.

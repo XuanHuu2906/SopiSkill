@@ -43,6 +43,7 @@ from app.models import (
     TutorMessageRole,
     TutorMessageStatus,
     TutorThread,
+    TutorToolCall,
     TutorUsageEvent,
     User,
 )
@@ -775,6 +776,45 @@ async def is_cancel_requested(db: AsyncSession, assistant_id: uuid.UUID) -> bool
         )
     ).scalar_one_or_none()
     return value is not None
+
+
+async def record_tool_call(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    course_id: uuid.UUID,
+    message_id: uuid.UUID,
+    name: str,
+    ok: bool,
+    duration_ms: int | None,
+    summary: str,
+    error_code: str | None,
+) -> None:
+    """Audit metadata một lần gọi tool read-only — không lưu nội dung tool."""
+    db.add(
+        TutorToolCall(
+            user_id=user_id,
+            course_id=course_id,
+            message_id=message_id,
+            name=name,
+            ok=ok,
+            duration_ms=duration_ms,
+            summary=(summary or "")[:400],
+            error_code=error_code,
+        )
+    )
+    await db.commit()
+
+
+async def list_tool_calls(db: AsyncSession, assistant_id: uuid.UUID) -> list[TutorToolCall]:
+    rows = (
+        await db.execute(
+            select(TutorToolCall)
+            .where(TutorToolCall.message_id == assistant_id)
+            .order_by(TutorToolCall.created_at.asc())
+        )
+    ).scalars().all()
+    return list(rows)
 
 
 async def record_usage(

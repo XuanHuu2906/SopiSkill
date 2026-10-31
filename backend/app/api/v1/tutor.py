@@ -57,7 +57,7 @@ from app.schemas.schemas import (
     TutorThreadOut,
     TutorUsageOut,
 )
-from app.services import course_service, sse, tutor_context, tutor_service
+from app.services import course_service, sse, tutor_context, tutor_service, tutor_tools
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +378,117 @@ async def _persist_usage(
                 await session.rollback()
 
 
+async def _persist_tool_audit(
+    prepared: tutor_service.PreparedTurn, result: tutor_tools.ToolLoopResult
+) -> None:
+    """Lưu audit tool read-only. Không lưu nội dung tool trả về."""
+    if not result.executions:
+        return
+    async with SessionLocal() as session:
+        for execution in result.executions:
+            try:
+                await tutor_service.record_tool_call(
+                    session,
+                    user_id=prepared.thread.user_id,
+                    course_id=prepared.thread.course_id,
+                    message_id=prepared.assistant_message.id,
+                    name=execution.name,
+                    ok=execution.ok,
+                    duration_ms=execution.duration_ms,
+                    summary=tutor_tools.audit_summary(execution),
+                    error_code=execution.error_code,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "tutor tool audit persist failed assistant=%s",
+                    prepared.assistant_message.id,
+                )
+                await session.rollback()
+
+
+async def _plan_tools(
+    prepared: tutor_service.PreparedTurn,
+    provider,
+    history: list[dict[str, str]],
+) -> tutor_tools.ToolLoopResult:
+    """Chạy tối đa `TUTOR_TOOL_MAX_CALLS` vòng plan→validate→execute.
+
+    Bất biến bảo mật:
+      - Tên tool ngoài allowlist ⇒ dừng, không execute (`TUTOR_TOOL_NOT_ALLOWED`).
+      - Args sai schema / blockIndex ngoài biên ⇒ dừng, không execute.
+      - Tool chưa khả dụng (read_source trước P4.1) ⇒ trả lỗi hữu ích, không bịa.
+      - Planner lỗi/timeout ⇒ coi như "không dùng tool", lượt hỏi vẫn trả lời.
+    """
+    settings = get_settings()
+    result = tutor_tools.ToolLoopResult()
+    if not settings.tutor_tools_enabled:
+        return result
+
+    available = [name for name, spec in tutor_tools.TOOLS.items()]
+    remaining = max(0, int(settings.tutor_tool_max_calls or 0))
+    history_msgs = list(history)
+
+    for _ in range(remaining):
+        try:
+            raw = await asyncio.wait_for(
+                provider.plan_tutor_tool(
+                    system=tutor_tools.TOOL_PLANNER_SYSTEM,
+                    messages=history_msgs,
+                    available_tools=available,
+                    max_input_chars=settings.llm_max_input_chars,
+                ),
+                timeout=max(0.5, float(settings.tutor_tool_timeout_seconds or 3.0)),
+            )
+        except asyncio.TimeoutError:
+            logger.warning("tutor tool plan timeout assistant=%s", prepared.assistant_message.id)
+            break
+        except ProviderError as exc:
+            logger.warning("tutor tool plan provider error code=%s", exc.code)
+            break
+        except Exception:  # noqa: BLE001
+            logger.warning("tutor tool plan crashed", exc_info=False)
+            break
+
+        name, args = tutor_tools.parse_tool_request(raw)
+        if name is None:
+            break
+        try:
+            parsed = tutor_tools.validate_request(
+                name, args, block_count=len(prepared.blocks)
+            )
+        except tutor_tools.ToolRequestError as exc:
+            result.executions.append(
+                tutor_tools.ToolExecution(
+                    name=name,
+                    ok=False,
+                    duration_ms=0,
+                    summary=exc.message,
+                    error_code=exc.code,
+                    args_summary=f"{name}(rejected)",
+                )
+            )
+            break
+
+        execution = tutor_tools.execute(
+            name,
+            parsed,
+            blocks=prepared.blocks,
+            current_block_index=prepared.block_index,
+            max_chars=settings.tutor_tool_max_result_chars,
+        )
+        result.executions.append(execution)
+        history_msgs.append(
+            {
+                "role": "user",
+                "content": tutor_tools.audit_summary(execution),
+            }
+        )
+        # Một tool đã đủ ngữ cảnh; không lặp vô hạn vì model có thể xin mãi.
+        break
+
+    return result
+
+
 async def _stream_turn(
     prepared: tutor_service.PreparedTurn,
     system: str,
@@ -393,6 +504,36 @@ async def _stream_turn(
     terminal: tutor_service.FinalState | None = None
     persisted = False
     usage = UsageCollector()
+
+    # Planner cũng là một lời gọi provider → phải nằm trong collector để token của
+    # nó được tính vào allowance, không bị "ẩn" khỏi trần token.
+    with collect_usage(usage):
+        tool_result = await _plan_tools(prepared, provider, history)
+    if tool_result.executions:
+        for execution in tool_result.executions:
+            yield sse.frame(
+                "tool",
+                {
+                    "streamId": stream_id,
+                    "messageId": message_id,
+                    "seq": seq,
+                    "name": execution.name,
+                    "status": "ok" if execution.ok else "failed",
+                    "summary": execution.summary,
+                    "durationMs": execution.duration_ms,
+                    "code": execution.error_code,
+                },
+                event_id=sse.seq_id(stream_id, seq),
+            )
+            seq += 1
+        section = tool_result.prompt_section(settings.tutor_tool_max_result_chars)
+        if section:
+            # Kết quả tool là DỮ LIỆU KHÔNG TIN CẬY, đặt sau system prompt.
+            system = f"{system}\n\n{section}"
+    if tool_result.executions:
+        # Ghi audit TRƯỚC frame đầu tiên để client đọc xong stream là thấy audit
+        # (không phụ thuộc task nền thắng race). Một insert, không đáng kể.
+        await _persist_tool_audit(prepared, tool_result)
 
     async with SessionLocal() as db:
         await tutor_service.mark_running(db, prepared.assistant_message.id)

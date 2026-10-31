@@ -591,6 +591,35 @@ class TutorUsageEvent(Base):
     )
 
 
+class TutorToolCall(Base):
+    """Audit một lần gọi tool read-only của tutor (P3.1 lát B).
+
+    Chỉ metadata: tên tool, args đã chuẩn hoá (không phải nội dung người học /
+    bài học), thời lượng, kết quả. Nội dung tool trả về được đưa vào prompt và
+    **không** lưu DB để tránh nhân bản dữ liệu học tập.
+    """
+
+    __tablename__ = "tutor_tool_calls"
+    __table_args__ = (
+        Index("ix_tutor_tool_calls_message_id", "message_id"),
+        Index("ix_tutor_tool_calls_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.id"), index=True)
+    message_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tutor_messages.id"))
+    name: Mapped[str] = mapped_column(Text)
+    ok: Mapped[bool] = mapped_column(default=False)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Mô tả ngắn do SERVER dựng (tên tool + args đã validate + ok/fail).
+    summary: Mapped[str] = mapped_column(Text, default="")
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class LessonAttempt(Base):
     __tablename__ = "lesson_attempts"
     __table_args__ = (

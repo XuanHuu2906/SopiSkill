@@ -15,6 +15,13 @@ import {
 } from "@/lib/api";
 import { useSessionQueryKey } from "../../providers";
 
+interface ToolNote {
+  name: string;
+  status: "ok" | "failed";
+  summary?: string;
+  code?: string;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -58,6 +65,7 @@ export default function TutorPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   const messageIdRef = useRef<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [toolNotes, setToolNotes] = useState<ToolNote[]>([]);
 
   const threads = useQuery({
     queryKey: threadsKey,
@@ -136,6 +144,18 @@ export default function TutorPanel({
       );
       return;
     }
+    if (event.event === "tool") {
+      setToolNotes((prev) => [
+        ...prev,
+        {
+          name: event.data.name ?? "tool",
+          status: event.data.status === "ok" ? "ok" : "failed",
+          summary: event.data.summary,
+          code: event.data.code,
+        },
+      ]);
+      return;
+    }
     if (event.event === "cancelled") {
       const targetId = event.data.messageId ?? messageIdRef.current;
       setMessages((prev) =>
@@ -168,6 +188,7 @@ export default function TutorPanel({
     const clientMessageId = newClientId("tmsg");
     messageIdRef.current = null;
     setNotice(null);
+    setToolNotes([]);
     const localUser: ChatMessage = {
       id: `local-${clientMessageId}`,
       role: "user",
@@ -328,6 +349,22 @@ export default function TutorPanel({
       >
         {messages.length === 0 && (
           <p className="muted">Chưa có câu hỏi nào trong bài này.</p>
+        )}
+        {toolNotes.length > 0 && (
+          <ul className="tutor-tool-notes" aria-label="Công cụ trợ giảng đã dùng">
+            {toolNotes.map((note, index) => (
+              <li key={`${note.name}-${index}`}>
+                <span className="badge badge-muted">
+                  {note.name}
+                </span>{" "}
+                <span className={note.status === "ok" ? "muted" : "error-text"}>
+                  {note.status === "ok" ? "đã dùng" : "bị từ chối"}
+                  {note.summary ? ` — ${note.summary}` : ""}
+                  {note.code ? ` (${note.code})` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
         {messages.map((message) => (
           <div

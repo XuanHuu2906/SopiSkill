@@ -359,6 +359,16 @@ textarea {
   flex-wrap: wrap;
 }
 
+.tutor-tool-notes {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
 .tutor-quota {
   margin-left: auto;
   font-size: 0.85rem;

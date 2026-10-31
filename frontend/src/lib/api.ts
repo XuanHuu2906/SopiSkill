@@ -266,7 +266,7 @@ export function fetchTutorThread(
 }
 
 export interface TutorStreamEvent {
-  event: "delta" | "done" | "error" | "heartbeat" | "cancelled";
+  event: "delta" | "done" | "error" | "heartbeat" | "cancelled" | "tool";
   data: {
     streamId?: string;
     messageId?: string;
@@ -279,6 +279,10 @@ export interface TutorStreamEvent {
     replayed?: boolean;
     reason?: string;
     partial?: boolean;
+    name?: string;
+    status?: "ok" | "failed";
+    summary?: string;
+    durationMs?: number;
     usage?: {
       promptTokens: number | null;
       completionTokens: number | null;

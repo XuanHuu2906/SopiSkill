@@ -8,7 +8,8 @@ SQLite in-memory dùng một connection chung nên không mô phỏng được r
 Các test dưới đây chứng minh trên PostgreSQL:
   - stop song song / stop-vs-complete race không xóa nội dung hay ghi đè trạng thái;
   - allowance đếm đúng khi nhiều lượt được chấp nhận đồng thời (không âm thầm vượt trần);
-  - redis/không phụ thuộc: mọi thứ nằm trong DB.
+  - audit tool (P3.1 lát B) ghi song song không mất bản ghi;
+  - không phụ thuộc Redis: mọi thứ nằm trong DB.
 """
 
 import asyncio
@@ -259,6 +260,60 @@ def test_stale_reap_unblocks_user_after_concurrent_attempts(monkeypatch):
             assert message.status is TutorMessageStatus.failed
             assert message.error_code == "TUTOR_STALE"
             assert running == 0
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_concurrent_tool_audit_writes_are_all_recorded(monkeypatch):
+    async def run():
+        monkeypatch.setattr(get_settings(), "tutor_enabled", True)
+        engine, sm = await _prepare()
+        try:
+            user_id, course_id, lesson_id = await _seed(sm)
+            request = TutorMessageRequest(
+                clientMessageId=uuid.uuid4().hex[:16],
+                threadId=None,
+                text="Hỏi",
+                contextRef={"lessonId": f"lsn_{lesson_id}", "blockIndex": 0},
+            )
+            async with sm() as db:
+                prepared = await tutor_service.prepare_turn(
+                    db,
+                    await db.get(Course, course_id),
+                    await db.get(User, user_id),
+                    request,
+                )
+
+            async def write_one(index: int):
+                async with sm() as db:
+                    await tutor_service.record_tool_call(
+                        db,
+                        user_id=user_id,
+                        course_id=course_id,
+                        message_id=prepared.assistant_message.id,
+                        name="read_lesson",
+                        ok=True,
+                        duration_ms=index,
+                        summary="read_lesson() -> ok",
+                        error_code=None,
+                    )
+
+            await asyncio.gather(*[write_one(i) for i in range(6)])
+
+            from app.models import TutorToolCall
+
+            async with sm() as db:
+                rows = (
+                    await db.execute(
+                        select(TutorToolCall).where(
+                            TutorToolCall.message_id == prepared.assistant_message.id
+                        )
+                    )
+                ).scalars().all()
+            assert len(rows) == 6
+            assert all(r.name == "read_lesson" and r.ok for r in rows)
         finally:
             await engine.dispose()
 

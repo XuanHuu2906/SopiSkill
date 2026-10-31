@@ -30,8 +30,8 @@ giữ nguyên nhãn PLANNED/NOT IMPLEMENTED.
 | P2.2 eval rubric, usage/cost, job budget | REPORTED IMPLEMENTED + TESTED | P2.2, migration `0007_p22_eval_cost` |
 | P3.0b source registry, P2.SR research agent | REPORTED IMPLEMENTED + TESTED (agent offline) | `0005_p30_source_registry`, `0006_p2sr_source_research` |
 | P3.0 AI Tutor SSE + lesson grounding | REPORTED IMPLEMENTED + TESTED (mock streaming) | `0008_p30_tutor_core`; real provider streaming NOT TESTED |
-| **P3.1 lát A** tutor stop/allowance/stale/replay semantics | REPORTED IMPLEMENTED + TESTED (mock) | `0009_p31_tutor_controls` |
-| P3.1 lát B tool allowlist + audit | PLANNED / **NOT IMPLEMENTED** | Master plan §12 |
+| P3.1 lát A tutor stop/allowance/stale/replay semantics | REPORTED IMPLEMENTED + TESTED (mock) | `0009_p31_tutor_controls` |
+| P3.1 lát B tool allowlist + audit | REPORTED IMPLEMENTED + TESTED (mock planner) | `0010_p31_tutor_tools`; tool quality với model thật NOT TESTED |
 | PDF/RAG (P4), adaptive learning (P5) | PLANNED / NOT IMPLEMENTED | Master plan P4/P5 |
 | Production deployment, distributed limit/backup restore drill | PLANNED / NOT VERIFIED | P6 |
 

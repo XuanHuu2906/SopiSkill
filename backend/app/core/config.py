@@ -118,6 +118,16 @@ class Settings(BaseSettings):
     tutor_stale_stream_seconds: float = 180.0
     # P3.1 — nhịp kiểm tra cờ stop server-side trong lúc stream (giây).
     tutor_cancel_poll_seconds: float = 1.0
+    # P3.1 lát B — tool allowlist (read-only). TẮT mặc định để không đổi hành vi:
+    # bật mới cho phép model yêu cầu read_lesson/explain_deeper.
+    tutor_tools_enabled: bool = False
+    # Số tool call tối đa cho MỘT lượt hỏi (chặn vòng lặp vô hạn).
+    tutor_tool_max_calls: int = 2
+    # Timeout một lần chạy tool (giây) — tool hiện tại là CPU-local, trần này chặn
+    # mọi executor tương lai vô tình block.
+    tutor_tool_timeout_seconds: float = 3.0
+    # Trần ký tự kết quả tool đưa vào prompt.
+    tutor_tool_max_result_chars: int = 3000
 
     # Auth
     jwt_secret: str = ""

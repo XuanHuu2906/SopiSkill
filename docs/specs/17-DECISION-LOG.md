@@ -57,14 +57,28 @@ Evidence: tests/test_p31_tutor_controls.py, PostgreSQL race test, development-pr
 ```
 
 ```text
-DEC-P31-A3: Tool allowlist split to P3.1 lát B
-Date / reviewer: 2026-10-31, user chose split scope
-Status: PENDING (implementation deferred)
-Context: tools need a tool-call schema decision (server-side deterministic JSON vs native tool API).
+DEC-P31-B1: Tutor tools = server-side deterministic JSON, not native tool_calls
+Date / reviewer: 2026-10-31, user chose option when asked; implemented same day
+Status: ACCEPTED
+Context: tools must work with mock provider offline and with any OpenAI-compatible adapter.
 Options: (a) server-side deterministic tools; (b) native OpenAI tool_calls; (c) no tools.
-Choice: (a) recorded as preferred direction, not yet implemented.
-Consequences: TUTOR-006 remains unimplemented; P3.1 cannot be called complete.
-Evidence: docs/SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md §12.
+Choice: (a). Model returns {tool, args} via `plan_tutor_tool`; server validates allowlist +
+  strict args + block bounds, then executes read-only code.
+Consequences: mock/provider share one contract; server is the only executor; no native streaming
+  of tool deltas; tool quality with real models still NOT TESTED.
+Evidence: app/services/tutor_tools.py, migration 0010, tests/test_p31_tutor_tools.py, E2E 63/63.
+```
+
+```text
+DEC-P31-B2: Tool scope = read_lesson + explain_deeper; read_source deferred to P4.1
+Date / reviewer: 2026-10-31
+Status: ACCEPTED
+Context: no ingested sources/chunks exist yet, so source tools would have nothing to read.
+Options: (a) implement read_source with fake data; (b) allowlist it but return
+  TUTOR_TOOL_NOT_AVAILABLE; (c) omit entirely.
+Choice: (b) — honest refusal instead of invented citations.
+Consequences: TUTOR-010 stays blocked on P4.1; the allowlist already reserves the name.
+Evidence: tutor_tools.TOOLS["read_source"].available == False + test.
 ```
 
 ## Format for new accepted decisions

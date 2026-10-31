@@ -2,6 +2,107 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-10-31 — P3.1 (lát B) Tutor tool allowlist + audit
+
+- Base commit: `b92c414` (branch `main`, working tree)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Scope & decisions:
+  - **Server-side deterministic tools, không native `tool_calls`.** Model trả JSON `{tool, args}`
+    qua hook `plan_tutor_tool`; server parse → validate → execute. Mock, adapter OpenAI-compatible
+    và provider tương lai dùng chung một contract, và **server là bên duy nhất thực thi** — model
+    không bao giờ tự chạy tool.
+  - **Allowlist là hằng số, không cấu hình runtime.** `read_lesson`, `explain_deeper` khả dụng;
+    `read_source` được allowlist nhưng trả `TUTOR_TOOL_NOT_AVAILABLE` tới khi P4.1 có chunk
+    ownership/provenance. Từ chối thật thay vì bịa trích dẫn.
+  - **Tool chỉ đọc public blocks.** Executor nhận `prepared.blocks` (đã qua `public_blocks`) nên
+    không có `answerIndex`/`answer`/`acceptedAnswers`/`pairs`; test kiểm cả prompt gửi provider.
+  - **Bounded loop, không runaway.** `TUTOR_TOOL_MAX_CALLS=2`, planner timeout 3s, dừng sau kết quả
+    đầu tiên. Planner lỗi/không hỗ trợ/trả rác ⇒ coi như không dùng tool, lượt hỏi vẫn trả lời.
+  - **Kết quả tool là dữ liệu không tin cậy** (delimiter `<<<TOOL_BAT_DAU>>>`) — chống prompt
+    injection từ nội dung bài; kết quả cắt theo `TUTOR_TOOL_MAX_RESULT_CHARS`.
+  - **Audit metadata-only.** Bảng `tutor_tool_calls` lưu name/ok/duration/summary(server dựng)/
+    error_code. Không lưu nội dung tool, args thô của model hay prompt.
+  - **Mặc định TẮT** (`TUTOR_TOOLS_ENABLED=false`) để hành vi P3.1 lát A không đổi.
+- IMPLEMENTED:
+  - `backend/app/services/tutor_tools.py` (mới): allowlist `TOOLS`, Pydantic args `extra=forbid`,
+    `parse_tool_request`, `validate_request` (biên block), `execute` (read-only), `audit_summary`,
+    `TOOL_PLANNER_SYSTEM`, mã lỗi `TUTOR_TOOL_NOT_ALLOWED` / `TUTOR_TOOL_INVALID_ARGS` /
+    `TUTOR_TOOL_NOT_AVAILABLE` / `TUTOR_TOOL_FAILED`.
+  - `backend/app/services/tutor_context.py`: `build_tool_results_section` (dữ liệu không tin cậy).
+  - `backend/app/services/tutor_service.py`: `record_tool_call`, `list_tool_calls`.
+  - `backend/app/models/models.py` + `app/models/__init__.py`: `TutorToolCall` (+ index/FK cascade).
+  - `backend/alembic/versions/0010_p31_tutor_tools.py` (mới): bảng `tutor_tool_calls` + 4 index,
+    expand-only, downgrade đối xứng.
+  - `backend/app/providers/base.py`: hook `plan_tutor_tool` (mặc định raise `ProviderConfigError`).
+  - `backend/app/providers/mock_provider.py`: planner deterministic theo keyword (không phải AI).
+  - `backend/app/providers/openai_compatible_provider.py`: `plan_tutor_tool` qua `request_json`;
+    lỗi provider ⇒ `{tool: None}` để lượt hỏi vẫn trả lời.
+  - `backend/app/api/v1/tutor.py`: `_plan_tools` (bounded loop), `_persist_tool_audit` (ghi trước
+    frame đầu), frame SSE `tool`, đưa kết quả tool vào system prompt sau dấu phân cách.
+  - `backend/app/core/config.py` + `.env.example` + `docker-compose.yml` (3 service):
+    `TUTOR_TOOLS_ENABLED`, `TUTOR_TOOL_MAX_CALLS`, `TUTOR_TOOL_TIMEOUT_SECONDS`,
+    `TUTOR_TOOL_MAX_RESULT_CHARS`.
+  - Frontend: `lib/api.ts` thêm event `tool` + field types; `TutorPanel.tsx` khung
+    "Công cụ trợ giảng đã dùng" (aria-label, ok/bị từ chối + mã), reset mỗi lượt; CSS
+    `.tutor-tool-notes`.
+  - `backend/e2e_acceptance.py`: +2 check `12k` (tool frame + turn done, hoặc flag tắt không frame),
+    `12l` (stream không lộ answer key) + helper `public_answer_is_leaked_text`.
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **344 passed, 17 skipped** (31.72s; trước 322/16).
+    Mới: `tests/test_p31_tutor_tools.py` (**17 test**),
+    `tests/test_p31_tutor_tools_migration_contract.py` (**5 test**).
+  - Tool ngoài allowlist bị chặn trước execute và vẫn audit `TUTOR_TOOL_NOT_ALLOWED`; frame không
+    chứa args của tool bị chặn; lượt hỏi vẫn `done`.
+  - Args sai schema (`extra`, thiếu `blockIndex`, âm) và `blockIndex` ngoài biên ⇒
+    `TUTOR_TOOL_INVALID_ARGS`; planner trả rác/`args` không phải dict ⇒ không tool nào chạy.
+  - Planner raise `ProviderError` hoặc provider không hỗ trợ tool ⇒ không có frame `tool`, lượt hỏi
+    vẫn trả lời đầy đủ.
+  - `read_source` ⇒ `TUTOR_TOOL_NOT_AVAILABLE` (không bịa nguồn).
+  - Prompt gửi provider chứa kết quả `read_lesson` nhưng **không** chứa `answerIndex`/
+    `acceptedAnswers`/`pairs`/`"answer"`.
+  - Tool call không tạo message hay usage event thừa; audit không có cột/không chứa nội dung bài.
+  - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK (9 routes).
+- TESTED (PostgreSQL throwaway `p31b_migration_check`):
+  - `alembic upgrade head` → `0010_p31_tutor_tools (head)`, 19 bảng; `tutor_tool_calls` 10 cột,
+    FK `users`/`courses`/`tutor_messages` (`ON DELETE CASCADE`), 4 index.
+  - `alembic downgrade 0009_p31_tutor_controls` → 18 bảng, bảng audit biến mất;
+    `tutor_messages.content/status` giữ nguyên; `upgrade head` lại OK.
+- TESTED (PostgreSQL race, throwaway `p31b_race_check`):
+  - `POSTGRES_TEST_URL=…/p31b_race_check python -m pytest tests/test_p31_tutor_postgres_concurrency.py -q`
+    → **5 passed** (thêm: 6 audit ghi song song đều được lưu, đúng `message_id`).
+- TESTED (Docker full stack + E2E, mock provider):
+  - Backup trước upgrade: `backup_pre_p31b_20261031_142709.sql` (trong container db).
+  - `docker compose up -d --build backend worker beat` → DB dev `ailp` ở `0010_p31_tutor_tools`;
+    health 200.
+  - `TUTOR_ENABLED=true TUTOR_TOOLS_ENABLED=true` → **63/63 PASS** (`12k` tool=explain_deeper
+    status=ok; `12l` không lộ answer key trong 15 435 byte stream).
+  - `TUTOR_ENABLED=true` (tools off) → **62/62 PASS** (`12k` xác nhận không có frame `tool`).
+  - Mặc định (tutor off) → **52/52 PASS**.
+  - Audit thật trong dev DB: 1 row `explain_deeper|true||64` (summary 64 ký tự, không nội dung bài).
+- NOT TESTED:
+  - **Chất lượng tool với model thật**: mock planner là rule keyword; chưa chạy provider thật
+    (không có quyền/ngân sách) ⇒ khả năng model chọn đúng tool là **UNKNOWN**.
+  - Native tool-calling: **không triển khai** (quyết định DEC-P31-B1) nên không có gì để test.
+  - Browser E2E (Playwright) cho khung tool notes.
+  - `read_source` (chờ P4.1).
+- BLOCKED: none cho lát B. `read_source` bị chặn có chủ ý bởi P4.1.
+- Database: **có migration** `0010_p31_tutor_tools` (expand-only; upgrade/downgrade/legacy-row đã
+  kiểm chứng trên DB throwaway; DB dev đã backup + upgrade).
+- Security: allowlist cố định + validate trước execute; biên block theo public projection; tool
+  không truy cập mạng/DB/ghi dữ liệu; kết quả tool là dữ liệu không tin cậy; audit không chứa
+  nội dung; frame `tool` không chứa raw args; flag mặc định tắt.
+- Regressions: 0. pytest 322 → **344 passed / 17 skipped**; E2E 63/63 (tutor+tools), 62/62 (tutor),
+  52/52 (off); tsc 0 lỗi; build OK.
+- Known limitations:
+  - Planner là một lời gọi LLM phụ ⇒ với provider thật, mỗi lượt có thể tốn thêm 1 request. Token
+    của planner nằm trong cùng `UsageCollector` nên được tính vào `TUTOR_TOKENS_PER_DAY` (chưa kiểm
+    với provider thật, vì mock không báo usage).
+  - Dừng sau 1 tool call: chưa hỗ trợ chuỗi nhiều tool (cố ý, tránh vòng lặp).
+  - Summary audit chỉ mô tả vị trí/loại, không phải bản ghi tái lập được.
+- PHASE GATE: **P3.1 = PASS cho phạm vi đã định nghĩa** (lát A + lát B, mock planner).
+  Chất lượng tool với model thật và `read_source` vẫn **NOT TESTED / BLOCKED by P4.1**.
+- NEXT: **P4.0** PDF ingestion (mở đường cho `read_source` + citation thật).
+
 ## 2026-10-31 — P3.1 (lát A) Tutor controls: stop, allowance, stale recovery, replay semantics
 
 - Base commit: `117e784` (branch `main`, working tree)

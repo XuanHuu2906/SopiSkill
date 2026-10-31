@@ -175,6 +175,41 @@ class MockProvider(LLMProvider):
             blocks=[teach, mc, blank, order, match, short],
         )
 
+    async def plan_tutor_tool(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        available_tools: list[str],
+        max_input_chars: int,
+    ) -> dict:
+        """Planner deterministic: chỉ gợi ý tool khi câu hỏi thật sự cần ngữ cảnh.
+
+        Không phải AI: quy tắc keyword rõ ràng, mục tiêu là đường đi tool-loop
+        có dữ liệu kiểm thử mà không cần network/chi phí. Chỉ trả tên tool nằm
+        trong `available_tools`; nếu không thì `{"tool": None}`.
+        """
+        question = ""
+        for message in reversed(messages):
+            if message.get("role") == "user":
+                question = str(message.get("content", "")).casefold()
+                break
+        if "explain_deeper" in available_tools and any(
+            phrase in question
+            for phrase in ("giải thích sâu", "sâu hơn", "kỹ hơn", "chi tiết hơn")
+        ):
+            return {"tool": "explain_deeper", "args": {"blockIndex": 0}}
+        if "read_lesson" in available_tools and any(
+            phrase in question
+            for phrase in ("đọc lại", "toàn bộ bài", "cả bài", "nội dung bài")
+        ):
+            return {"tool": "read_lesson", "args": {}}
+        if "read_source" in available_tools and any(
+            phrase in question for phrase in ("nguồn", "tài liệu", "trích dẫn")
+        ):
+            return {"tool": "read_source", "args": {}}
+        return {"tool": None, "args": {}}
+
     async def stream_tutor_reply(
         self,
         *,

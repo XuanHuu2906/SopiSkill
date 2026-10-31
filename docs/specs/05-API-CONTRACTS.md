@@ -68,12 +68,14 @@ Job status `queued/running/ready/failed`; response chỉ trả tiến độ th�
 
 | Method & path | Request | Response / note |
 |---|---|---|
-| `POST /v1/courses/{courseId}/tutor/messages` | `{clientMessageId,threadId?,text,contextRef:{lessonId,blockIndex}}` | `text/event-stream`: `delta`,`done`,`error`,`heartbeat`,`cancelled` |
+| `POST /v1/courses/{courseId}/tutor/messages` | `{clientMessageId,threadId?,text,contextRef:{lessonId,blockIndex}}` | `text/event-stream`: `delta`,`tool`,`done`,`error`,`heartbeat`,`cancelled` |
 | `POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop` | body rỗng | `{messageId,status,providerStopGuaranteed:false,notice}`; 404 `TUTOR_STOP_NOT_FOUND`; CSRF |
 | `GET /v1/courses/{courseId}/tutor/usage` | none | `{courseId,windowSeconds,used,limits,remaining,runningStreams,tokensKnown}` |
 | `GET /v1/courses/{courseId}/tutor/threads` | pagination params | owner-scoped list |
 | `GET /v1/courses/{courseId}/tutor/threads/{threadId}` | path | thread/messages, no cross-owner data; `replaySupported=false` |
 
+> Frame `tool` (P3.1 lát B): `{name,status,durationMs,summary,code?}`. Chỉ xuất hiện khi
+> `TUTOR_TOOLS_ENABLED=true`; không phải tool-calling native.
 > Usage scope theo course trong path (đã chốt), không dùng `GET /v1/tutor/usage` toàn cục ở P3.1 lát A.
 > `remaining: null` = không có trần. 429 khi hết allowance: `TUTOR_LIMIT_REACHED`,
 > `TUTOR_TOKEN_LIMIT_REACHED`, `TUTOR_CONCURRENCY_LIMIT`, mỗi lỗi kèm `quota` có cấu trúc.

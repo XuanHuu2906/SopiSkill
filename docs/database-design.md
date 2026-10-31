@@ -174,6 +174,22 @@ Metadata-only: **không** có cột prompt/câu trả lời/nội dung sinh ra. 
 tổng `prompt_tokens + completion_tokens` của 24h gần nhất; nếu provider không báo token,
 trần này không chặn được chi phí thật (`tokensKnown=false` trong API usage).
 
+### tutor_tool_calls (P3.1 lát B — revision `0010_p31_tutor_tools`)
+| cột | kiểu | ghi chú |
+|---|---|---|
+| id | UUID PK | |
+| user_id / course_id | UUID FK | scope audit theo owner/course |
+| message_id | UUID FK tutor_messages (ON DELETE CASCADE) | audit gắn đúng lượt trả lời |
+| name | text | tên tool **đã** nằm trong allowlist hoặc là request bị chặn |
+| ok | bool | tool chạy thành công hay bị từ chối/lỗi |
+| duration_ms | int nullable | thời gian execute |
+| summary | text | mô tả do server dựng (args đã validate + ok/fail), cắt 400 ký tự |
+| error_code | text nullable | `TUTOR_TOOL_NOT_ALLOWED` / `TUTOR_TOOL_INVALID_ARGS` / `TUTOR_TOOL_NOT_AVAILABLE` / … |
+| created_at | timestamptz | index `(message_id)`, `created_at` |
+
+Metadata-only: **không** có cột nội dung tool trả về, args thô của model hay prompt/câu trả lời.
+Index `message_id` để xem toàn bộ tool của một lượt; FK cascade để xóa thread không để lại audit mồ côi.
+
 ### lesson_attempts
 | cột | kiểu | ghi chú |
 |---|---|---|

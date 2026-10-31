@@ -23,6 +23,7 @@ import httpx
 from app.core.config import get_settings
 from app.providers.base import (
     LLMProvider,
+    ProviderError,
     ProviderAuthError,
     ProviderBudgetError,
     ProviderConfigError,
@@ -260,6 +261,43 @@ class OpenAICompatibleProvider(LLMProvider):
         return "\n".join(lines) + "\n"
 
     # ---------- tutor streaming (P3.0) ----------
+
+    # ---------- tutor tool planning (P3.1 lát B) ----------
+
+    async def plan_tutor_tool(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        available_tools: list[str],
+        max_input_chars: int,
+    ) -> dict:
+        """Một lời gọi JSON ngắn để model chọn tool read-only.
+
+        Không phải tool-calling native: model trả JSON `{tool, args}` rồi server
+        validate + execute. Như vậy mock/test/provider thật dùng chung một
+        contract và server luôn là bên quyết định (allowlist + biên block).
+        Lỗi/bịa định dạng ⇒ trả `{"tool": None}` để lượt hỏi vẫn trả lời được.
+        """
+        from app.services import tutor_tools
+
+        allowed = ", ".join(sorted(available_tools))
+        planner_system = (
+            tutor_tools.TOOL_PLANNER_SYSTEM
+            + f"\nTool khả dụng ở lượt này: {allowed or '(không có)'}."
+        )
+        try:
+            data = await self.request_json(
+                system=planner_system,
+                user=self._safe(messages[-1].get("content", "") if messages else "", 1200),
+                max_input_chars=max_input_chars,
+            )
+        except ProviderError as exc:
+            logger.warning(
+                "tutor tool plan failed provider=%s code=%s", self.name, exc.code
+            )
+            return {"tool": None, "args": {}}
+        return data
 
     async def stream_tutor_reply(
         self,

@@ -503,6 +503,15 @@ def call_sse(path: str, body: dict):
         return e.code, dict(e.headers), e.read().decode()
 
 
+
+def public_answer_is_leaked_text(raw: str) -> bool:
+    """SSE/JSON text có chứa tên field answer key không (kiểm thô, tất định)."""
+    lowered = raw.lower()
+    return any(
+        key in lowered
+        for key in ("answerindex", "acceptedanswers", '"pairs"', '"answer"')
+    )
+
 def parse_sse(raw: str):
     out = []
     chunk_sep = chr(10) + chr(10)
@@ -654,6 +663,43 @@ else:
         and _stop_404.get("detail", {}).get("code") == "TUTOR_STOP_NOT_FOUND",
         f"status={_st_stop_404}",
     )
+
+    # ---- P3.1 lát B: tool allowlist (chỉ kiểm khi bật TUTOR_TOOLS_ENABLED) ----
+    _tool_body = {
+        "clientMessageId": uuid.uuid4().hex[:16],
+        "threadId": None,
+        "text": "Giải thích sâu hơn giúp mình đoạn này",
+        "contextRef": _tutor_ctx,
+    }
+    _st_tool, _tool_hdrs, _tool_raw = call_sse(
+        f"/v1/courses/{course_id}/tutor/messages", _tool_body
+    )
+    _tool_events = parse_sse(_tool_raw)
+    _tool_frames = [e for e in _tool_events if e["event"] == "tool"]
+    if _tool_frames:
+        _tool_text = "".join(
+            e["data"].get("text", "") for e in _tool_events if e["event"] == "delta"
+        )
+        step(
+            "12k. Tool frame co ten trong allowlist + turn van done",
+            _st_tool == 200
+            and _tool_frames[0]["data"]["name"] in ("read_lesson", "explain_deeper")
+            and _tool_frames[0]["data"]["status"] in ("ok", "failed")
+            and _tool_events[-1]["event"] == "done"
+            and len(_tool_text) > 0,
+            f"tool={_tool_frames[0]['data']['name']} status={_tool_frames[0]['data']['status']}",
+        )
+        step(
+            "12l. Tool frame khong ro ri answer key trong stream",
+            not public_answer_is_leaked_text(_tool_raw),
+            f"bytes={len(_tool_raw)}",
+        )
+    else:
+        step(
+            "12k. Tool flag tat -> khong co tool frame (flow cu khong doi)",
+            "tool" not in [e["event"] for e in _tool_events],
+            f"events={sorted({e['event'] for e in _tool_events})}",
+        )
 
 # ---- Case lỗi ----
 
