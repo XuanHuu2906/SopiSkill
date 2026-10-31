@@ -30,6 +30,43 @@
 7. **P5:** Completion threshold 80%, XP formulas, version policy khi regenerate; có gamification công khai hay không.
 8. **P6:** Host/deployment, legal/privacy policy, backups SLA, incident response, dữ liệu được đưa sang real AI provider.
 
+
+## Accepted during P3.1 lát A (2026-10-31, agent implementation — user-approved scope)
+
+```text
+DEC-P31-A1: Tutor SSE replay semantics = explicit restart
+Date / reviewer: 2026-10-31, user chose option when asked
+Status: ACCEPTED
+Context: P3.1.5 requires documenting replay/resume semantics; no durable event log exists.
+Options: (a) explicit restart, no resume; (b) persist event log + Last-Event-ID.
+Choice: (a). Keep `id = streamId:seq` for future extension, but do NOT accept Last-Event-ID.
+Consequences: `replaySupported=false` stays; client reloads thread history after disconnect;
+  changing this requires an event-log table + reconnect tests before any claim.
+Evidence: docs/specs/10-AI-TUTOR-SSE.md §5, thread-detail response, E2E 12b.
+```
+
+```text
+DEC-P31-A2: Stop semantics = best-effort server cancellation, no refund claim
+Date / reviewer: 2026-10-31
+Status: ACCEPTED
+Context: pausing a provider stream cannot unsend tokens already generated/billed.
+Options: (a) claim "cancelled ⇒ free"; (b) expose cancel_requested + providerStopGuaranteed=false.
+Choice: (b). Endpoint writes `cancel_requested_at`; the stream task persists the terminal state.
+Consequences: UI says the partial answer is kept; docs state tokens already produced may be billed.
+Evidence: tests/test_p31_tutor_controls.py, PostgreSQL race test, development-progress P3.1 lát A.
+```
+
+```text
+DEC-P31-A3: Tool allowlist split to P3.1 lát B
+Date / reviewer: 2026-10-31, user chose split scope
+Status: PENDING (implementation deferred)
+Context: tools need a tool-call schema decision (server-side deterministic JSON vs native tool API).
+Options: (a) server-side deterministic tools; (b) native OpenAI tool_calls; (c) no tools.
+Choice: (a) recorded as preferred direction, not yet implemented.
+Consequences: TUTOR-006 remains unimplemented; P3.1 cannot be called complete.
+Evidence: docs/SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md §12.
+```
+
 ## Format for new accepted decisions
 
 ```text

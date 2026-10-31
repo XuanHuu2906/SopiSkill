@@ -204,3 +204,40 @@ Seed user/course/unit/lesson ở revision 0007 (`content_version=3`) → `upgrad
 ```bash
 POSTGRES_TEST_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p30_tutor_race_check"   python -m pytest tests/test_p30_tutor_postgres_concurrency.py -q    # 2 passed
 ```
+
+## P3.1 Tutor controls — revision `0009_p31_tutor_controls`
+
+Thay đổi (expand-only): thêm cột nullable `tutor_messages.cancel_requested_at`, index
+`ix_tutor_messages_status`, bảng `tutor_usage_events` (+2 index). Không đổi kiểu cột cũ,
+không thêm cột NOT NULL ⇒ không cần backfill.
+
+```bash
+# throwaway check (đã chạy 2026-10-31)
+docker exec reverseengineer-db-1 psql -U ailp -d postgres   -c "DROP DATABASE IF EXISTS p31_tutor_migration_check"   -c "CREATE DATABASE p31_tutor_migration_check"
+cd backend
+DATABASE_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p31_tutor_migration_check"   python -m alembic upgrade head                       # → 0009_p31_tutor_controls (head), 18 bảng
+DATABASE_URL=… python -m alembic downgrade 0008_p30_tutor_core   # → 17 bảng, bảng usage + cột + index biến mất
+DATABASE_URL=… python -m alembic upgrade head                    # forward recovery OK
+```
+
+Introspection đã kiểm: `tutor_usage_events` có 11 cột (không có cột nội dung/prompt), FK tới
+`users`/`courses`/`tutor_messages`, index `(user_id, created_at)`; `cancel_requested_at` nullable.
+
+### Dữ liệu cũ vẫn đọc được (đã kiểm chứng)
+
+Seed user/course/unit/lesson (`content_version=3`) + thread + assistant message `completed` ở
+revision 0008 → `upgrade head` → lesson giữ `content_version=3`/`status=ready`/grounding cũ,
+message giữ `status=completed`, `content='cũ'`, `cancel_requested_at IS NULL`,
+`tutor_usage_events` = 0 row ⇒ **không mất dữ liệu**, không backfill giả.
+
+### Race test (PostgreSQL throwaway `p31_tutor_race_check`)
+
+```bash
+POSTGRES_TEST_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p31_tutor_race_check"   python -m pytest tests/test_p31_tutor_postgres_concurrency.py -q     # 4 passed
+```
+
+### Giới hạn rollback
+
+- `downgrade` mất **usage event** của tutor và cờ stop đang chờ (không khôi phục từ schema).
+- Thread/message/course/lesson/source/citation **không** bị đụng.
+- DB dev `ailp` đã backup (`backup_pre_p31_20261031_140156.sql`, trong container db) trước upgrade.

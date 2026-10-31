@@ -1,7 +1,9 @@
-"""AI Tutor API (P3.0) — authenticated, owner-scoped SSE tutor.
+"""AI Tutor API (P3.1) — authenticated, owner-scoped SSE tutor.
 
 Endpoints:
   POST /v1/courses/{courseId}/tutor/messages   → SSE stream (delta/done/error/heartbeat)
+  POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop → cờ dừng server-side
+  GET  /v1/courses/{courseId}/tutor/usage      → trạng thái allowance 24h
   GET  /v1/courses/{courseId}/tutor/threads    → danh sách thread của user trong course
   GET  /v1/courses/{courseId}/tutor/threads/{threadId} → lịch sử đầy đủ
 
@@ -14,9 +16,13 @@ Bảo mật:
   - CSRF bắt buộc cho POST, rate limit riêng.
   - Stream không chứa secret; lỗi provider chỉ gửi mã + thông điệp chung.
 
-Giới hạn đã biết (P3.0): không có resume `Last-Event-ID`; không có endpoint stop
-server-side (P3.1). Client hủy stream thì server ghi trạng thái `cancelled` khi
-phát hiện ngắt kết nối, nhưng không bảo đảm provider dừng tính phí tức thời.
+Replay (P3.1.5, quyết định tường minh): **không hỗ trợ resume `Last-Event-ID`**
+vì không có event log bền vững. Mất mạng giữa stream ⇒ client tải lại lịch sử;
+`replaySupported=false` được trả trong thread detail để không hứa quá khả năng.
+
+Cancel (P3.1.4): stop là **best-effort có kiểm soát**. Server ghi cờ
+`cancel_requested_at`, vòng stream thấy cờ thì dừng producer và ghi `cancelled`
+kèm phần đã nhận. Không xóa chi phí/token đã phát sinh ở provider.
 """
 
 from __future__ import annotations
@@ -43,10 +49,13 @@ from app.providers import (
     ProviderError,
     get_provider,
 )
+from app.providers.usage import UsageCollector, collect_usage
 from app.schemas.schemas import (
     TutorMessageRequest,
+    TutorStopOut,
     TutorThreadListOut,
     TutorThreadOut,
+    TutorUsageOut,
 )
 from app.services import course_service, sse, tutor_context, tutor_service
 
@@ -62,6 +71,10 @@ _CONFIG_ERROR = {
 # Giữ tham chiếu tới task nền: asyncio chỉ giữ weak ref, task không được ref
 # có thể bị GC trước khi ghi xong trạng thái cuối.
 _BACKGROUND: set[asyncio.Task] = set()
+
+# Trần chờ producer đóng generator (giây). Provider không hợp tác với
+# CancelledError không được phép treo kết nối của người học vô hạn.
+_PRODUCER_JOIN_TIMEOUT = 5.0
 
 
 def _spawn(coro) -> None:
@@ -155,6 +168,40 @@ async def send_tutor_message(
         media_type="text/event-stream; charset=utf-8",
         headers=_stream_headers(prepared),
     )
+
+
+@router.get("/courses/{course_id}/tutor/usage", response_model=TutorUsageOut)
+async def get_tutor_usage(
+    course_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Allowance 24h của user. Không gọi provider, không tiêu quota."""
+    _require_enabled()
+    course = await course_service.get_owned_course(db, course_id, user.id)
+    # Dọn message mồ côi rồi mới đếm: nếu không commit, thay đổi bị rollback khi
+    # session đóng và user vẫn thấy stream "đang chạy" không tồn tại.
+    if await tutor_service.reap_stale_messages(db, user.id):
+        await db.commit()
+    return {"courseId": f"crs_{course.id}", **await tutor_service.quota_state(db, user.id)}
+
+
+@router.post(
+    "/courses/{course_id}/tutor/messages/{message_id}/stop", response_model=TutorStopOut
+)
+async def stop_tutor_message(
+    course_id: str,
+    message_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Yêu cầu dừng một câu trả lời đang stream (best-effort, owner-scoped)."""
+    _require_enabled()
+    verify_csrf(request)
+    rate_limit(request, "tutor_stop", limit=60, window_seconds=60)
+    course = await course_service.get_owned_course(db, course_id, user.id)
+    return await tutor_service.request_cancel(db, course, user.id, message_id)
 
 
 @router.get("/courses/{course_id}/tutor/threads", response_model=TutorThreadListOut)
@@ -299,6 +346,38 @@ async def _persist_cancelled(prepared: tutor_service.PreparedTurn, content: str)
             )
 
 
+async def _cancel_requested(assistant_id) -> bool:
+    """Đọc cờ stop bằng session riêng (không giữ transaction của request)."""
+    try:
+        async with SessionLocal() as session:
+            return await tutor_service.is_cancel_requested(session, assistant_id)
+    except Exception:  # noqa: BLE001 — lỗi đọc cờ không được làm chết stream
+        logger.warning("tutor cancel flag read failed assistant=%s", assistant_id)
+        return False
+
+
+async def _persist_usage(
+    prepared: tutor_service.PreparedTurn, collector: UsageCollector
+) -> None:
+    """Ghi metadata usage (token/latency) — không ghi prompt hay nội dung."""
+    async with SessionLocal() as session:
+        for record in collector.records:
+            try:
+                await tutor_service.record_usage(
+                    session,
+                    user_id=prepared.thread.user_id,
+                    course_id=prepared.thread.course_id,
+                    message_id=prepared.assistant_message.id,
+                    record=record,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "tutor usage persist failed assistant=%s",
+                    prepared.assistant_message.id,
+                )
+                await session.rollback()
+
+
 async def _stream_turn(
     prepared: tutor_service.PreparedTurn,
     system: str,
@@ -313,6 +392,7 @@ async def _stream_turn(
     seq = 0
     terminal: tutor_service.FinalState | None = None
     persisted = False
+    usage = UsageCollector()
 
     async with SessionLocal() as db:
         await tutor_service.mark_running(db, prepared.assistant_message.id)
@@ -336,9 +416,16 @@ async def _stream_turn(
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(("crash", None))
 
-    producer = asyncio.create_task(produce())
+    # Context copy giữ cùng collector object ⇒ usage provider ghi trong `finally`
+    # vẫn nhìn thấy được sau khi stream dừng/bị hủy.
+    with collect_usage(usage):
+        producer = asyncio.create_task(produce())
+
     heartbeat = max(1.0, float(settings.tutor_heartbeat_seconds))
+    cancel_poll = max(0.2, float(settings.tutor_cancel_poll_seconds or 1.0))
     deadline = time.monotonic() + max(1.0, float(settings.tutor_stream_timeout_seconds))
+    last_heartbeat = time.monotonic()
+    last_cancel_check = time.monotonic()
 
     try:
         while True:
@@ -363,18 +450,45 @@ async def _stream_turn(
                 )
                 break
 
+            # P3.1 — stop server-side: kiểm tra cờ theo thời gian, KHÔNG chỉ khi
+            # queue timeout. Provider trả token liên tục thì vòng lặp không bao
+            # giờ rơi vào nhánh timeout, nên stop sẽ không được thấy.
+            if now - last_cancel_check >= cancel_poll:
+                last_cancel_check = now
+                if await _cancel_requested(prepared.assistant_message.id):
+                    terminal = tutor_service.FinalState(
+                        status=TutorMessageStatus.cancelled,
+                        content="".join(collected),
+                        finish_reason="cancelled",
+                        error_code=tutor_service.TUTOR_CANCELLED,
+                    )
+                    yield sse.frame(
+                        "cancelled",
+                        {
+                            "streamId": stream_id,
+                            "messageId": message_id,
+                            "seq": seq,
+                            "reason": tutor_service.TUTOR_CANCELLED,
+                            "partial": True,
+                        },
+                        event_id=sse.seq_id(stream_id, seq),
+                    )
+                    break
+
             try:
                 kind, value = await asyncio.wait_for(
-                    queue.get(), timeout=min(heartbeat, deadline - now)
+                    queue.get(), timeout=max(0.05, min(heartbeat, deadline - now))
                 )
             except asyncio.TimeoutError:
                 # Heartbeat không chứa nội dung người học.
-                yield sse.frame(
-                    "heartbeat",
-                    {"ts": int(time.time() * 1000)},
-                    event_id=sse.seq_id(stream_id, seq),
-                )
-                seq += 1
+                if time.monotonic() - last_heartbeat >= heartbeat:
+                    last_heartbeat = time.monotonic()
+                    yield sse.frame(
+                        "heartbeat",
+                        {"ts": int(time.time() * 1000)},
+                        event_id=sse.seq_id(stream_id, seq),
+                    )
+                    seq += 1
                 continue
 
             if kind == "delta":
@@ -448,8 +562,20 @@ async def _stream_turn(
             break
 
         assert terminal is not None
+        # Đợi producer đóng generator để provider kịp ghi usage (`finally` của
+        # adapter). Không có bước này thì frame `done` có thể báo thiếu usage dù
+        # provider đã trả token.
+        if not producer.done():
+            if terminal.status != TutorMessageStatus.completed:
+                producer.cancel()
+            # Provider không hợp tác có thể bỏ qua CancelledError; chờ có trần để
+            # generator không treo vô hạn và không giữ kết nối của người học.
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(producer, timeout=_PRODUCER_JOIN_TIMEOUT)
         await _persist_final_state(prepared, terminal)
         persisted = True
+        prompt_tokens = sum(r.prompt_tokens or 0 for r in usage.records) or None
+        completion_tokens = sum(r.completion_tokens or 0 for r in usage.records) or None
         if terminal.status == TutorMessageStatus.completed:
             yield sse.frame(
                 "done",
@@ -459,6 +585,12 @@ async def _stream_turn(
                     "seq": seq,
                     "finishReason": terminal.finish_reason,
                     "replayed": False,
+                    # NULL/không có ⇒ provider không báo usage, không phải 0.
+                    "usage": {
+                        "promptTokens": prompt_tokens,
+                        "completionTokens": completion_tokens,
+                        "known": bool(usage.records),
+                    },
                 },
                 event_id=sse.seq_id(stream_id, seq),
             )
@@ -466,7 +598,9 @@ async def _stream_turn(
         if not producer.done():
             producer.cancel()
         with contextlib.suppress(BaseException):
-            await producer
+            await asyncio.wait_for(producer, timeout=_PRODUCER_JOIN_TIMEOUT)
+        if usage.records:
+            _spawn(_persist_usage(prepared, usage))
         if not persisted:
             # Client ngắt giữa stream (hoặc lỗi trước terminal): ghi `cancelled`
             # bằng task tách rời — không tuyên bố đã xong, không để treo `running`.

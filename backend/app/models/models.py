@@ -519,6 +519,8 @@ class TutorMessage(Base):
         # `created_at` để sắp xếp vì độ phân giải giây làm user/assistant trùng
         # timestamp và thứ tự hiển thị sẽ ngẫu nhiên.
         Index("ix_tutor_messages_thread_position", "thread_id", "position"),
+        # P3.1 — đếm stream đang chạy / dọn message mồ côi theo trạng thái.
+        Index("ix_tutor_messages_status", "status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
@@ -542,11 +544,50 @@ class TutorMessage(Base):
     finish_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # P3.1 — cờ stop do client yêu cầu qua endpoint riêng. Stream đang chạy thấy
+    # cờ này thì dừng producer và ghi `cancelled`; KHÔNG xóa chi phí đã phát sinh
+    # ở provider (không thể hoàn tiền token đã sinh).
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TutorUsageEvent(Base):
+    """Một lượt gọi provider của tutor (P3.1) — metadata, không có nội dung.
+
+    Tách khỏi `llm_usage_events` vì bảng kia khóa chính theo generation job và
+    được worker flush theo job. Tutor chạy trong request API/stream, cần đếm
+    allowance theo user và theo ngày một cách độc lập.
+    """
+
+    __tablename__ = "tutor_usage_events"
+    __table_args__ = (
+        Index("ix_tutor_usage_events_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    course_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("courses.id"), nullable=True
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tutor_messages.id"), nullable=True
+    )
+    provider: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(Text)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    finish_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # NULL = provider không báo usage; KHÔNG phải 0 token.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
 

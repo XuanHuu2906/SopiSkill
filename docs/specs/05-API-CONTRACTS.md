@@ -64,15 +64,19 @@ Job status `queued/running/ready/failed`; response chỉ trả tiến độ th�
 
 ## 4. New endpoints — PROPOSED ONLY
 
-### Tutor P3
+### Tutor P3 (P3.0 + P3.1 lát A — IMPLEMENTED)
 
 | Method & path | Request | Response / note |
 |---|---|---|
-| `POST /v1/courses/{courseId}/tutor/messages` | `{clientMessageId,threadId?,text,contextRef:{lessonId,blockIndex}}` | `text/event-stream` (`delta`,`done`,`error`) |
+| `POST /v1/courses/{courseId}/tutor/messages` | `{clientMessageId,threadId?,text,contextRef:{lessonId,blockIndex}}` | `text/event-stream`: `delta`,`done`,`error`,`heartbeat`,`cancelled` |
+| `POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop` | body rỗng | `{messageId,status,providerStopGuaranteed:false,notice}`; 404 `TUTOR_STOP_NOT_FOUND`; CSRF |
+| `GET /v1/courses/{courseId}/tutor/usage` | none | `{courseId,windowSeconds,used,limits,remaining,runningStreams,tokensKnown}` |
 | `GET /v1/courses/{courseId}/tutor/threads` | pagination params | owner-scoped list |
-| `GET /v1/courses/{courseId}/tutor/threads/{threadId}` | path | thread/messages, no cross-owner data |
-| `POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop` | optional reason | best-effort cancel, P3.1 |
-| `GET /v1/tutor/usage` | none | user allowance, P3.1; có thể scope theo course nếu cần |
+| `GET /v1/courses/{courseId}/tutor/threads/{threadId}` | path | thread/messages, no cross-owner data; `replaySupported=false` |
+
+> Usage scope theo course trong path (đã chốt), không dùng `GET /v1/tutor/usage` toàn cục ở P3.1 lát A.
+> `remaining: null` = không có trần. 429 khi hết allowance: `TUTOR_LIMIT_REACHED`,
+> `TUTOR_TOKEN_LIMIT_REACHED`, `TUTOR_CONCURRENCY_LIMIT`, mỗi lỗi kèm `quota` có cấu trúc.
 
 ### Source & RAG P4
 

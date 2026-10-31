@@ -105,8 +105,19 @@ class Settings(BaseSettings):
     tutor_stream_timeout_seconds: float = 60.0
     # Khoảng nghỉ giữa hai heartbeat khi provider chưa trả token (giây).
     tutor_heartbeat_seconds: float = 15.0
-    # Số lượt hỏi tối đa/ngày/user. 0 = không giới hạn (P3.1 làm quota đầy đủ).
+    # Số lượt hỏi tối đa/24h/user. 0 = không giới hạn lượt.
     tutor_messages_per_day: int = 0
+    # P3.1 — allowance token: trần token (prompt+completion) cộng dồn trong 24h.
+    # 0 = không giới hạn. Token chưa biết (provider không báo) được tính là 0,
+    # nghĩa là trần này KHÔNG bảo đảm chặn chi phí khi provider không trả usage.
+    tutor_tokens_per_day: int = 0
+    # P3.1 — số stream đồng thời tối đa trên MỖI user (0 = không giới hạn).
+    tutor_max_concurrent_streams: int = 2
+    # P3.1 — một message `running`/`pending` quá tuổi này bị coi là mồ côi khi
+    # user mở thread mới; không có tiến trình nào còn ghi nó (server restart).
+    tutor_stale_stream_seconds: float = 180.0
+    # P3.1 — nhịp kiểm tra cờ stop server-side trong lúc stream (giây).
+    tutor_cancel_poll_seconds: float = 1.0
 
     # Auth
     jwt_secret: str = ""

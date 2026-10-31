@@ -156,9 +156,11 @@ Chi tiết: `docs/source-research-agent.md`.
 Trợ giảng trong bài học: hỏi đáp stream theo **thread**, ngữ cảnh do server dựng.
 
 ```
-POST /v1/courses/{c}/tutor/messages            → SSE (delta/done/error/heartbeat)
-GET  /v1/courses/{c}/tutor/threads             → thread của user trong course
-GET  /v1/courses/{c}/tutor/threads/{t}         → lịch sử đầy đủ, thứ tự ổn định
+POST /v1/courses/{c}/tutor/messages                    → SSE (delta/done/error/heartbeat/cancelled)
+POST /v1/courses/{c}/tutor/messages/{m}/stop           → cờ dừng server-side (P3.1)
+GET  /v1/courses/{c}/tutor/usage                       → allowance 24h (P3.1)
+GET  /v1/courses/{c}/tutor/threads                     → thread của user trong course
+GET  /v1/courses/{c}/tutor/threads/{t}                 → lịch sử đầy đủ, thứ tự ổn định
 ```
 
 - **Grounding server-side:** `contextRef.lessonId` được resolve lại với `lesson.course_id == course.id`
@@ -172,8 +174,25 @@ GET  /v1/courses/{c}/tutor/threads/{t}         → lịch sử đầy đủ, th�
   replay nội dung đã lưu (**không** gọi provider lần 2); đang chạy ⇒ `409 MESSAGE_IN_PROGRESS`.
 - **Trạng thái trung thực:** `pending → running → completed | failed | cancelled`. Client ngắt stream
   ⇒ server ghi `cancelled` (không tuyên bố đã xong), nội dung một phần được giữ.
-- **Giới hạn đã biết:** không hỗ trợ `Last-Event-ID`/resume từng byte; chưa có endpoint stop
-  server-side (P3.1); quota mới là trần ngày đơn giản, chưa phải allowance đầy đủ.
+### 3.9. Tutor controls (P3.1 lát A — đã triển khai, vẫn sau `TUTOR_ENABLED`)
+
+- **Stop server-side:** `POST .../{messageId}/stop` ghi `cancel_requested_at` (owner-scoped, 404 nếu
+  không thuộc user). Vòng stream kiểm cờ theo thời gian (`TUTOR_CANCEL_POLL_SECONDS`) — không chỉ khi
+  queue rỗng, nếu không provider trả token liên tục sẽ không thấy stop. Khi thấy cờ: emit frame
+  `cancelled`, hủy producer, ghi `cancelled` + phần đã nhận. Response luôn nói
+  `providerStopGuaranteed=false`: **không** hoàn chi phí/token provider đã sinh.
+- **Allowance bền vững:** trần lượt/24h (`TUTOR_MESSAGES_PER_DAY`), trần token/24h
+  (`TUTOR_TOKENS_PER_DAY`, tổng từ `tutor_usage_events`), trần stream đồng thời/user
+  (`TUTOR_MAX_CONCURRENT_STREAMS`). Kiểm **trước** khi tạo message/gọi provider; 429 trả
+  `detail.quota` có cấu trúc. Rate limit vẫn in-memory per-process (distributed để P6).
+- **Usage metadata-only:** `tutor_usage_events` lưu provider/model/token/latency/finish_reason,
+  **không** lưu prompt hay nội dung. Token NULL = provider không báo ⇒ `tokensKnown=false` và trần
+  token không phản ánh chi phí thật.
+- **Stale recovery:** message `pending/running` quá `TUTOR_STALE_STREAM_SECONDS` → `failed/TUTOR_STALE`
+  khi user bắt đầu lượt mới hoặc gọi usage, tránh khóa user ở `409 MESSAGE_IN_PROGRESS` vĩnh viễn.
+- **Replay semantics (chốt):** explicit restart — **không** `Last-Event-ID`, `replaySupported=false`.
+- **Giới hạn đã biết:** tool allowlist (`read_lesson`/`explain_deeper`) là P3.1 lát B; rate limit
+  chưa phân tán; stop không bảo đảm dừng tính phí phía provider.
 - Feature flag `TUTOR_ENABLED=false` ⇒ endpoint trả `503 TUTOR_DISABLED`, flow cũ không đổi.
 
 ## 4. Luồng nghiệp vụ

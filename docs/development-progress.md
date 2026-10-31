@@ -2,6 +2,106 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-10-31 — P3.1 (lát A) Tutor controls: stop, allowance, stale recovery, replay semantics
+
+- Base commit: `117e784` (branch `main`, working tree)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Phạm vi: **lát A** của P3.1. Lát B (tool allowlist `read_lesson`/`explain_deeper` + audit
+  `tool_calls`) **chưa làm** — cần mở rộng provider contract, ghi rõ NOT IMPLEMENTED.
+- Scope & decisions:
+  - **Stop là best-effort có kiểm soát, không phải "cancel là xong".** Endpoint chỉ ghi cờ
+    `cancel_requested_at`; task stream còn sống mới ghi trạng thái cuối + nội dung đã nhận. Stop trên
+    message đã xong trả trạng thái thật (`completed`), không giả vờ đã dừng. Response luôn có
+    `providerStopGuaranteed=false` vì **không thể hoàn chi phí/token provider đã sinh**.
+  - **Kiểm cờ theo thời gian, không chỉ khi queue rỗng.** Đây là lỗi dễ mắc: nếu chỉ kiểm trong nhánh
+    `asyncio.TimeoutError`, provider trả token liên tục thì vòng lặp không bao giờ vào nhánh đó ⇒ stop
+    vô hiệu. Test `test_running_stream_detects_cancel_flag_in_frame_stream` chứng minh stop hoạt động
+    với provider "endless".
+  - **Allowance đếm từ DB, không RAM.** Lượt = số user message trong 24h; token = tổng
+    `prompt_tokens + completion_tokens` của `tutor_usage_events`. Provider không báo token ⇒ token = 0
+    và API trả `tokensKnown=false`: trần token **không** bảo vệ được chi phí trong trường hợp đó.
+  - **Replay: chốt explicit restart.** Giữ `id = streamId:seq` nhưng **không** hỗ trợ `Last-Event-ID`
+    (không có event log bền vững). Mất mạng ⇒ tải lịch sử; `replaySupported=false` giữ nguyên.
+  - **Stale recovery thay vì treo `running` vĩnh viễn.** Server restart làm stream chết nhưng row vẫn
+    `running` ⇒ user bị 409 mãi. Reap thành `failed/TUTOR_STALE` khi bắt đầu lượt mới hoặc gọi usage.
+- IMPLEMENTED:
+  - `backend/app/models/models.py`: `TutorMessage.cancel_requested_at` (nullable),
+    `Index("ix_tutor_messages_status")`, model mới `TutorUsageEvent` (metadata-only).
+  - `backend/alembic/versions/0009_p31_tutor_controls.py` (mới): cột nullable + 1 index + bảng usage
+    (+2 index), expand-only, downgrade đối xứng.
+  - `backend/app/services/tutor_service.py`: `quota_state`, `_used_today`, token quota,
+    `count_running_streams`, `_check_concurrency`, `reap_stale_messages`, `request_cancel`,
+    `is_cancel_requested`, `record_usage`; `_error` nhận `quota` có cấu trúc; mã lỗi mới
+    `TUTOR_TOKEN_LIMIT_REACHED`, `TUTOR_CONCURRENCY_LIMIT`, `TUTOR_STALE`, `TUTOR_STOP_NOT_FOUND`.
+  - `backend/app/api/v1/tutor.py`: `POST .../messages/{messageId}/stop`, `GET .../tutor/usage`,
+    poll cờ stop theo thời gian, frame SSE `cancelled`, usage trong frame `done`
+    (`promptTokens/completionTokens/known`), đợi producer đóng trước khi báo `done` để không mất usage,
+    persist `tutor_usage_events` bằng task tách rời sau stream.
+  - `backend/app/core/config.py` + `.env.example` + `docker-compose.yml` (3 service):
+    `TUTOR_TOKENS_PER_DAY`, `TUTOR_MAX_CONCURRENT_STREAMS`, `TUTOR_STALE_STREAM_SECONDS`,
+    `TUTOR_CANCEL_POLL_SECONDS`.
+  - `backend/app/schemas/schemas.py`: `TutorUsageOut`, `TutorQuota*`, `TutorStopOut`.
+  - Frontend: `lib/api.ts` (`fetchTutorUsage`, `stopTutorMessage`, `onMessageId`, event `cancelled`,
+    type usage trong `done`), `TutorPanel.tsx` (Dừng gọi server trước rồi abort, hiển thị
+    remaining/limits + `tokensKnown`, disable gửi khi hết quota, `aria` giữ nguyên),
+    `globals.css` (`.tutor-quota`).
+  - `backend/e2e_acceptance.py`: +3 check `12h` (usage có cấu trúc), `12i` (stop message đã xong trả
+    trạng thái thật), `12j` (stop message lạ 404).
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **322 passed, 16 skipped** (27.47s; trước 306/12).
+    Mới: `tests/test_p31_tutor_controls.py` (**11 test**), `tests/test_p31_tutor_migration_contract.py`
+    (**5 test**).
+  - Stop giữa stream với provider phát token liên tục ⇒ frame `cancelled`, producer bị hủy
+    (`produced < 9999`), DB `cancelled` + `error_code=TUTOR_CANCELLED`, phần đã nhận giữ nguyên.
+  - Stop idempotent (2 lần gọi không lỗi), stop message lạ 404, cross-user 404, thiếu CSRF 403,
+    stop message đã completed trả `completed` + không đổi nội dung.
+  - Quota lượt/token chặn **trước** khi tạo message (0 message, không gọi provider); 429 kèm
+    `detail.quota.used/remaining`; concurrency limit chặn stream thứ hai; stale reap mở khóa user.
+  - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK (9 routes, lesson 5.8 kB).
+- TESTED (PostgreSQL throwaway `p31_tutor_migration_check`):
+  - `alembic upgrade head` → exit 0 → `0009_p31_tutor_controls (head)`, 18 bảng;
+    `tutor_usage_events` 11 cột, FK users/courses/tutor_messages, index `(user_id, created_at)`;
+    `cancel_requested_at` nullable; `ix_tutor_messages_status` tồn tại.
+  - `alembic downgrade 0008_p30_tutor_core` → exit 0 → 17 bảng, bảng usage + cột + index biến mất;
+    `alembic upgrade head` lại OK.
+  - Seed legacy ở 0008 (lesson `content_version=3`, thread + message `completed`) → upgrade head →
+    lesson giữ nguyên, message giữ `status=completed`/`content='cũ'`/`cancel_requested_at` NULL
+    ⇒ **không mất dữ liệu**.
+- TESTED (PostgreSQL race, throwaway `p31_tutor_race_check`):
+  - `POSTGRES_TEST_URL=…/p31_tutor_race_check python -m pytest tests/test_p31_tutor_postgres_concurrency.py -q`
+    → **4 passed**: 8 stop song song idempotent; stop sau terminal không ghi đè; 5 usage event song
+    song cộng đúng 75 token; stale reap sau khi mark running.
+- TESTED (Docker full stack + E2E, mock provider):
+  - Backup trước khi upgrade: `backup_pre_p31_20261031_140156.sql` (trong container db).
+  - `docker compose up -d --build backend worker beat` → backend tự `alembic upgrade head`; DB dev
+    `ailp` ở `0009_p31_tutor_controls`; health 200.
+  - Flag **TẮT**: `E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py` → **52/52 PASS**.
+  - Flag **BẬT** (`TUTOR_ENABLED=true docker compose up -d backend`) → **61/61 PASS** (12h usage,
+    12i stop completed, 12j stop 404 đều pass).
+  - Trả mặc định (`docker compose up -d backend`) → E2E lại **52/52**.
+- NOT TESTED:
+  - **Real provider stop**: dừng vòng đọc SSE của server đã test, nhưng chưa kiểm với provider thật
+    (không có quyền/ngân sách) ⇒ hành vi tính phí/độ trễ dừng upstream là **UNKNOWN**.
+  - `tokensKnown=true` với usage thật từ provider: trần token mới test bằng seed event + record_usage
+    trực tiếp, chưa test end-to-end qua adapter OpenAI-compatible thật.
+  - Browser E2E cho nút Dừng mới (Playwright): build+typecheck OK, chưa chạy trình duyệt.
+  - Tool allowlist/audit `tool_calls` (P3.1 lát B) — **NOT IMPLEMENTED**.
+- BLOCKED: none cho lát A. Lát B (tools) cần chốt schema tool-call (server-side deterministic vs
+  native tool API) trước khi code.
+- Database: **có migration** `0009_p31_tutor_controls` (expand-only; upgrade/downgrade/legacy-row đã
+  kiểm chứng trên DB throwaway; DB dev đã backup + upgrade).
+- Security: stop owner-scoped 404 + CSRF; quota chặn trước provider; usage event không chứa nội dung;
+  log không chứa prompt/key; stale reap không tự đánh dấu `completed`; `cancelled` không xóa nội dung.
+- Regressions: 0. pytest 306 → **322 passed / 16 skipped**; E2E 52/52 (off) và 61/61 (on); build OK.
+- Known limitations:
+  - Stop không dừng được request đã gửi tới provider (chỉ dừng đọc stream) ⇒ token đã sinh vẫn tính phí.
+  - Trần token vô hiệu nếu provider không báo usage (`tokensKnown=false`).
+  - Rate limit vẫn in-memory per-process, chưa phân tán (P6).
+  - Không có `Last-Event-ID`/resume byte-by-byte (quyết định tường minh).
+- PHASE GATE: **P3.1 lát A = PASS** (cancel/allowance/stale/replay-semantics/UI quota có bằng chứng);
+  **lát B (tools) = NOT STARTED**, không được coi P3.1 là hoàn tất trọn vẹn.
+- NEXT: **P3.1 lát B** (tool allowlist + audit) hoặc **P4.0** PDF ingestion.
+
 ## 2026-10-31 — P3.0 AI Tutor Core (SSE + lesson grounding)
 - Base commit: `50e47c9` (branch `main`, working tree)
 - New commit/branch: **NOT COMMITTED** (working tree)

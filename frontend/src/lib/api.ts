@@ -266,7 +266,7 @@ export function fetchTutorThread(
 }
 
 export interface TutorStreamEvent {
-  event: "delta" | "done" | "error" | "heartbeat";
+  event: "delta" | "done" | "error" | "heartbeat" | "cancelled";
   data: {
     streamId?: string;
     messageId?: string;
@@ -277,7 +277,72 @@ export interface TutorStreamEvent {
     retryable?: boolean;
     finishReason?: string;
     replayed?: boolean;
+    reason?: string;
+    partial?: boolean;
+    usage?: {
+      promptTokens: number | null;
+      completionTokens: number | null;
+      known: boolean;
+    } | null;
   };
+}
+
+export interface TutorUsage {
+  courseId: string;
+  windowSeconds: number;
+  used: { messages: number; tokens: number };
+  limits: { messagesPerDay: number; tokensPerDay: number; maxConcurrentStreams: number };
+  remaining: { messages: number | null; tokens: number | null };
+  runningStreams: number;
+  tokensKnown: boolean;
+}
+
+export interface TutorStopResult {
+  messageId: string;
+  status: string;
+  providerStopGuaranteed: boolean;
+  notice: string | null;
+}
+
+export function fetchTutorUsage(courseId: string): Promise<TutorUsage> {
+  return api<TutorUsage>(`/v1/courses/${courseId}/tutor/usage`);
+}
+
+/**
+ * Yêu cầu server dừng một câu trả lời đang stream (P3.1).
+ *
+ * Đây là dừng **best-effort**: server ngừng vòng stream của chính nó ở lần kiểm
+ * tra kế tiếp, nhưng KHÔNG hoàn chi phí/token provider đã sinh. Client vẫn nên
+ * abort `fetch` để giải phóng kết nối.
+ */
+export async function stopTutorMessage(
+  courseId: string,
+  messageId: string
+): Promise<TutorStopResult> {
+  const res = await fetch(
+    `${API_URL}/v1/courses/${courseId}/tutor/messages/${messageId}/stop`,
+    {
+      method: "POST",
+      headers: { "X-CSRF-Token": getCsrfToken() },
+      credentials: "include",
+      cache: "no-store",
+    }
+  );
+  if (!res.ok) {
+    let code = "HTTP_ERROR";
+    let message = res.statusText;
+    try {
+      const data = await res.json();
+      if (data.detail?.code) {
+        code = data.detail.code;
+        message = data.detail.message ?? message;
+      }
+    } catch {
+      // ignore
+    }
+    throw new TutorStreamError(res.status, code, message);
+  }
+  return (await res.json()) as TutorStopResult;
 }
 
 export class TutorStreamError extends Error {
@@ -311,6 +376,7 @@ export async function streamTutorMessage(
   handlers: {
     signal?: AbortSignal;
     onThreadId?: (threadId: string) => void;
+    onMessageId?: (messageId: string) => void;
     onEvent: (event: TutorStreamEvent) => void;
   }
 ): Promise<void> {
@@ -346,6 +412,8 @@ export async function streamTutorMessage(
 
   const threadId = res.headers.get("x-tutor-thread-id");
   if (threadId) handlers.onThreadId?.(threadId);
+  const messageId = res.headers.get("x-tutor-message-id");
+  if (messageId) handlers.onMessageId?.(messageId);
   if (!res.body) throw new TutorStreamError(500, "NO_STREAM", "Server không trả stream.");
 
   const reader = res.body.getReader();

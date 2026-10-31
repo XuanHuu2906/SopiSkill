@@ -355,6 +355,13 @@ textarea {
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.tutor-quota {
+  margin-left: auto;
+  font-size: 0.85rem;
 }
 
 .tutor-actions .secondary {

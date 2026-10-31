@@ -43,6 +43,7 @@ from app.models import (
     TutorMessageRole,
     TutorMessageStatus,
     TutorThread,
+    TutorUsageEvent,
     User,
 )
 from app.schemas.schemas import TutorMessageRequest
@@ -57,6 +58,10 @@ TUTOR_THREAD_NOT_FOUND = "TUTOR_THREAD_NOT_FOUND"
 TUTOR_CONTEXT_INVALID = "TUTOR_CONTEXT_INVALID"
 MESSAGE_IN_PROGRESS = "MESSAGE_IN_PROGRESS"
 TUTOR_LIMIT_REACHED = "TUTOR_LIMIT_REACHED"
+TUTOR_TOKEN_LIMIT_REACHED = "TUTOR_TOKEN_LIMIT_REACHED"
+TUTOR_CONCURRENCY_LIMIT = "TUTOR_CONCURRENCY_LIMIT"
+TUTOR_STALE = "TUTOR_STALE"
+TUTOR_STOP_NOT_FOUND = "TUTOR_STOP_NOT_FOUND"
 TUTOR_PROVIDER_ERROR = "TUTOR_PROVIDER_ERROR"
 TUTOR_TIMEOUT = "TUTOR_TIMEOUT"
 TUTOR_CANCELLED = "TUTOR_CANCELLED"
@@ -64,10 +69,9 @@ TUTOR_CANCELLED = "TUTOR_CANCELLED"
 IN_PROGRESS_STATUSES = (TutorMessageStatus.pending, TutorMessageStatus.running)
 
 
-def _error(status_code: int, code: str, message: str) -> HTTPException:
-    return HTTPException(
-        status_code=status_code, detail={"code": code, "message": message}
-    )
+def _error(status_code: int, code: str, message: str, **extra) -> HTTPException:
+    detail = {"code": code, "message": message, **extra}
+    return HTTPException(status_code=status_code, detail=detail)
 
 
 def tutor_enabled() -> bool:
@@ -235,12 +239,16 @@ async def _find_by_client_id(
     return thread, user_message, assistant
 
 
-async def _check_daily_quota(db: AsyncSession, user_id: uuid.UUID) -> None:
-    limit = int(get_settings().tutor_messages_per_day or 0)
-    if limit <= 0:
-        return
+async def _used_today(db: AsyncSession, user_id: uuid.UUID) -> tuple[int, int]:
+    """(số lượt hỏi, tổng token đã dùng) trong 24h gần nhất.
+
+    Đếm **user message đã chấp nhận** (một lượt = một user message) để retry
+    hoặc assistant lỗi không bị tính thêm lần nữa. Token cộng từ usage events;
+    provider không báo usage ⇒ token = 0 và trần token KHÔNG bảo vệ được —
+    điều này được ghi rõ trong cấu hình và response (`tokensKnown`).
+    """
     since = datetime.now(UTC) - timedelta(days=1)
-    used = (
+    used_messages = (
         await db.execute(
             select(func.count())
             .select_from(TutorMessage)
@@ -252,12 +260,136 @@ async def _check_daily_quota(db: AsyncSession, user_id: uuid.UUID) -> None:
             )
         )
     ).scalar_one()
-    if int(used) >= limit:
+    tokens = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(TutorUsageEvent.prompt_tokens), 0),
+                func.coalesce(func.sum(TutorUsageEvent.completion_tokens), 0),
+            ).where(
+                TutorUsageEvent.user_id == user_id,
+                TutorUsageEvent.created_at >= since,
+            )
+        )
+    ).one()
+    return int(used_messages), int(tokens[0]) + int(tokens[1])
+
+
+async def quota_state(db: AsyncSession, user_id: uuid.UUID) -> dict:
+    """Trạng thái allowance hiện tại (không raise) — dùng cho GET và error body."""
+    settings = get_settings()
+    limits = {
+        "messagesPerDay": int(settings.tutor_messages_per_day or 0),
+        "tokensPerDay": int(settings.tutor_tokens_per_day or 0),
+        "maxConcurrentStreams": int(settings.tutor_max_concurrent_streams or 0),
+    }
+    used_messages, used_tokens = await _used_today(db, user_id)
+    running = await count_running_streams(db, user_id)
+    return {
+        "windowSeconds": 86400,
+        "used": {"messages": used_messages, "tokens": used_tokens},
+        "limits": limits,
+        "remaining": {
+            "messages": (
+                max(0, limits["messagesPerDay"] - used_messages)
+                if limits["messagesPerDay"] > 0
+                else None
+            ),
+            "tokens": (
+                max(0, limits["tokensPerDay"] - used_tokens)
+                if limits["tokensPerDay"] > 0
+                else None
+            ),
+        },
+        "runningStreams": running,
+        # Provider không báo token ⇒ trần token không chặn được chi phí thật.
+        "tokensKnown": used_tokens > 0,
+    }
+
+
+async def _check_daily_quota(db: AsyncSession, user_id: uuid.UUID) -> None:
+    settings = get_settings()
+    limit = int(settings.tutor_messages_per_day or 0)
+    token_limit = int(settings.tutor_tokens_per_day or 0)
+    if limit <= 0 and token_limit <= 0:
+        return
+    used_messages, used_tokens = await _used_today(db, user_id)
+    if limit > 0 and used_messages >= limit:
         raise _error(
             status.HTTP_429_TOO_MANY_REQUESTS,
             TUTOR_LIMIT_REACHED,
             "Bạn đã hết lượt hỏi trợ giảng trong 24 giờ qua.",
+            quota=await quota_state(db, user_id),
         )
+    if token_limit > 0 and used_tokens >= token_limit:
+        raise _error(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            TUTOR_TOKEN_LIMIT_REACHED,
+            "Bạn đã dùng hết hạn mức token trợ giảng trong 24 giờ qua.",
+            quota=await quota_state(db, user_id),
+        )
+
+
+async def count_running_streams(db: AsyncSession, user_id: uuid.UUID) -> int:
+    count = (
+        await db.execute(
+            select(func.count())
+            .select_from(TutorMessage)
+            .join(TutorThread, TutorThread.id == TutorMessage.thread_id)
+            .where(
+                TutorThread.user_id == user_id,
+                TutorMessage.role == TutorMessageRole.assistant,
+                TutorMessage.status.in_(IN_PROGRESS_STATUSES),
+            )
+        )
+    ).scalar_one()
+    return int(count)
+
+
+async def _check_concurrency(db: AsyncSession, user_id: uuid.UUID) -> None:
+    limit = int(get_settings().tutor_max_concurrent_streams or 0)
+    if limit <= 0:
+        return
+    running = await count_running_streams(db, user_id)
+    if running >= limit:
+        raise _error(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            TUTOR_CONCURRENCY_LIMIT,
+            f"Bạn đang có {running} câu trả lời đang chạy; hãy đợi hoặc dừng bớt.",
+        )
+
+
+async def reap_stale_messages(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """Đánh dấu `failed` các message in-progress quá tuổi của MỘT user.
+
+    Chỉ chạy khi user bắt đầu lượt mới hoặc gọi quota: nếu tiến trình giữ stream
+    chết (server restart), không có ai ghi trạng thái cuối và message treo
+    `running` mãi. Không tự đánh dấu `completed` — dữ liệu chưa xong không được
+    coi là xong.
+    """
+    seconds = float(get_settings().tutor_stale_stream_seconds or 0)
+    if seconds <= 0:
+        return 0
+    cutoff = datetime.now(UTC) - timedelta(seconds=seconds)
+    rows = (
+        await db.execute(
+            select(TutorMessage)
+            .join(TutorThread, TutorThread.id == TutorMessage.thread_id)
+            .where(
+                TutorThread.user_id == user_id,
+                TutorMessage.role == TutorMessageRole.assistant,
+                TutorMessage.status.in_(IN_PROGRESS_STATUSES),
+                TutorMessage.updated_at < cutoff,
+            )
+        )
+    ).scalars().all()
+    for message in rows:
+        message.status = TutorMessageStatus.failed
+        message.error_code = TUTOR_STALE
+        message.finish_reason = "stale"
+        message.updated_at = datetime.now(UTC)
+    if rows:
+        await db.flush()
+    return len(rows)
 
 
 @dataclass
@@ -308,6 +440,9 @@ async def prepare_turn(
 
     # Serialize per-user trước khi kiểm idempotency/quota.
     await _lock_user(db, user.id)
+    # Stream mồ côi (tiến trình giữ nó đã chết) phải thành `failed` trước khi
+    # quyết định replay/409, nếu không user bị khóa vĩnh viễn ở MESSAGE_IN_PROGRESS.
+    await reap_stale_messages(db, user.id)
 
     existing = await _find_by_client_id(
         db, user.id, course.id, body.clientMessageId
@@ -355,6 +490,7 @@ async def prepare_turn(
         )
 
     await _check_daily_quota(db, user.id)
+    await _check_concurrency(db, user.id)
 
     if body.threadId:
         thread = await get_owned_thread(db, course, user.id, body.threadId)
@@ -571,6 +707,98 @@ async def cancel_if_running(db: AsyncSession, assistant_id: uuid.UUID, content: 
     message.status = TutorMessageStatus.cancelled
     message.content = content[:20_000]
     message.error_code = TUTOR_CANCELLED
+    message.finish_reason = "cancelled"
     message.updated_at = datetime.now(UTC)
     await db.commit()
     return True
+
+
+async def request_cancel(
+    db: AsyncSession, course: Course, user_id: uuid.UUID, message_id: str
+) -> dict:
+    """Ghi cờ stop cho một assistant message của CHÍNH user.
+
+    Trả trạng thái thật ngay tại thời điểm gọi:
+      - `cancel_requested` nếu stream đang chạy và chưa terminal;
+      - `completed`/`failed`/`cancelled` nếu đã xong (stop không xóa nội dung,
+        không hoàn chi phí đã phát sinh);
+      - 404 nếu message không thuộc user/course hoặc không phải assistant.
+
+    Không ghi trực tiếp `cancelled` ở đây: nếu task stream còn sống, chính nó
+    ghi trạng thái cuối (kèm nội dung đã nhận) để không mất phần đã hiển thị.
+    """
+    mid = parse_prefixed_uuid(message_id)
+    if mid is None:
+        raise _error(status.HTTP_404_NOT_FOUND, TUTOR_STOP_NOT_FOUND, "Message không tồn tại.")
+    message = (
+        await db.execute(
+            select(TutorMessage)
+            .join(TutorThread, TutorThread.id == TutorMessage.thread_id)
+            .where(
+                TutorMessage.id == mid,
+                TutorMessage.course_id == course.id,
+                TutorMessage.role == TutorMessageRole.assistant,
+                TutorThread.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if message is None:
+        raise _error(status.HTTP_404_NOT_FOUND, TUTOR_STOP_NOT_FOUND, "Message không tồn tại.")
+
+    if message.status in IN_PROGRESS_STATUSES:
+        if message.cancel_requested_at is None:
+            message.cancel_requested_at = datetime.now(UTC)
+            message.updated_at = datetime.now(UTC)
+            await db.commit()
+        return {
+            "messageId": _prefixed("tmsg_", message.id),
+            "status": "cancel_requested",
+            "providerStopGuaranteed": False,
+            "notice": (
+                "Đã yêu cầu dừng. Server sẽ dừng stream ở lần kiểm tra kế tiếp; "
+                "token đã sinh trước đó vẫn có thể bị tính phí."
+            ),
+        }
+
+    return {
+        "messageId": _prefixed("tmsg_", message.id),
+        "status": message.status.value,
+        "providerStopGuaranteed": False,
+        "notice": "Câu trả lời đã kết thúc trước khi yêu cầu dừng được xử lý.",
+    }
+
+
+async def is_cancel_requested(db: AsyncSession, assistant_id: uuid.UUID) -> bool:
+    value = (
+        await db.execute(
+            select(TutorMessage.cancel_requested_at).where(TutorMessage.id == assistant_id)
+        )
+    ).scalar_one_or_none()
+    return value is not None
+
+
+async def record_usage(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    course_id: uuid.UUID,
+    message_id: uuid.UUID,
+    record,
+) -> None:
+    """Lưu metadata một lượt gọi provider. Không lưu prompt/nội dung."""
+    if record is None:
+        return
+    db.add(
+        TutorUsageEvent(
+            user_id=user_id,
+            course_id=course_id,
+            message_id=message_id,
+            provider=record.provider or "unknown",
+            model=record.model or "unknown",
+            prompt_tokens=record.prompt_tokens,
+            completion_tokens=record.completion_tokens,
+            latency_ms=record.latency_ms,
+            finish_reason=record.finish_reason,
+        )
+    )
+    await db.commit()

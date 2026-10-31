@@ -28,6 +28,9 @@
 | T-011 10 topic pedagogy evaluation | P2.2 | Reproducible rubric report, failure cases captured |
 | T-012 Tutor SSE full & disconnect | P3.0 | Ordered delta/done/error, persisted final state |
 | T-013 Tutor idempotency/quota | P3.0–P3.1 | No double calls, quota prevents request |
+| T-014 Tutor server-side stop | P3.1 lát A | Flag honoured while tokens flow; `cancelled` frame; partial kept; stop-vs-completed race |
+| T-015 Tutor allowance accounting | P3.1 lát A | Message/token/concurrency limits block before provider; `quota` in error body |
+| T-016 Tutor stale stream recovery | P3.1 lát A | Orphan `running` → `failed/TUTOR_STALE`, user not locked |
 | T-014 Tool allowlist/cancel | P3.1 | Unauthorized tool blocked, stop semantics observed |
 | T-015 PDF ingest failcases | P4.0 | Reject corrupt/oversize, no cross-user data |
 | T-016 Citation integrity | P4.1 | All display citations resolve valid authorized chunks |
@@ -61,7 +64,12 @@ Record logs/commands/exit codes. Do **not** label mocked flow as real provider s
 
 ## 5. P3/P4 separate release gates
 
-**Tutor gate:** SSE id/order, terminal event semantics, history persistence, 404 cross-user, quota block before provider, no duplicate call, tool allowlist/cancel behavior.  
+**Tutor gate:** SSE id/order, terminal event semantics, history persistence, 404 cross-user, quota block before provider, no duplicate call, tool allowlist/cancel behavior.
+
+**P3.1 lát A evidence (2026-10-31):** `tests/test_p31_tutor_controls.py` (11),
+`tests/test_p31_tutor_migration_contract.py` (5), `tests/test_p31_tutor_postgres_concurrency.py` (4,
+cần `POSTGRES_TEST_URL`), E2E 61/61 (tutor on) và 52/52 (off). Tool allowlist (T-006) vẫn **NOT TESTED**
+vì chưa triển khai.
 **RAG gate:** pages/chunks traceable from owned PDF, no file/URL abuse, 30+ retrieval eval queries, 100% displayed citations resolve valid owned pointers, no-source abstention and injected text test.
 
 ## 6. Evidence report template

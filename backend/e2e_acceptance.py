@@ -617,6 +617,44 @@ else:
         f"status={_st_smuggle}",
     )
 
+    # ---- P3.1: allowance + stop server-side ----
+    _st_usage, _usage = call("GET", f"/v1/courses/{course_id}/tutor/usage", None, 200)
+    step(
+        "12h. Usage tra quota co cau truc (used/limits/remaining)",
+        _st_usage == 200
+        and isinstance(_usage.get("used", {}).get("messages"), int)
+        and isinstance(_usage.get("limits", {}).get("messagesPerDay"), int)
+        and "remaining" in _usage
+        and "tokensKnown" in _usage
+        and _usage["used"]["messages"] >= 1,
+        f"status={_st_usage} used={_usage.get('used')} limits={_usage.get('limits')}",
+    )
+
+    # Stop trên message đã completed: phải trả trạng thái thật, không fake "đã dừng".
+    _stop_msg = _hdrs.get("X-Tutor-Message-Id") or _hdrs.get("x-tutor-message-id")
+    _st_stop, _stop_body = call(
+        "POST", f"/v1/courses/{course_id}/tutor/messages/{_stop_msg}/stop", {}
+    )
+    step(
+        "12i. Stop message da xong -> trang thai that, khong hua dung provider",
+        _st_stop == 200
+        and _stop_body.get("status") == "completed"
+        and _stop_body.get("providerStopGuaranteed") is False,
+        f"status={_st_stop} body={_stop_body.get('status')}",
+    )
+
+    _st_stop_404, _stop_404 = call(
+        "POST",
+        f"/v1/courses/{course_id}/tutor/messages/tmsg_{uuid.uuid4()}/stop",
+        {},
+    )
+    step(
+        "12j. Stop message khong ton tai -> 404 TUTOR_STOP_NOT_FOUND",
+        _st_stop_404 == 404
+        and _stop_404.get("detail", {}).get("code") == "TUTOR_STOP_NOT_FOUND",
+        f"status={_st_stop_404}",
+    )
+
 # ---- Case lỗi ----
 
 # B. User khác (đăng nhập riêng) truy cập course không thuộc quyền → 404

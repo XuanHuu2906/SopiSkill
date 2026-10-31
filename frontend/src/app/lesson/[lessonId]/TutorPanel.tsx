@@ -5,7 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchTutorThread,
   fetchTutorThreads,
+  fetchTutorUsage,
   newClientId,
+  stopTutorMessage,
   streamTutorMessage,
   TutorStreamError,
   type TutorStreamEvent,
@@ -26,7 +28,11 @@ const STATUS_NOTE: Record<string, string> = {
   TUTOR_CONTEXT_INVALID: "Ngữ cảnh bài học không hợp lệ, hãy tải lại trang.",
   MESSAGE_IN_PROGRESS: "Câu hỏi trước đang được xử lý, hãy chờ hoặc tải lại lịch sử.",
   TUTOR_LIMIT_REACHED: "Bạn đã hết lượt hỏi trợ giảng trong 24 giờ qua.",
+  TUTOR_TOKEN_LIMIT_REACHED: "Bạn đã dùng hết hạn mức token trợ giảng trong 24 giờ qua.",
+  TUTOR_CONCURRENCY_LIMIT: "Bạn đang có câu trả lời khác đang chạy, hãy đợi hoặc dừng bớt.",
+  TUTOR_STOP_NOT_FOUND: "Không tìm thấy câu trả lời để dừng.",
   TUTOR_TIMEOUT: "Hết thời gian chờ câu trả lời.",
+  TUTOR_STALE: "Câu trả lời trước bị gián đoạn (server khởi động lại).",
 };
 
 export default function TutorPanel({
@@ -51,12 +57,23 @@ export default function TutorPanel({
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const messageIdRef = useRef<string | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   const threads = useQuery({
     queryKey: threadsKey,
     queryFn: () => fetchTutorThreads(courseId),
     retry: false,
   });
+
+  const usageKey = useSessionQueryKey("tutor-usage", courseId);
+  const usage = useQuery({
+    queryKey: usageKey,
+    queryFn: () => fetchTutorUsage(courseId),
+    retry: false,
+    staleTime: 30_000,
+  });
+  const quotaExhausted =
+    usage.data?.remaining.messages === 0 || usage.data?.remaining.tokens === 0;
 
   // Auto-scroll trong vùng chat (không scroll cả trang) — WCAG-friendly.
   useEffect(() => {
@@ -119,6 +136,16 @@ export default function TutorPanel({
       );
       return;
     }
+    if (event.event === "cancelled") {
+      const targetId = event.data.messageId ?? messageIdRef.current;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === targetId ? { ...m, status: "cancelled" } : m
+        )
+      );
+      setNotice("Đã dừng theo yêu cầu. Phần trả lời đã nhận được giữ lại.");
+      return;
+    }
     if (event.event === "error") {
       const code = event.data.code ?? "TUTOR_PROVIDER_ERROR";
       const targetId = event.data.messageId ?? messageIdRef.current;
@@ -140,6 +167,7 @@ export default function TutorPanel({
     setError(null);
     const clientMessageId = newClientId("tmsg");
     messageIdRef.current = null;
+    setNotice(null);
     const localUser: ChatMessage = {
       id: `local-${clientMessageId}`,
       role: "user",
@@ -159,6 +187,18 @@ export default function TutorPanel({
       { id: assistantId, role: "assistant", content: "", status: "pending" },
     ]);
 
+    // Header và frame đều có thể mang messageId thật; chỉ đổi placeholder MỘT lần
+    // để delta sau đó cập nhật đúng bong bóng.
+    function adoptMessageId(realId: string) {
+      if (messageIdRef.current === realId) return;
+      const previous = assistantId;
+      messageIdRef.current = realId;
+      assistantId = realId;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === previous ? { ...m, id: realId } : m))
+      );
+    }
+
     try {
       await streamTutorMessage(
         courseId,
@@ -171,17 +211,9 @@ export default function TutorPanel({
         {
           signal: controller.signal,
           onThreadId: (id) => setThreadId(id),
+          onMessageId: adoptMessageId,
           onEvent: (event) => {
-            if (event.data.messageId && !messageIdRef.current) {
-              messageIdRef.current = event.data.messageId;
-              // Map placeholder → messageId thật để delta tiếp theo cập nhật đúng.
-              const realId = event.data.messageId;
-              const previous = assistantId;
-              assistantId = realId;
-              setMessages((prev) =>
-                prev.map((m) => (m.id === previous ? { ...m, id: realId } : m))
-              );
-            }
+            if (event.data.messageId) adoptMessageId(event.data.messageId);
             if (event.event === "delta") {
               setMessages((prev) =>
                 prev.map((m) =>
@@ -196,6 +228,7 @@ export default function TutorPanel({
         }
       );
       queryClient.invalidateQueries({ queryKey: threadsKey });
+      queryClient.invalidateQueries({ queryKey: usageKey });
     } catch (err) {
       if (controller.signal.aborted) {
         setMessages((prev) =>
@@ -222,8 +255,25 @@ export default function TutorPanel({
     }
   }
 
-  function stop() {
-    abortRef.current?.abort();
+  async function stop() {
+    const target = messageIdRef.current;
+    setStopping(true);
+    try {
+      // Ưu tiên nói với server TRƯỚC khi cắt kết nối: nếu chỉ abort, server chỉ
+      // biết client ngắt chứ không biết đây là "dừng có chủ ý".
+      if (target) {
+        const result = await stopTutorMessage(courseId, target);
+        if (result.status === "cancel_requested") {
+          setNotice(result.notice ?? "Đã yêu cầu dừng câu trả lời.");
+        }
+      }
+    } catch (err) {
+      // Không chặn việc dừng phía client vì lỗi mạng/CSRF.
+      setError(err instanceof Error ? err.message : "Không dừng được phía server.");
+    } finally {
+      abortRef.current?.abort();
+      setStopping(false);
+    }
   }
 
   return (
@@ -327,18 +377,41 @@ export default function TutorPanel({
             void send();
           }
         }}
-        disabled={streaming}
+        disabled={streaming || quotaExhausted}
       />
       <div className="tutor-actions">
-        <button onClick={send} disabled={streaming || text.trim().length === 0}>
+        <button
+          onClick={send}
+          disabled={streaming || quotaExhausted || text.trim().length === 0}
+        >
           {streaming ? "Đang trả lời…" : "Gửi câu hỏi"}
         </button>
         {streaming && (
-          <button className="secondary" onClick={stop}>
-            Dừng
+          <button className="secondary" onClick={stop} disabled={stopping}>
+            {stopping ? "Đang dừng…" : "Dừng"}
           </button>
         )}
+        {usage.data && (
+          <span className="muted tutor-quota">
+            {usage.data.limits.messagesPerDay > 0
+              ? `Còn ${usage.data.remaining.messages ?? 0}/${usage.data.limits.messagesPerDay} lượt hôm nay`
+              : "Không giới hạn lượt"}
+            {usage.data.limits.tokensPerDay > 0 && (
+              <>
+                {" · "}
+                {usage.data.tokensKnown
+                  ? `token ${usage.data.used.tokens}/${usage.data.limits.tokensPerDay}`
+                  : "chưa có số token (provider không báo)"}
+              </>
+            )}
+          </span>
+        )}
       </div>
+      {quotaExhausted && (
+        <p className="muted">
+          Bạn đã dùng hết hạn mức trợ giảng trong 24 giờ. Hạn mức sẽ tự làm mới.
+        </p>
+      )}
     </section>
   );
 }

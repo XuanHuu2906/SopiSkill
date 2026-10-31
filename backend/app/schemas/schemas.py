@@ -566,3 +566,42 @@ class TutorThreadOut(TutorThreadSummaryOut):
 class TutorThreadListOut(BaseModel):
     items: list[TutorThreadSummaryOut]
     total: int
+
+
+class TutorQuotaUsageOut(BaseModel):
+    messages: int
+    tokens: int
+
+
+class TutorQuotaLimitsOut(BaseModel):
+    """0 = không giới hạn (không phải "cấm dùng")."""
+
+    messagesPerDay: int
+    tokensPerDay: int
+    maxConcurrentStreams: int
+
+
+class TutorQuotaRemainingOut(BaseModel):
+    """None = không có trần tương ứng, không phải "còn 0". """
+
+    messages: int | None = None
+    tokens: int | None = None
+
+
+class TutorUsageOut(BaseModel):
+    courseId: str
+    windowSeconds: int
+    used: TutorQuotaUsageOut
+    limits: TutorQuotaLimitsOut
+    remaining: TutorQuotaRemainingOut
+    runningStreams: int
+    # False = provider chưa báo token lần nào ⇒ trần token không phản ánh chi phí thật.
+    tokensKnown: bool
+
+
+class TutorStopOut(BaseModel):
+    messageId: str
+    status: str
+    # Luôn False ở P3.1: dừng là best-effort, provider có thể đã tính phí phần đã sinh.
+    providerStopGuaranteed: bool = False
+    notice: str | None = None

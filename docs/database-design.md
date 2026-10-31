@@ -134,7 +134,7 @@ Không lưu prompt, câu trả lời người học hay nội dung sinh ra.
 | course_id | UUID FK courses | phải khớp course trong path |
 | lesson_id | UUID FK lessons | ngữ cảnh mặc định của thread |
 | title | text default '' | lấy từ câu hỏi đầu tiên (cắt 120 ký tự) |
-| message_count | int default 0 | số lượt hỏi đã chấp nhận (quota P3.1 dùng lại) |
+| message_count | int default 0 | số lượt hỏi đã chấp nhận (đếm hiển thị; quota thật đếm từ `tutor_messages`) |
 | created_at / updated_at | timestamptz | index `(user_id, course_id, updated_at)` |
 
 ### tutor_messages (P3.0)
@@ -151,11 +151,28 @@ Không lưu prompt, câu trả lời người học hay nội dung sinh ra.
 | client_message_id | text nullable | idempotency; NULL cho dữ liệu legacy |
 | error_code, finish_reason | text nullable | mã lỗi đã chuẩn hoá / stop/… |
 | prompt_tokens, completion_tokens | int nullable | usage nếu provider trả |
-| created_at / updated_at | timestamptz | index `(thread_id, position)` |
+| cancel_requested_at | timestamptz nullable | **P3.1** cờ stop do client yêu cầu; NULL = chưa ai dừng |
+| created_at / updated_at | timestamptz | index `(thread_id, position)`, index `status` (P3.1) |
 | UNIQUE(course_id, client_message_id, role) | | chống double-send ⇒ không gọi provider lần 2 |
 
 > Không lưu system prompt, đáp án quiz hay nội dung nguồn. `context_ref` chỉ chứa
 > metadata vị trí; nội dung bài học được đọc lại từ `lessons.content` (public projection).
+
+### tutor_usage_events (P3.1 — revision `0009_p31_tutor_controls`)
+| cột | kiểu | ghi chú |
+|---|---|---|
+| id | UUID PK | |
+| user_id | UUID FK users | dùng để cộng allowance 24h |
+| course_id / message_id | UUID FK nullable | truy vết lượt gọi về ngữ cảnh |
+| provider, model | text | adapter + model thực tế |
+| prompt_tokens / completion_tokens | int nullable | NULL = provider không báo, **không** phải 0 |
+| latency_ms | int nullable | đo tại adapter |
+| finish_reason | text nullable | stop/length/… |
+| created_at | timestamptz | index `(user_id, created_at)` |
+
+Metadata-only: **không** có cột prompt/câu trả lời/nội dung sinh ra. Trần token tính bằng
+tổng `prompt_tokens + completion_tokens` của 24h gần nhất; nếu provider không báo token,
+trần này không chặn được chi phí thật (`tokensKnown=false` trong API usage).
 
 ### lesson_attempts
 | cột | kiểu | ghi chú |
