@@ -498,6 +498,10 @@ export interface SourceDocument {
   id: string;
   sourceId: string;
   status: "queued" | "extracting" | "ready" | "no_text" | "failed";
+  /** P4.2 — nguồn gốc nội dung: PDF upload, fetch URL, hay arXiv. */
+  origin?: "upload" | "web" | "arxiv";
+  /** URL thật của tài liệu web/arXiv; null với PDF upload. */
+  originUrl?: string | null;
   mime: string;
   byteSize: number;
   pageCount: number | null;
@@ -507,6 +511,8 @@ export interface SourceDocument {
   preview: string | null;
   error: { code?: string; message?: string } | null;
   attempts: number;
+  /** P4.2 — đã xác nhận quyền sử dụng nguồn hay chưa (audit). */
+  rightsConfirmed?: boolean;
   ingestedAt: string | null;
   createdAt: string | null;
 }
@@ -532,6 +538,12 @@ export interface SourceIngestConfig {
   embeddingModel: string;
   embeddingDimension: number;
   ragEnabled: boolean;
+  /** P4.2 — URL ingest có bật + allowlist có host. False ⇒ ẩn form URL. */
+  webEnabled?: boolean;
+  webAllowedHostCount?: number;
+  webMaxFetchBytes?: number;
+  webRespectRobots?: boolean;
+  arxivEnabled?: boolean;
 }
 
 export interface RagChunk {
@@ -619,6 +631,22 @@ export function fetchSourceDocuments(sourceId: string): Promise<SourceDocumentLi
 
 export function fetchSourceIngestConfig(): Promise<SourceIngestConfig> {
   return api<SourceIngestConfig>("/v1/sources/ingest-config");
+}
+
+/**
+ * Ingest nội dung từ URL hoặc arXiv (P4.2).
+ *
+ * `userConfirmedRights` BẮT BUỘC — server trả 422 nếu thiếu. Đây là xác nhận có
+ * quyền sử dụng nguồn, không phải checkbox trang trí.
+ */
+export function ingestWebDocument(
+  sourceId: string,
+  body: { url?: string; arxivId?: string; userConfirmedRights: boolean }
+): Promise<SourceDocument> {
+  return api<SourceDocument>(`/v1/sources/${sourceId}/web-document`, {
+    method: "POST",
+    body,
+  });
 }
 
 export function deleteSourceDocument(sourceId: string, documentId: string): Promise<void> {

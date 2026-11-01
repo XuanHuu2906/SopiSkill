@@ -18,7 +18,7 @@ import uuid
 from datetime import UTC, datetime
 
 from app.core.config import get_settings
-from app.models import SourceDocument, SourceDocumentStatus
+from app.models import SourceDocument, SourceDocumentOrigin, SourceDocumentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ async def _ingest(Session, document_id: str) -> None:
 
         source_id = document.source_id
         storage_key = document.storage_key
+        origin = document.origin
 
         try:
             if not await ingest_service.renew_lease(db, did):
@@ -90,6 +91,13 @@ async def _ingest(Session, document_id: str) -> None:
                 return
 
             data = await asyncio.to_thread(_read_object, storage_key)
+
+            if origin != SourceDocumentOrigin.upload:
+                # P4.2 — web blob (JSON đã trích) hoặc PDF arXiv: KHÔNG chạy lại
+                # `check_limits` của PDF upload, và web không đi qua `pypdf`.
+                await _ingest_fetched(db, document, origin=origin, data=data)
+                return
+
             page_count = ingest_service.check_limits(data)
             document.page_count = page_count
             await db.commit()
@@ -169,6 +177,86 @@ def _read_object(key: str) -> bytes:
     from app.services import storage as storage_module
 
     return storage_module.get_storage().get(key)
+
+
+async def _ingest_fetched(
+    db, document: SourceDocument, *, origin: SourceDocumentOrigin, data: bytes
+) -> None:
+    """Ingest document đến từ web/arXiv (P4.2) — dùng chung chunk/embedding P4.0/1.
+
+    Web: blob là JSON text đã sanitize ⇒ chunk theo section provenance, không
+    overlap. arXiv: blob là PDF bytes ⇒ dùng đúng `extract_pages`/`chunk_pages`
+    của P4.0 (provenance theo page thật).
+    """
+    from app.services import ingest as ingest_service
+    from app.services import rag_service, web_ingest
+
+    if origin == SourceDocumentOrigin.web:
+        extraction = web_ingest.parse_web_extraction(data)
+        drafts = web_ingest.chunk_web_extraction(extraction)
+        if not drafts:
+            await ingest_service.finish_no_text(db, document)
+            logger.info(
+                "ingest web no_chunks document_id=%s source_id=%s", document.id, document.source_id
+            )
+            return
+        pages = web_ingest.build_extracted_pages(extraction)
+        await ingest_service.finish_ready(db, document, pages, drafts)
+        logger.info(
+            "ingest web ready document_id=%s source_id=%s chars=%s chunks=%s",
+            document.id,
+            document.source_id,
+            extraction.char_count,
+            len(drafts),
+        )
+        await rag_service.embed_after_ingest(db, document.source_id)
+        return
+
+    # arXiv (và mọi origin PDF fetched trong tương lai).
+    page_count = ingest_service.check_limits(
+        data,
+        max_bytes=get_settings().web_max_fetch_bytes,
+        max_pages=get_settings().source_max_pdf_pages,
+    )
+    document.page_count = page_count
+    await db.commit()
+
+    if not await ingest_service.renew_lease(db, document.id):
+        logger.info("ingest lease lost document_id=%s", document.id)
+        return
+
+    try:
+        extraction = await asyncio.to_thread(ingest_service.extract_pages, data)
+    except ingest_service.IngestError as exc:
+        if exc.code == "NO_EXTRACTABLE_TEXT":
+            await ingest_service.finish_no_text(db, document)
+            logger.info(
+                "ingest arxiv no_text document_id=%s source_id=%s",
+                document.id,
+                document.source_id,
+            )
+            return
+        raise
+
+    drafts = ingest_service.chunk_pages(extraction.pages)
+    if not drafts:
+        await ingest_service.finish_no_text(db, document)
+        logger.info(
+            "ingest arxiv no_chunks document_id=%s source_id=%s",
+            document.id,
+            document.source_id,
+        )
+        return
+
+    await ingest_service.finish_ready(db, document, extraction.pages, drafts)
+    logger.info(
+        "ingest arxiv ready document_id=%s source_id=%s pages=%s chunks=%s",
+        document.id,
+        document.source_id,
+        len(extraction.pages),
+        len(drafts),
+    )
+    await rag_service.embed_after_ingest(db, document.source_id)
 
 
 async def dispatch_document(db, document_id: uuid.UUID, countdown: int = 0) -> bool:

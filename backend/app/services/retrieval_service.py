@@ -62,6 +62,9 @@ class RetrievedChunk:
     source_title: str
     source_version: str | None
     source_type: str
+    # P4.2 — URL gốc của tài liệu web/arXiv (None cho PDF upload). Đây là bằng
+    # chứng "citation trỏ nguồn thực", KHÔNG phải chứng minh nội dung đúng.
+    source_url: str | None = None
     lexical_rank: int | None = None
     vector_rank: int | None = None
     lexical_score: float = 0.0
@@ -377,18 +380,20 @@ async def retrieve(
     chunk_ids = [chunk_id for chunk_id, _ in ordered]
 
     # Đọc metadata qua ĐÚNG scope lần nữa (không tin id từ bước trước).
-    detail_stmt = _apply_source_filter(
-        _scoped_chunks_stmt(course_id, user_id), source_ids
-    ).where(SourceChunk.id.in_(chunk_ids))
+    detail_stmt = (
+        _apply_source_filter(_scoped_chunks_stmt(course_id, user_id), source_ids)
+        .add_columns(SourceDocument.origin_url)
+        .where(SourceChunk.id.in_(chunk_ids))
+    )
     rows = (await db.execute(detail_stmt)).all()
-    by_id = {chunk.id: (chunk, source) for chunk, source in rows}
+    by_id = {chunk.id: (chunk, source, origin_url) for chunk, source, origin_url in rows}
 
     items: list[RetrievedChunk] = []
     for chunk_id, (rrf_score, lex_rank, vec_rank, lex_score, sim) in ordered:
         pair = by_id.get(chunk_id)
         if pair is None:  # bị xóa/đổi quyền giữa 2 truy vấn ⇒ loại
             continue
-        chunk, source = pair
+        chunk, source, origin_url = pair
         items.append(
             RetrievedChunk(
                 chunk_id=chunk.id,
@@ -403,6 +408,7 @@ async def retrieve(
                 source_title=source.title,
                 source_version=source.version,
                 source_type=source.source_type.value,
+                source_url=origin_url,
                 lexical_rank=lex_rank,
                 vector_rank=vec_rank,
                 lexical_score=lex_score,

@@ -119,6 +119,19 @@ class SourceDocumentStatus(str, enum.Enum):
     failed = "failed"
 
 
+class SourceDocumentOrigin(str, enum.Enum):
+    """Nguồn gốc nội dung đã ingest (P4.2 bổ sung `web`/`arxiv`).
+
+    Giá trị này quyết định worker đọc bytes từ đâu (storage của PDF upload so với
+    object vừa tải từ URL) và UI hiển thị link nguồn thật. Nó **không** nói gì về
+    độ tin cậy nội dung.
+    """
+
+    upload = "upload"
+    web = "web"
+    arxiv = "arxiv"
+
+
 class SourceResearchStatus(str, enum.Enum):
     """Trạng thái của một lần nghiên cứu nguồn (P2.SR).
 
@@ -363,6 +376,7 @@ class SourceDocument(Base):
             "source_id", "content_hash", "pipeline_version", name="uq_source_document_version"
         ),
         Index("ix_source_documents_status_created", "status", "created_at"),
+        Index("ix_source_documents_origin_url", "source_id", "origin_url"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
@@ -377,6 +391,21 @@ class SourceDocument(Base):
     status: Mapped[SourceDocumentStatus] = mapped_column(
         Enum(SourceDocumentStatus, name="source_document_status"),
         default=SourceDocumentStatus.queued,
+    )
+    # P4.2 — truy vết nguồn gốc. `upload` là mặc định để document P4.0 cũ đọc
+    # đúng như trước (expand-only, không backfill bịa dữ liệu).
+    origin: Mapped[SourceDocumentOrigin] = mapped_column(
+        Enum(SourceDocumentOrigin, name="source_document_origin"),
+        default=SourceDocumentOrigin.upload,
+    )
+    # URL canonical đã fetch (chỉ web/arxiv). Không lộ query/token nhờ url_fetcher
+    # chuẩn hoá; là bằng chứng "citation trỏ nguồn thực".
+    origin_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    origin_meta: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    # Audit quyền sử dụng: client phải xác nhận, server lưu mốc thời gian + câu
+    # xác nhận. KHÔNG suy ra quyền từ việc URL truy cập được.
+    rights_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # Tên file gốc đã làm sạch (chỉ basename, không path) — chỉ để hiển thị.
     original_filename: Mapped[str | None] = mapped_column(Text, nullable=True)

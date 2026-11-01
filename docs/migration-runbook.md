@@ -346,3 +346,49 @@ lại được qua `app.worker.ingest.reconcile_embeddings` nhưng có chi phí 
 **Lưu ý vận hành:** thêm GIN index trên bảng lớn sẽ khóa ghi trong lúc build. Với DB có nhiều
 chunk, chạy ngoài giờ cao điểm hoặc đổi sang `CREATE INDEX CONCURRENTLY` thủ công trước khi
 `alembic upgrade head`.
+
+## P4.2 — `0013_p42_web_ingest` (2026-11-01)
+
+Expand-only: 4 cột nullable/giá-trị-mặc-định trên `source_documents`
+(`origin`, `origin_url`, `origin_meta`, `rights_confirmed_at`), 1 enum
+`source_document_origin` (`upload|web|arxiv`), 1 index `ix_source_documents_origin_url`.
+Không sửa/xóa cột hay bảng cũ; `origin` có `server_default='upload'` nên mọi insert cũ
+(worker/test cũ) tiếp tục hợp lệ và document P4.0 hiện hữu được gán `upload`.
+
+**Trước khi upgrade (bắt buộc với DB thật):**
+
+```bash
+docker compose exec db pg_dump -U ailp ailp > backup_pre_p42_$(date +%Y%m%d_%H%M%S).sql
+grep -c "^COPY" backup_pre_p42_*.sql   # phải > 0
+```
+
+**Kiểm chứng đã chạy trên DB throwaway `p42_migration_check` (2026-11-01):**
+
+```bash
+docker compose up -d db
+docker compose exec db psql -U ailp -d postgres -c "CREATE DATABASE p42_migration_check;"
+cd backend
+DATABASE_URL=postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p42_migration_check \
+  python -m alembic upgrade head          # → 0013_p42_web_ingest (head)
+DATABASE_URL=…/p42_migration_check python -m alembic downgrade -1   # → 0012_p41_rag
+DATABASE_URL=…/p42_migration_check python -m alembic upgrade head
+docker compose exec db psql -U ailp -d postgres -c "DROP DATABASE p42_migration_check;"
+```
+
+Kết quả ghi nhận:
+
+- `0013_p42_web_ingest (head)`; `source_documents.origin` = `source_document_origin NOT NULL
+  DEFAULT 'upload'`; `origin_meta` = jsonb; `ix_source_documents_origin_url btree
+  (source_id, origin_url)`; enum `source_document_origin` có đúng 3 value.
+- Downgrade `-1` xóa 4 cột + index + enum; `source_documents`/`source_chunks` **còn nguyên**
+  (0 row ở DB throwaway; legacy-row test 1/1 được giữ).
+- Legacy-row test: insert `source_documents` KHÔNG có `origin` ở revision 0012, nâng lên 0013
+  ⇒ row cũ có `origin='upload'`, `origin_url=NULL`, `rights_confirmed_at=NULL` (không bịa dữ liệu).
+
+**Downgrade làm mất** `origin_url`/`origin_meta`/`rights_confirmed_at` ⇒ citation web/arXiv
+mất link nguồn thật và audit quyền sử dụng. Nội dung đã trích (`source_chunks`) và transcript
+tutor **không** bị đụng. Backup trước khi downgrade trên DB thật.
+
+**Lưu ý vận hành:** nếu bảng `source_documents` lớn, `CREATE INDEX` sẽ giữ lock ghi; chạy ngoài
+giờ cao điểm hoặc tạo index thủ công bằng `CREATE INDEX CONCURRENTLY` trước rồi đánh dấu
+`alembic stamp` **chỉ sau khi xác minh** — không stamp mù quáng.

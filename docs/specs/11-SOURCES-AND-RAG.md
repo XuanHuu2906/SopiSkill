@@ -1,8 +1,9 @@
 # 11 — PDF Source Ingestion, Hybrid RAG & Verified Citations
 
 **Trạng thái:** P4.0 **IMPLEMENTED + TESTED**; P4.1 **IMPLEMENTED + TESTED (offline baseline)** — chi tiết
-`docs/specs/20-P41-HYBRID-RAG.md`. P4.2 web/arXiv tùy chọn; P4.3 OCR có điều kiện. Không có chứng cứ
-nào về pipeline RAG/backend của PolySkill; toàn bộ ở đây là thiết kế của SopiSkill.
+`docs/specs/20-P41-HYBRID-RAG.md`. P4.2 **IMPLEMENTED + TESTED (offline; chưa gọi mạng thật trong
+test)** — chi tiết mục 7. P4.3 OCR có điều kiện. Không có chứng cứ nào về pipeline RAG/backend của
+PolySkill; toàn bộ ở đây là thiết kế của SopiSkill.
 
 ## 1. Requirements
 
@@ -18,7 +19,7 @@ nào về pipeline RAG/backend của PolySkill; toàn bộ ở đây là thiết
 | RAG-008 | Reciprocal Rank Fusion (RRF), bounded top-k/context | P4.1 |
 | RAG-009 | Citation server validator: chỉ IDs đã retrieve và tồn tại, user có quyền | P4.1 |
 | RAG-010 | Không có evidence → trả lời không đủ thông tin, không bịa citation | P4.1 |
-| RAG-011 | URL/arXiv ingest chống SSRF, licensing, redirects | P4.2 optional |
+| RAG-011 | URL/arXiv ingest chống SSRF, licensing, redirects | P4.2 **IMPL+TESTED offline** |
 | RAG-012 | OCR pretrained chỉ bật khi corpus scan và eval cho thấy cần | P4.3 conditional |
 
 ## 2. P4.0 ingestion sequence (proposed)
@@ -96,11 +97,41 @@ Validation bên server trước trả về:
 - Negative cases: no source, conflicting chunks, wrong page, inaccessible source, prompt injection trong chunk, empty retrieval.
 - Không claim hallucination-free chỉ vì citation pointer hợp lệ; cần kiểm tra claim hỗ trợ đúng đoạn nguồn.
 
-## 7. P4.2 URL/arXiv controls (optional)
+## 7. P4.2 URL/arXiv controls (IMPLEMENTED 2026-11-01)
 
-- Chỉ fetch HTTPS/host cho phép; chặn internal/private/link-local/metadata addresses qua DNS và redirects; validate after each hop; bảo vệ DNS rebinding.
-- Hard caps trên redirects/bytes/requests/time, loại file, robots/copyright/rights; không vượt captcha/paywall/auth.
-- Store canonical URL, retrieved-at, page title/source version, extraction anchors; citation phải mở được nguồn thực trong giới hạn quyền.
+**Cổng outbound (theo thứ tự, mọi hop redirect phải qua lại từ đầu)** — `services/url_fetcher.py`:
+
+1. `WEB_INGEST_ENABLED` + `WEB_INGEST_ALLOWED_HOSTS` (allowlist rỗng ⇒ từ chối **tất cả**).
+   Khớp chính xác host hoặc subdomain: `example.com` cho `docs.example.com`, **không** cho
+   `evil-example.com` / `example.com.attacker.net`.
+2. Chỉ HTTPS (mặc định), port 443, không userinfo; scheme/port lạ bị từ chối.
+3. Resolve DNS và yêu cầu **mọi** IP là global-unicast (`ipaddress.is_global`, chặn thêm
+   multicast/IPv4-mapped). Một IP xấu ⇒ chặn cả hostname.
+4. `PinnedNetworkBackend` bọc httpcore: resolve lại **ngay trong `connect_tcp`** và chỉ mở
+   socket tới IP đã kiểm tra ⇒ chặn DNS rebinding. TLS/SNI vẫn dùng hostname gốc.
+5. `follow_redirects=False`; mỗi `Location` được resolve lại và chạy lại cổng 1–4.
+6. Trần byte (content-length + stream), redirects, thời gian, ký tự trích; lỗi mã ổn định.
+7. `robots.txt`: 4xx ⇒ allow, 5xx/lỗi mạng/redirect ⇒ **từ chối** (conservative), cache theo
+   origin. Tắt `WEB_INGEST_RESPECT_ROBOTS` là quyết định vận hành, không phải mặc định.
+
+**Rights audit:** API yêu cầu `userConfirmedRights=true` (schema chặn ⇒ 422 **trước** khi có
+request outbound) và lưu `source_documents.rights_confirmed_at`.
+
+**Provenance:** `source_documents.origin` (`web|arxiv`), `origin_url` (canonical URL đã fetch),
+`origin_meta` (HTTP status/redirect chain/title/arXiv id-version-authors). Chunk web giữ
+`section_anchor` = breadcrumb heading (`H1 › H2`), `page_number=1`, offset ký tự tuyệt đối
+trong text đã trích; chunk arXiv dùng provenance page thật của PDF. Citation trả `sourceUrl`.
+
+**arXiv:** chỉ nhận **ID** (`2401.12345`, `2401.12345v2`, `hep-th/9901001`); URL dựng từ ID với
+host cấu hình, và host vẫn phải nằm trong allowlist. Metadata mặc định đọc trang `/abs` qua thẻ
+Highwire `citation_*` vì robots của `export.arxiv.org` (Atom API) là `Disallow: /` — Atom chỉ dùng
+khi đặt `ARXIV_METADATA_SOURCE=atom` và parse bằng `defusedxml`. PDF phải có magic `%PDF-`.
+
+**Đã kiểm chứng mạng thật (2026-11-01):** `example.com` và arXiv `1706.03762` (15 trang, 45 chunk)
+qua API thật; citation trả `sourceUrl` thật. **Giới hạn đã biết:** chưa có malware scanner cho file
+tải về; robots.txt chỉ hỗ trợ luật path-prefix (không wildcard `*`/`$` hay `Crawl-delay`); chưa cache
+nội dung theo TTL (fetch lại cùng nội dung idempotent ở DB nhưng vẫn gọi mạng); chưa xử lý trang
+render bằng JavaScript.
 
 ## 8. P4.3 OCR conditional
 

@@ -164,6 +164,45 @@ class Settings(BaseSettings):
     # Tạo bucket nếu chưa có (dev/MinIO). Production nên tạo trước và tắt cờ này.
     source_storage_auto_create_bucket: bool = True
 
+    # ---------- P4.2 Web/arXiv ingestion ----------
+    # MẶC ĐỊNH TẮT + allowlist RỖNG ⇒ không có request outbound nào cho tới khi
+    # người vận hành bật cờ VÀ khai báo host được phép. Đây là cổng duy nhất.
+    web_ingest_enabled: bool = False
+    # Danh sách host (DNS hostname) được phép fetch, phân tách bằng dấu phẩy.
+    # Khớp chính xác host hoặc subdomain của host trong danh sách (`example.com`
+    # không cho phép `evil-example.com`). Rỗng ⇒ mọi URL bị từ chối.
+    web_ingest_allowed_hosts: str = ""
+    # Bắt buộc HTTPS; HTTP bị từ chối (không tự nâng cấp rồi âm thầm đi tiếp).
+    web_ingest_require_https: bool = True
+    # Trần byte mỗi lần tải (stream, vượt ⇒ dừng đọc, không nạp hết vào RAM).
+    web_max_fetch_bytes: int = 5 * 1024 * 1024
+    # Trần thời gian toàn bộ một lần fetch (giây, gồm mọi redirect).
+    web_fetch_timeout_seconds: float = 20.0
+    web_fetch_connect_timeout_seconds: float = 5.0
+    # Trần số redirect; vượt ⇒ `WEB_TOO_MANY_REDIRECTS`.
+    web_max_redirects: int = 3
+    # Trần ký tự text sau khi trích từ HTML (chặn HTML khổng lồ làm treo parser).
+    web_max_extracted_chars: int = 2_000_000
+    # Trần byte robots.txt; lỗi/từ chối ⇒ KHÔNG fetch (conservative).
+    web_robots_max_bytes: int = 64 * 1024
+    web_robots_cache_seconds: int = 3600
+    web_robots_timeout_seconds: float = 5.0
+    # Tôn trọng robots.txt. Tắt cờ này là quyết định vận hành có hệ quả pháp lý —
+    # mặc định BẬT và không tự tắt trong code.
+    web_ingest_respect_robots: bool = True
+    # Cổng expose API để UI biết tính năng có bật hay không.
+    web_ingest_user_agent: str = "SopiSkillBot/1.0 (+source-ingest)"
+    # Phiên bản pipeline web/arXiv (đổi ⇒ document mới, không ghi đè chunk cũ).
+    web_pipeline_version: str = "p4.2-v1"
+    # Host trần cho arXiv (cố định, KHÔNG lấy từ client); vẫn phải nằm trong
+    # allowlist để ADAPTER không tự mở quyền.
+    arxiv_api_host: str = "export.arxiv.org"
+    arxiv_pdf_host: str = "arxiv.org"
+    # `abs` (mặc định): đọc trang abstract với thẻ Highwire `citation_*` — đường
+    # này tôn trọng robots.txt của arXiv. `atom`: dùng Atom API export.arxiv.org;
+    # API này đang `Disallow: /` trong robots nên CHỈ bật khi robots cho phép.
+    arxiv_metadata_source: str = "abs"
+
     # ---------- P4.1 Embedding + Hybrid RAG ----------
     # Embedding mặc định là `hashing` (deterministic, KHÔNG network, KHÔNG tải
     # model). Đây KHÔNG phải semantic embedding của model thật — chỉ là baseline
@@ -257,6 +296,21 @@ class Settings(BaseSettings):
     @property
     def rag_active(self) -> bool:
         return bool(self.rag_enabled and self.embedding_configured)
+
+    @property
+    def web_allowed_hosts(self) -> tuple[str, ...]:
+        """Allowlist host đã chuẩn hoá (lowercase, bỏ rỗng, bỏ trùng, giữ thứ tự)."""
+        seen: dict[str, None] = {}
+        for raw in (self.web_ingest_allowed_hosts or "").split(","):
+            host = raw.strip().lower().rstrip(".")
+            if host:
+                seen.setdefault(host, None)
+        return tuple(seen)
+
+    @property
+    def web_ingest_active(self) -> bool:
+        """Chỉ có hiệu lực khi bật cờ VÀ có ít nhất một host được phép."""
+        return bool(self.web_ingest_enabled and self.web_allowed_hosts)
 
     # Auth
     jwt_secret: str = ""

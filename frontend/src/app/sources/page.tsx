@@ -12,6 +12,7 @@ import {
   fetchSourceDocuments,
   fetchSourceIngestConfig,
   fetchSources,
+  ingestWebDocument,
   uploadSourceDocument,
   verificationLabel,
   type SourceDocument,
@@ -36,14 +37,28 @@ function DocRow({
   // Chỉ `ready` mới là trạng thái đã có nội dung dùng được; còn lại hiển thị mờ
   // để người dùng không nhầm "đang chờ"/"không có text" là đã xong.
   const tone = document.status === "ready" ? "" : "badge-muted";
+  const originLabel =
+    document.origin === "web" ? "Từ URL" : document.origin === "arxiv" ? "arXiv" : null;
   return (
     <li>
-      <strong>{document.originalFilename ?? "document.pdf"}</strong>{" "}
+      <strong>{document.originalFilename ?? "tài liệu"}</strong>{" "}
       <span className={`badge ${tone}`}>{documentStatusLabel(document.status)}</span>
+      {originLabel && <span className="badge badge-muted"> {originLabel}</span>}{" "}
+      {document.originUrl && (
+        <a
+          className="link"
+          href={document.originUrl}
+          target="_blank"
+          rel="noopener noreferrer nofollow"
+        >
+          nguồn gốc
+        </a>
+      )}
       <div className="muted">
         {formatBytes(document.byteSize)}
         {document.pageCount != null && ` · ${document.pageCount} trang`}
         {document.status === "ready" && ` · ${document.chunkCount} đoạn text`}
+        {document.rightsConfirmed && " · đã xác nhận quyền sử dụng"}
         {document.status === "ready" && document.preview && (
           <>
             <br />
@@ -268,6 +283,10 @@ export default function SourcesPage() {
             contentHash={source.contentHash}
             verificationStatus={source.verificationStatus}
             uploadReady={!!uploadReady}
+            webEnabled={!!config.data?.webEnabled}
+            arxivEnabled={!!config.data?.arxivEnabled}
+            webRespectRobots={config.data?.webRespectRobots ?? true}
+            webMaxFetchBytes={config.data?.webMaxFetchBytes ?? 0}
             maxBytes={config.data?.maxPdfBytes ?? 0}
             onUpload={(file) => upload.mutate({ sourceId: source.id, file })}
             uploadBusy={upload.isPending && upload.variables?.sourceId === source.id}
@@ -316,6 +335,10 @@ function SourceCard({
   contentHash,
   verificationStatus,
   uploadReady,
+  webEnabled,
+  arxivEnabled,
+  webRespectRobots,
+  webMaxFetchBytes,
   maxBytes,
   onUpload,
   uploadBusy,
@@ -331,6 +354,10 @@ function SourceCard({
   contentHash: string | null;
   verificationStatus: string;
   uploadReady: boolean;
+  webEnabled: boolean;
+  arxivEnabled: boolean;
+  webRespectRobots: boolean;
+  webMaxFetchBytes: number;
   maxBytes: number;
   onUpload: (file: File) => void;
   uploadBusy: boolean;
@@ -341,6 +368,7 @@ function SourceCard({
   sessionScope: unknown[];
 }) {
   const docsKey = [...sessionScope, "documents", sourceId];
+  const queryClient = useQueryClient();
   const [localError, setLocalError] = useState("");
 
   const documents = useQuery({
@@ -397,6 +425,17 @@ function SourceCard({
       </div>
       {localError && <div className="error-box">{localError}</div>}
 
+      {webEnabled && (
+        <WebIngestForm
+          sourceId={sourceId}
+          sourceTitle={title}
+          arxivEnabled={arxivEnabled}
+          webRespectRobots={webRespectRobots}
+          maxBytes={webMaxFetchBytes}
+          onDone={() => queryClient.invalidateQueries({ queryKey: docsKey })}
+        />
+      )}
+
       {documents.isLoading && <p className="muted">Đang tải tài liệu…</p>}
       {documents.isError && (
         <div className="error-box">Không tải được tài liệu: {documents.error.message}</div>
@@ -428,6 +467,109 @@ function SourceCard({
       >
         Xóa nguồn
       </button>
+    </div>
+  );
+}
+
+/**
+ * P4.2 — ingest từ URL/arXiv. Quyền sử dụng là checkbox BẮT BUỘC: server trả 422
+ * nếu client không xác nhận, và lưu lại mốc thời gian xác nhận.
+ */
+function WebIngestForm({
+  sourceId,
+  sourceTitle,
+  arxivEnabled,
+  webRespectRobots,
+  maxBytes,
+  onDone,
+}: {
+  sourceId: string;
+  sourceTitle: string;
+  arxivEnabled: boolean;
+  webRespectRobots: boolean;
+  maxBytes: number;
+  onDone: () => void;
+}) {
+  const [mode, setMode] = useState<"url" | "arxiv">("url");
+  const [value, setValue] = useState("");
+  const [rights, setRights] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [localStatus, setLocalStatus] = useState("");
+
+  const ingest = useMutation({
+    mutationFn: async () => {
+      const trimmed = value.trim();
+      if (!trimmed) throw new Error(mode === "url" ? "Cần nhập URL." : "Cần nhập ID arXiv.");
+      if (!rights) throw new Error("Bạn phải xác nhận có quyền sử dụng nội dung nguồn.");
+      return ingestWebDocument(sourceId, {
+        ...(mode === "url" ? { url: trimmed } : { arxivId: trimmed }),
+        userConfirmedRights: rights,
+      });
+    },
+    onSuccess: (document) => {
+      setLocalError("");
+      setValue("");
+      setLocalStatus(
+        document.status === "ready"
+          ? "Đã trích xuất nội dung từ nguồn."
+          : document.status === "no_text"
+            ? "Nguồn không có văn bản trích xuất được."
+            : "Đang xử lý nội dung nguồn…"
+      );
+      onDone();
+    },
+    onError: (err) => {
+      setLocalStatus("");
+      setLocalError(
+        err instanceof ApiError ? `${err.code}: ${err.message}` : (err as Error).message
+      );
+    },
+  });
+
+  return (
+    <div style={{ margin: "12px 0", paddingTop: 8, borderTop: "1px dashed #e3e6ee" }}>
+      <div className="muted" style={{ marginBottom: 6 }}>
+        Hoặc ingest từ nguồn web{arxivEnabled ? "/arXiv" : ""} — chỉ dùng nội dung bạn có
+        quyền sử dụng.
+        {webRespectRobots && " Server sẽ tôn trọng robots.txt của trang nguồn."}
+        {maxBytes > 0 && ` Giới hạn ${formatBytes(maxBytes)} mỗi lần tải.`}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+        <select
+          value={mode}
+          onChange={(event) => setMode(event.target.value as "url" | "arxiv")}
+          aria-label={`Loại nguồn cho ${sourceTitle}`}
+        >
+          <option value="url">URL</option>
+          {arxivEnabled && <option value="arxiv">arXiv ID</option>}
+        </select>
+        <input
+          type="text"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          placeholder={mode === "url" ? "https://…" : "2401.12345"}
+          aria-label={mode === "url" ? "URL nguồn" : "ID arXiv"}
+          maxLength={2048}
+          style={{ flex: "1 1 300px" }}
+        />
+        <button
+          type="button"
+          disabled={ingest.isPending || !rights || !value.trim()}
+          onClick={() => ingest.mutate()}
+        >
+          {ingest.isPending ? "Đang tải…" : "Ingest"}
+        </button>
+      </div>
+      <label className="muted" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <input
+          type="checkbox"
+          checked={rights}
+          onChange={(event) => setRights(event.target.checked)}
+        />
+        Tôi xác nhận có quyền sử dụng và ingest nội dung này cho mục đích học tập.
+      </label>
+      {localError && <div className="error-box">{localError}</div>}
+      {localStatus && <div className="notice-box">{localStatus}</div>}
     </div>
   );
 }

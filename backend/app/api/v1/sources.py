@@ -43,6 +43,7 @@ from app.schemas.schemas import (
     SourceLinkRequest,
     SourceListOut,
     SourceOut,
+    WebDocumentRequest,
 )
 from app.services import (
     course_service,
@@ -51,6 +52,8 @@ from app.services import (
     source_evaluation,
     source_service,
     storage,
+    url_fetcher,
+    web_ingest,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +69,8 @@ def _document_out(document: SourceDocument, *, chunk_count: int = 0, preview: st
         id=f"doc_{document.id}",
         sourceId=f"src_{document.source_id}",
         status=document.status.value,
+        origin=document.origin.value if document.origin else "upload",
+        originUrl=document.origin_url,
         mime=document.mime,
         byteSize=document.byte_size,
         pageCount=document.page_count,
@@ -75,6 +80,7 @@ def _document_out(document: SourceDocument, *, chunk_count: int = 0, preview: st
         preview=preview,
         error=document.error,
         attempts=document.attempts_count,
+        rightsConfirmed=document.rights_confirmed_at is not None,
         ingestedAt=document.ingested_at.isoformat() if document.ingested_at else None,
         createdAt=document.created_at.isoformat() if document.created_at else None,
     )
@@ -158,6 +164,15 @@ async def ingest_config(
         embeddingModel=settings.embedding_model,
         embeddingDimension=settings.embedding_dimension,
         ragEnabled=settings.rag_active,
+        webEnabled=settings.web_ingest_active,
+        webAllowedHostCount=len(settings.web_allowed_hosts),
+        webMaxFetchBytes=settings.web_max_fetch_bytes,
+        webRespectRobots=settings.web_ingest_respect_robots,
+        arxivEnabled=(
+            settings.web_ingest_active
+            and url_fetcher.host_allowed(settings.arxiv_pdf_host, settings.web_allowed_hosts)
+            and url_fetcher.host_allowed(settings.arxiv_api_host, settings.web_allowed_hosts)
+        ),
     )
 
 
@@ -320,6 +335,57 @@ def _ingest_http_error(exc: ingest.IngestError) -> HTTPException:
     return HTTPException(status_code=status_code, detail=exc.to_error())
 
 
+_WEB_STATUS_BY_CODE = {
+    "WEB_INGEST_DISABLED": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "WEB_ALLOWLIST_EMPTY": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "STORAGE_NOT_CONFIGURED": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "STORAGE_UNAVAILABLE": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "ARXIV_HOST_NOT_ALLOWED": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "USER_RIGHTS_NOT_CONFIRMED": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "WEB_REQUEST_INVALID": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "WEB_HOST_NOT_ALLOWED": status.HTTP_403_FORBIDDEN,
+    "WEB_HTTPS_REQUIRED": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "WEB_SCHEME_NOT_ALLOWED": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "WEB_PORT_NOT_ALLOWED": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "WEB_BLOCKED_ADDRESS": status.HTTP_403_FORBIDDEN,
+    "WEB_ROBOTS_DENIED": status.HTTP_403_FORBIDDEN,
+    "WEB_ROBOTS_UNVERIFIABLE": status.HTTP_403_FORBIDDEN,
+    "WEB_TOO_LARGE": status.HTTP_413_CONTENT_TOO_LARGE,
+    "WEB_RATE_LIMITED": status.HTTP_429_TOO_MANY_REQUESTS,
+    "WEB_TIMEOUT": status.HTTP_504_GATEWAY_TIMEOUT,
+    "WEB_UPSTREAM_ERROR": status.HTTP_502_BAD_GATEWAY,
+}
+
+
+def _web_http_error(exc: web_ingest.WebIngestError) -> HTTPException:
+    code = exc.code
+    if code in _WEB_STATUS_BY_CODE:
+        status_code = _WEB_STATUS_BY_CODE[code]
+    elif code.startswith(("URL_", "ARXIV_ID_INVALID", "ARXIV_ID_EMPTY")):
+        status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    elif code == "ARXIV_NOT_FOUND":
+        status_code = status.HTTP_404_NOT_FOUND
+    elif code.startswith("ARXIV_"):
+        status_code = status.HTTP_502_BAD_GATEWAY
+    elif code.startswith("WEB_"):
+        status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    else:
+        status_code = status.HTTP_400_BAD_REQUEST
+    return HTTPException(status_code=status_code, detail=exc.to_error())
+
+
+async def _document_chunk_count(db: AsyncSession, document_id) -> int:
+    return int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(SourceChunk)
+                .where(SourceChunk.document_id == document_id)
+            )
+        ).scalar_one()
+    )
+
+
 @router.post(
     "/sources/{source_id}/document", response_model=SourceDocumentOut, status_code=202
 )
@@ -412,6 +478,78 @@ async def upload_source_document(
         ).scalar_one()
 
     return _document_out(document, chunk_count=int(chunk_count))
+
+
+@router.post(
+    "/sources/{source_id}/web-document",
+    response_model=SourceDocumentOut,
+    status_code=202,
+)
+async def ingest_web_document(
+    source_id: str,
+    body: WebDocumentRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch URL/arXiv và xếp hàng ingest (P4.2).
+
+    Bảo mật: CSRF + rate limit + nguồn private thuộc user; URL phải qua allowlist
+    và chống SSRF của `url_fetcher`. `userConfirmedRights` đã được validate ở
+    schema (thiếu ⇒ 422 trước khi có bất kỳ request outbound nào).
+    """
+    verify_csrf(request)
+    rate_limit(request, "source_web_ingest", limit=5, window_seconds=60)
+
+    settings = get_settings()
+    if not settings.web_ingest_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "WEB_INGEST_DISABLED",
+                "message": "Tính năng tải nội dung từ URL đang tắt trên server.",
+            },
+        )
+    if not storage.storage_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "STORAGE_NOT_CONFIGURED",
+                "message": "Kho lưu trữ nguồn chưa được cấu hình trên server.",
+            },
+        )
+
+    source = await source_service.get_owned_source(db, source_id, user.id)
+
+    try:
+        document, _created = await web_ingest.register_web_document(
+            db,
+            source,
+            url=body.url,
+            arxiv_id=body.arxivId,
+            user_confirmed_rights=body.userConfirmedRights,
+        )
+    except storage.StorageNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "STORAGE_NOT_CONFIGURED",
+                "message": "Kho lưu trữ nguồn chưa được cấu hình.",
+            },
+        ) from exc
+    except web_ingest.WebIngestError as exc:
+        raise _web_http_error(exc) from exc
+
+    # Chỉ dispatch khi document còn `queued`; fetch lại nội dung y hệt (đã ready)
+    # không được chạy lại pipeline.
+    if document.status == SourceDocumentStatus.queued:
+        from app.worker import ingest as ingest_worker
+
+        await ingest_worker.dispatch_document(db, document.id)
+        await db.refresh(document)
+
+    chunk_count = await _document_chunk_count(db, document.id)
+    return _document_out(document, chunk_count=chunk_count)
 
 
 @router.get("/sources/{source_id}/documents", response_model=SourceDocumentListOut)
@@ -611,7 +749,7 @@ async def search_course_sources(
         source_uuid = source_service.parse_source_id(raw)
         if source_uuid is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"code": "INVALID_SOURCE_ID", "message": f"sourceId không hợp lệ: {raw[:40]}"},
             )
         requested.append(source_uuid)
@@ -648,6 +786,7 @@ async def search_course_sources(
             textHash=item.text_hash,
             sourceTitle=item.source_title,
             sourceVersion=item.source_version,
+            sourceUrl=item.source_url,
             snippet=item.text[:400],
             lexicalRank=item.lexical_rank,
             vectorRank=item.vector_rank,

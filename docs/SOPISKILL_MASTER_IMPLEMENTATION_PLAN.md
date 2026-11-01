@@ -256,7 +256,8 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P2.SR (Source Research Agent) | **DONE 2026-10-31** | High | `0006_p2sr_source_research`; agent độc lập + registry/idempotency + flag off/on; offline adapter (mock/curated) |
 | P4.0 | **DONE 2026-10-31** | High | `0011_p40_source_ingest`; PDF text → provenance, 385 pytest, 59/59 E2E |
 | P4.1 | **DONE 2026-10-31 (offline baseline)** | High | `0012_p41_rag`; lexical+vector+RRF, citation validator, 426 pytest, 72/72 E2E (RAG on) |
-| P4.2–P4.3 | OPTIONAL | Medium | Chỉ khi có use case/test corpus |
+| P4.2 | **DONE 2026-11-01 (offline + guard + mạng thật)** | Medium | `0013_p42_web_ingest`; 511 pytest + race PostgreSQL + E2E mạng thật 33/33 |
+| P4.3 | OPTIONAL | Medium | Chỉ khi có corpus PDF scan thật |
 | P5.0 | TODO sau RAG | Medium | Mastery/FSRS có data model và QA |
 | P5.1–P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
 | P6 | TODO (hạng mục có thể làm song song sớm) | High trước public launch | Operational / privacy / security checks |
@@ -587,20 +588,19 @@ Chi tiết: `docs/source-research-agent.md`.
 
 ---
 
-## 15. PHASE P4.2 — Web/arXiv Sources [OPTIONAL]
+## 15. PHASE P4.2 — Web/arXiv Sources [OPTIONAL] — **DONE 2026-11-01**
 
 **Điều kiện khởi động:** PDF text + retrieval/citations đã hoạt động; người dùng muốn học từ URL/arXiv và đồng ý chính sách ingest.
 
-**Modules:** `services/url_fetcher.py`, `services/arxiv_service.py`, ingest worker, schemas, tests.
+**Modules:** `services/url_fetcher.py`, `services/html_extract.py`, `services/arxiv_service.py`, `services/web_ingest.py`, `worker/ingest.py`, `api/v1/sources.py`, `alembic/versions/0013_p42_web_ingest.py`, tests.
 
-- [ ] P4.2.1 HTTPS URL allowlist hoặc policy outbound rõ; chặn SSRF (localhost, private/link-local/metadata IP, DNS rebinding, redirects, port bất thường).
-- [ ] P4.2.2 Download giới hạn size/time/redirect, MIME, robots/licensing & rights; không vượt paywall, auth, website access controls.
-- [ ] P4.2.3 arXiv định danh hợp lệ, metadata/version/page provenance khi xuất PDF/HTML; cache hợp lệ.
-- [ ] P4.2.4 HTML sanitation, text extraction, anchor provenance, chunk/embedding đồng bộ với P4.1.
-- [ ] P4.2.5 Tests redirect SSRF, DNS rebind mock, unknown MIME, 404/429, hostile HTML, link citations.
+- [x] P4.2.1 Allowlist host + chỉ HTTPS:443 + không userinfo; chặn SSRF (loopback/private/link-local/metadata/CGNAT/multicast/IPv4-mapped); `PinnedNetworkBackend` resolve lại IP trong `connect_tcp` ⇒ chống DNS rebinding; mỗi redirect hop được validate lại.
+- [x] P4.2.2 Trần byte/redirect/time/ký tự; MIME sniffing (HTML/PDF/metadata); robots.txt conservative (4xx allow, 5xx/redirect deny, cache); `userConfirmedRights` BẮT BUỘC + lưu `rights_confirmed_at`. Không có cơ chế vượt paywall/auth/captcha.
+- [x] P4.2.3 arXiv: chỉ nhận ID (new/old style, `vN`), URL dựng từ host cấu hình và **phải** nằm trong allowlist; metadata mặc định từ trang `/abs` (robots cho phép) với Highwire `citation_*`, Atom là **opt-in** (`ARXIV_METADATA_SOURCE=atom`, parse bằng `defusedxml`); PDF magic `%PDF-`; lưu `origin_meta`.
+- [x] P4.2.4 `html_extract.sanitize_extract`: bỏ script/style/iframe/object/nav/footer/form, giữ breadcrumb heading làm `section_anchor`; chunk không overlap, offset khớp tuyệt đối; dùng chung `finish_ready` + embedding/RAG P4.0–P4.1. Citation thêm `sourceUrl`.
+- [x] P4.2.5 Tests offline (`httpx.MockTransport` + mock DNS): allowlist exact/subdomain, 12 dạng IP bị chặn, DNS rebind, redirect sang host lạ/IP nội bộ, quá nhiều redirect, MIME lạ, HTML giả, vượt byte (header + stream), 429/5xx, robots deny/5xx, HTML độc hại, arXiv ID invalid/not-found/PDF-magic/entity-expansion, rights 422, CSRF 403, cross-user 404, public-source 404, idempotent fetch, citation `sourceUrl`. Thêm 1 test race PostgreSQL 10 request đồng thời.
 
-**Gate:** không thể fetch IP nội bộ qua redirects/DNS; citation trỏ nguồn thực; source không có quyền truy cập được từ chối.  
-**Không làm:** Scrape trái phép, bypass robots/captcha/paywall, thu thập dữ liệu cá nhân hàng loạt.
+**Gate:** PASS — offline guard suite + PostgreSQL race + **E2E mạng thật 33/33** (`scripts/p42_real_e2e.py`: example.com và arXiv `1706.03762` 15 trang/45 chunk, citation có `sourceUrl` thật). Ghi nhận: robots của `export.arxiv.org` là `Disallow: /` ⇒ mặc định dùng trang `/abs` (Highwire meta), Atom chỉ khi `ARXIV_METADATA_SOURCE=atom`. **Ngoài phạm vi:** scrape trái phép, bypass robots/captcha/paywall, thu thập dữ liệu cá nhân hàng loạt.
 
 ---
 
@@ -803,6 +803,9 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-10-31 | P2.2 tách 3 tầng: rubric deterministic = cổng pass/fail; human rubric cho người chấm; LLM-as-judge chỉ tham khảo | **CHỌN (trung thực đánh giá)** | `evals/rubric.py`, `evals/judges.py` |
 | 2026-10-31 | `cost_estimate_usd = NULL` khi chưa cấu hình giá model — NULL = chưa biết, không phải miễn phí | **CHỌN (trung thực chi phí)** | `services/llm_usage_service.py`, `GenerationOut.costKnown` |
 | 2026-10-31 | Budget job vượt trần ⇒ `BUDGET_EXCEEDED` fatal, không retry | **CHỌN (kiểm soát chi phí)** | `worker/generation.py`, `job_service.classify_error` |
+| 2026-11-01 | **P4.2 web/arXiv**: outbound mặc định TẮT + allowlist rỗng; IP phải global-unicast ở cả validate và connect (chống DNS rebinding); redirect validate lại từng hop; robots 5xx ⇒ deny | **CHỌN (an toàn, fail-closed)** | `services/url_fetcher.py`, `tests/test_p42_web_ingest.py` |
+| 2026-11-01 | Quyền sử dụng nguồn do **người dùng xác nhận** (`userConfirmedRights` bắt buộc, 422 nếu thiếu) và lưu audit `rights_confirmed_at`; fetch thành công **không** nâng `verification_status` | **CHỌN (trung thực + pháp lý)** | `services/web_ingest.py`, `api/v1/sources.py` |
+| 2026-11-01 | arXiv chỉ nhận **ID**, host lấy từ config **và** phải nằm trong allowlist; metadata parse bằng `defusedxml` | **CHỌN (chống SSRF/XXE)** | `services/arxiv_service.py` |
 
 ---
 

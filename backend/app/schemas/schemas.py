@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ---------- Source Registry (P3.0) ----------
@@ -197,6 +197,34 @@ class SourceContextEntry(BaseModel):
 
 # ---------- Source Ingestion (P4.0) ----------
 SOURCE_DOCUMENT_STATUS = Literal["queued", "extracting", "ready", "no_text", "failed"]
+SOURCE_DOCUMENT_ORIGIN = Literal["upload", "web", "arxiv"]
+
+
+class WebDocumentRequest(BaseModel):
+    """Body của ingest từ URL/arXiv (P4.2).
+
+    `userConfirmedRights` BẮT BUỘC và phải đúng `true`; đây là audit xác nhận
+    quyền sử dụng, không phải checkbox trang trí. Chỉ một trong `url`/`arxivId`.
+    """
+
+    url: str | None = Field(default=None, max_length=2048)
+    arxivId: str | None = Field(default=None, max_length=200)
+    userConfirmedRights: bool = False
+    title: str | None = Field(default=None, max_length=300)
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _exactly_one_locator(self):
+        has_url = bool((self.url or "").strip())
+        has_arxiv = bool((self.arxivId or "").strip())
+        if has_url == has_arxiv:
+            raise ValueError("Chọn đúng một trong hai: url hoặc arxivId.")
+        if not self.userConfirmedRights:
+            raise ValueError(
+                "userConfirmedRights phải là true — cần xác nhận quyền sử dụng nguồn."
+            )
+        return self
 
 
 class SourceDocumentOut(BaseModel):
@@ -210,6 +238,8 @@ class SourceDocumentOut(BaseModel):
     id: str
     sourceId: str
     status: SOURCE_DOCUMENT_STATUS
+    origin: SOURCE_DOCUMENT_ORIGIN = "upload"
+    originUrl: str | None = None
     mime: str
     byteSize: int
     pageCount: int | None
@@ -219,6 +249,7 @@ class SourceDocumentOut(BaseModel):
     preview: str | None = None
     error: dict | None = None
     attempts: int = 0
+    rightsConfirmed: bool = False
     ingestedAt: str | None = None
     createdAt: str | None = None
 
@@ -247,6 +278,13 @@ class SourceIngestConfigOut(BaseModel):
     embeddingModel: str = "hashing-ngram-v1"
     embeddingDimension: int = 256
     ragEnabled: bool = False
+    # P4.2 — URL/arXiv ingest. `webEnabled=false` ⇒ UI phải ẩn form; server cũng
+    # từ chối nếu client cố gọi. `webAllowedHostCount` cho biết có allowlist.
+    webEnabled: bool = False
+    webAllowedHostCount: int = 0
+    webMaxFetchBytes: int = 0
+    webRespectRobots: bool = True
+    arxivEnabled: bool = False
 
 
 class RagSearchRequest(BaseModel):
@@ -274,6 +312,8 @@ class RagChunkOut(BaseModel):
     textHash: str
     sourceTitle: str
     sourceVersion: str | None = None
+    # P4.2 — URL nguồn thực (web/arXiv); None với PDF upload.
+    sourceUrl: str | None = None
     snippet: str
     lexicalRank: int | None = None
     vectorRank: int | None = None
@@ -644,6 +684,8 @@ class TutorCitationOut(BaseModel):
     textHash: str | None = None
     sourceTitle: str | None = None
     sourceVersion: str | None = None
+    # P4.2 — URL nguồn thực cho tài liệu web/arXiv; None với PDF upload.
+    sourceUrl: str | None = None
     evidenceText: str | None = None
     validationStatus: str
     # P4.1 LUÔN False: locator_verified chỉ xác minh vị trí, không xác minh claim.

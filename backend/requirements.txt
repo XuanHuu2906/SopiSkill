@@ -17,6 +17,8 @@ psycopg[binary]>=3.1
 pypdf>=5.0
 python-multipart>=0.0.9
 minio>=7.2
+# P4.2 — XML parsing an toàn cho arXiv Atom metadata (chặn entity expansion)
+defusedxml>=0.7
 
 # dev/test
 pytest>=8.0

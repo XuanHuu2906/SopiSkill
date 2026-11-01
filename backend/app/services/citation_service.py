@@ -260,6 +260,8 @@ def verify_answer_citations(
                 "sectionAnchor": item.section_anchor,
                 "textHash": item.text_hash,
                 "sourceTitle": item.source_title,
+                # P4.2 — URL gốc cho tài liệu web/arXiv (None cho PDF upload).
+                "sourceUrl": getattr(item, "source_url", None),
                 "sourceVersion": item.source_version,
                 "evidenceText": item.text[:600],
                 "validationStatus": CitationValidationStatus.locator_verified.value,
@@ -284,6 +286,7 @@ def unverified_source_pointers(retrieved: list, *, max_items: int = 5) -> list[d
                 "chunkId": f"chk_{item.chunk_id}",
                 "sourceId": f"src_{item.source_id}",
                 "sourceTitle": item.source_title,
+                "sourceUrl": getattr(item, "source_url", None),
                 "pageNumber": item.page_number,
                 "sectionAnchor": item.section_anchor,
                 "validationStatus": CitationValidationStatus.unverified.value,

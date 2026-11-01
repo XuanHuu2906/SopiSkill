@@ -2,6 +2,131 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-01 — P4.2 Web/arXiv Sources (offline + SSRF guard đầy đủ)
+
+- Base commit: `bc78efe` (`main`, working tree)
+- New commit/branch: **NOT COMMITTED** (working tree)
+- Scope & decisions:
+  - **Outbound mặc định TẮT**: `WEB_INGEST_ENABLED=false` + `WEB_INGEST_ALLOWED_HOSTS` rỗng ⇒
+    fail-closed; không có request nào ra ngoài cho tới khi người vận hành bật **và** khai host.
+  - **Chống SSRF hai lớp**: (a) resolve DNS trước và yêu cầu MỌI IP `is_global` (chặn private,
+    loopback, link-local, metadata, CGNAT, multicast, IPv4-mapped); (b) `PinnedNetworkBackend`
+    resolve lại **ngay trong `connect_tcp`** và chỉ mở socket tới IP đã kiểm ⇒ chặn DNS
+    rebinding. Mỗi hop redirect chạy lại toàn bộ cổng.
+  - **Quyền sử dụng bắt buộc**: `userConfirmedRights=true` (schema 422 nếu thiếu/sai) và lưu
+    `source_documents.rights_confirmed_at`. Fetch thành công **không** nâng `verification_status`.
+  - **arXiv chỉ nhận ID**; host dựng từ config **và** phải nằm trong allowlist; Atom parse bằng
+    `defusedxml`; PDF phải có magic `%PDF-`.
+  - **Không đổi stack**: `httpx` + network backend của httpcore; HTML parser là stdlib
+    `html.parser`; **không** render HTML nguồn ra browser.
+- IMPLEMENTED:
+  - `backend/app/core/config.py`: 15 cấu hình `WEB_*`/`ARXIV_*` + `web_allowed_hosts`,
+    `web_ingest_active`.
+  - `backend/app/services/url_fetcher.py`: `parse_http_url`, `host_allowed`, `ip_is_public`,
+    `resolve_host_ips`, `check_ips_public`, `validate_url`, `validate_url_resolved`,
+    `PinnedNetworkBackend`, `build_pinned_transport`, robots parser/cache (`_parse_robots`,
+    `robots_allows`, `ensure_robots_allowed`), `fetch_resource` (redirect thủ công, trần
+    byte/redirect/time, MIME sniffing, mã lỗi ổn định), `WebFetchError`.
+  - `backend/app/services/html_extract.py`: `sanitize_extract` (bỏ script/style/iframe/nav/footer/
+    form; breadcrumb heading → `section_anchor`; trần ký tự), `HtmlSection`, `section_for_offset`.
+  - `backend/app/services/arxiv_service.py`: `normalize_arxiv_id` (new/old style + `vN`),
+    `split_version`, `parse_atom` (defusedxml), `fetch_metadata`/`fetch_pdf`,
+    `_ensure_hosts_allowed`.
+  - `backend/app/services/web_ingest.py`: `register_web_document` (idempotent theo
+    `(source, content_hash, web_pipeline_version)`, lưu blob private storage, audit rights, điền
+    metadata `Source` chỉ khi trống), `parse_web_extraction`, `chunk_web_extraction` (không
+    overlap, offset tuyệt đối, phủ kín text).
+  - `backend/app/models/models.py`: `SourceDocumentOrigin`; `source_documents.origin|origin_url|
+    origin_meta|rights_confirmed_at`; index `(source_id, origin_url)`.
+  - `backend/alembic/versions/0013_p42_web_ingest.py`: expand-only (4 cột + enum + index);
+    downgrade chỉ xóa phần thêm.
+  - `backend/app/worker/ingest.py`: `_ingest_fetched` — web chunk theo section, arXiv dùng pipeline
+    PDF P4.0; dùng chung `finish_ready` + `embed_after_ingest` ⇒ RAG P4.1 chạy không cần sửa.
+  - `backend/app/api/v1/sources.py`: `POST /v1/sources/{id}/web-document` (CSRF, rate limit
+    5/60s, ownership, rights bắt buộc, map mã lỗi → HTTP 4xx/5xx); ingest-config trả trạng thái
+    web/arXiv.
+  - `backend/app/schemas/schemas.py`: `WebDocumentRequest` (model_validator: đúng một locator +
+    rights), `SourceDocumentOut.origin|originUrl|rightsConfirmed`, ingest-config `web*/arxiv*`,
+    `TutorCitationOut.sourceUrl`, `RagChunkOut.sourceUrl`.
+  - `backend/app/services/retrieval_service.py` + `citation_service.py`: `RetrievedChunk.source_url`
+    lấy từ `SourceDocument.origin_url`; citation trả `sourceUrl` (None với PDF upload).
+  - Frontend `frontend/src/lib/api.ts` + `/sources`: form ingest URL/arXiv với checkbox quyền sử
+    dụng bắt buộc; badge origin + link nguồn thật; ingest-config mới.
+  - `backend/requirements.txt`: `defusedxml>=0.7`.
+  - Docs: `docs/specs/11-SOURCES-AND-RAG.md` §7 (viết lại), `database-design.md`,
+    `migration-runbook.md` (mục P4.2), master plan (P4.2 DONE + 3 decision log), `.env.example`,
+    `docker-compose.yml` (backend/worker/beat).
+- TESTED (offline, SQLite):
+  - `cd backend && python -m pytest -q` → **507 passed, 24 skipped** (426 → 507, +81).
+    Mới: `tests/test_p42_web_ingest.py` (74), `tests/test_p42_migration_contract.py` (7).
+  - Phủ: allowlist exact/subdomain (không khớp `evil-example.com`); 12 dạng IP bị chặn; một IP xấu
+    chặn cả host; DNS rebinding bị chặn ở `connect_tcp` trước khi mở socket; redirect sang host lạ
+    (403) / IP nội bộ (403) / quá trần; MIME lạ; HTML giả nhị phân; vượt byte qua `content-length`
+    và qua stream; 429 retryable; robots deny + robots 5xx ⇒ từ chối; robots longest-match; HTML
+    độc hại (script/style/nav/footer bị bỏ, text còn); chunk không overlap và phủ kín text;
+    rights thiếu ⇒ 422 **và không tạo document**; CSRF thiếu ⇒ 403; cờ tắt ⇒ 503; host ngoài
+    allowlist ⇒ 403; cross-user ⇒ 404 (ingest + xóa); public source ⇒ 404; idempotent fetch trả
+    cùng document; arXiv ID valid/invalid/old-style/entity-expansion/not-found/PDF-magic; arXiv
+    host ngoài allowlist ⇒ 503; citation mang `sourceUrl`; PDF upload không có `sourceUrl`.
+- TESTED (PostgreSQL throwaway `p42_migration_check`, đã drop):
+  - `alembic upgrade head` → `0013_p42_web_ingest (head)`; `\d source_documents` có 4 cột + enum 3
+    value + `ix_source_documents_origin_url btree (source_id, origin_url)`.
+  - `alembic downgrade -1` → `0012_p41_rag`: 4 cột + enum + index biến mất, bảng giữ nguyên;
+    insert legacy-row ở 0012 rồi `upgrade head` lại ⇒ row cũ `origin='upload'`, `origin_url=NULL`,
+    `rights_confirmed_at=NULL` (không bịa dữ liệu).
+- TESTED (PostgreSQL throwaway `p42_race_check`, đã drop):
+  - `POSTGRES_TEST_URL=…/p42_race_check python -m pytest tests/test_p42_postgres_concurrency.py -q`
+    → **1 passed**: 10 lần fetch đồng thời cùng nội dung ⇒ **đúng 1 document** (UNIQUE
+    `source_id,content_hash,pipeline_version`), `origin=web` + rights audit; worker ingest ra chunk
+    `ready` khớp offset text; ingest lại không nhân bản chunk.
+- TESTED (frontend): `npx tsc --noEmit` → 0 lỗi; `npm run build` → OK (`/sources` 5.51 kB).
+- TESTED (compose): `docker compose config` → OK (biến `WEB_*` có ở backend/worker/beat).
+- TESTED (mạng THẬT, `python scripts/p42_real_e2e.py`, SQLite throwaway, 2026-11-01):
+  - **33/33 checks passed.** `example.com` ingest → `ready`, `origin=web`, `chunkCount=1`,
+    `rightsConfirmed=true`, `originUrl` đúng, fetch lại idempotent (cùng document id).
+  - **arXiv thật `1706.03762`** (Attention Is All You Need): metadata từ trang `/abs` (robots
+    cho phép `Allow: /abs`), PDF 2.2 MB, **15 trang, 45 chunk**, `origin=arxiv`,
+    `originUrl=https://arxiv.org/abs/1706.03762`, `publisher=arXiv`; `verificationStatus`
+    vẫn `unverified` (fetch thành công không đồng nghĩa đã xác thực).
+  - Retrieval thật trên chunk arXiv trả 5 item, **mọi item có `sourceUrl`**;
+    `verify_answer_citations` trả 2 citation với `sourceUrl` thật và
+    `evidenceSupported=false`.
+  - Cross-user ingest/xóa ⇒ 404; SSRF chặn thật: `http://169.254.169.254` ⇒ 422
+    `WEB_HTTPS_REQUIRED`, `https://169.254.169.254` ⇒ 403 `WEB_HOST_NOT_ALLOWED`,
+    `http://127.0.0.1:8000` ⇒ 422, `https://evil.invalid` ⇒ 403.
+  - Phát hiện trong lúc chạy: robots của `export.arxiv.org` là `Disallow: /` ⇒ **Atom API mặc
+    định bị chặn**. Đã đổi mặc định sang trang `/abs` (Highwire `citation_*`), Atom chỉ bật khi
+    đặt `ARXIV_METADATA_SOURCE=atom`. Ghi lại để không ai tưởng API là mặc định.
+- NOT TESTED:
+  - E2E Docker đầy đủ (backend/worker/frontend) cho P4.2 — container đang stopped (đã chạy
+    pytest offline + PostgreSQL race + E2E mạng thật in-process thay thế).
+  - robots.txt wildcard `*`/`$`, `Crawl-delay` (chỉ hỗ trợ path-prefix).
+  - Trang render bằng JavaScript (SPA): chỉ trích HTML server trả về; không có text ⇒
+    `WEB_NO_EXTRACTABLE_TEXT`.
+  - Trang render bằng JavaScript (SPA): chỉ trích HTML server trả về; không có text ⇒
+    `WEB_NO_EXTRACTABLE_TEXT`.
+  - Malware scanning file tải về; citation precision/groundedness ngoài phạm vi (P4.1 eval mở rộng).
+- BLOCKED: không blocked code. Cần quyết định vận hành nếu bật ở production: allowlist thật
+  (site nào được phép), chính sách robots/licensing, và host ổn định nếu muốn đưa fetch mạng thật
+  vào CI (test suite hiện hoàn toàn offline).
+- Database: `0013_p42_web_ingest` (expand-only). Backup trước trên DB thật:
+  `docker compose exec db pg_dump -U ailp ailp > backup_pre_p42_YYYYmmdd_HHMMSS.sql`.
+- Security: outbound fail-closed (allowlist rỗng = deny); IP global-only ở cả validate/connect;
+  redirect validate lại từng hop; TLS SNI giữ hostname gốc; `trust_env=False` (không dùng proxy
+  env); arXiv host phải nằm trong allowlist; XML parse an toàn; rights audit server-side;
+  ownership 404 cross-user; public source không ingest/xóa được; log chỉ id/host/mã lỗi (không URL
+  đầy đủ, không nội dung); CSRF + rate limit 5/60s; trần byte/time/redirect.
+- Regressions: 0. pytest 426 → **507 passed**; frontend build OK.
+- Known limitations:
+  - robots.txt chỉ hiểu luật path-prefix; chưa hỗ trợ wildcard `*`/`$` hay `Crawl-delay`.
+  - Chưa cache nội dung theo TTL (fetch lại vẫn gọi mạng; chỉ idempotent ở DB).
+  - HTML extract là heuristic (không readability scoring); trang nhiều chrome vẫn có thể lẫn text.
+  - `origin_meta` lưu metadata HTTP/arXiv — KHÔNG phải bằng chứng nội dung đúng.
+- PHASE GATE: **PASS (offline + guard)** — acceptance SSRF/ownership/citation source thực đạt
+  bằng test đã chạy; hạng mục "fetch mạng thật" để **NOT TESTED**, không tuyên bố PASS.
+- NEXT: P4.3 (OCR, cần corpus scan thật) hoặc P5.0 (Learner Profile/FSRS) tuỳ ưu tiên; trước P4.3
+  cần mẫu PDF scan có phép để đánh giá CER/WER.
+
 ## 2026-10-31 — P4.1 Hybrid RAG + verified citations (offline baseline)
 
 - Base commit: `9f5b5bf` (`main`, working tree — tiếp nối P4.0 chưa commit)

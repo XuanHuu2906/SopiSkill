@@ -350,5 +350,10 @@ hoặc không đủ căn cứ.
   p95 84 ms ở 500 chunk và 368 ms ở 2000 chunk ⇒ **cần pgvector/ANN khi corpus vượt ~700 chunk**.
   Khi chuyển: thêm cột `vector(N)` với dimension của model đã chốt, tạo HNSW **chỉ sau benchmark**,
   backfill song song giữ nguyên bảng JSON để rollback. Không hardcode `1536`.
-- P4.2: nguồn web/arXiv (SSRF guard, licensing) dùng chung pipeline ingest.
+- P4.2 **đã có**: `source_documents.origin` (`upload|web|arxiv`), `origin_url` (URL thật đã
+  fetch; NULL với PDF upload), `origin_meta` (JSONB metadata arXiv/HTTP — không chứa nội dung),
+  `rights_confirmed_at` (audit xác nhận quyền sử dụng), index `(source_id, origin_url)`.
+  Nội dung web được lưu trong private storage dưới dạng blob JSON `{kind:"web_text", text,
+  sections, finalUrl}`; arXiv lưu PDF bytes. Worker chunk theo `origin` rồi dùng chung
+  `source_chunks`/embedding P4.0–P4.1.
 - P4.3: OCR cho PDF scan; khi đó `source_chunks` cần `origin`/bbox nhưng phải đánh dấu rõ khác text native.
