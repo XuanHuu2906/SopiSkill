@@ -359,6 +359,14 @@ class Settings(BaseSettings):
             return False
         return bool((self.ocr_model_version or "").strip())
 
+    # P5.0 — learner profile, mastery & FSRS. Mặc định TẮT để hành vi cũ nguyên vẹn.
+    p50_enabled: bool = False
+    p50_backfill_enabled: bool = False
+    # PROPOSAL: ngưỡng đạt + half-life recency cần hiệu chỉnh khi có dữ liệu thật.
+    mastery_pass_threshold: float = 0.7
+    mastery_recency_half_life_days: int = 30
+    fsrs_desired_retention: float = 0.9
+
     # Auth
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"

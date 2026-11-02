@@ -20,6 +20,9 @@ minio>=7.2
 # P4.2 — XML parsing an toàn cho arXiv Atom metadata (chặn entity expansion)
 defusedxml>=0.7
 
+# P5.0 — FSRS spaced repetition (pure Python; optimizer extras KHÔNG cài).
+fsrs>=6.3,<7
+
 # P4.3 — OCR cho PDF scan KHÔNG nằm trong requirements mặc định: nó nặng
 # (onnxruntime + opencv-headless + model ~15MB) và mặc định TẮT. Cài riêng bằng
 # `pip install -r requirements-ocr.txt` khi thật sự cần OCR. Bật cờ OCR mà chưa
