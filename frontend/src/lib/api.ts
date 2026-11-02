@@ -706,3 +706,111 @@ export async function uploadSourceDocument(
   }
   return (await res.json()) as SourceDocument;
 }
+
+// ---------- Learner profile / mastery / spaced repetition (P5.0) ----------
+
+export interface SkillMastery {
+  skillId: string;
+  title: string;
+  bloomLevel: string;
+  masteryScore: number;
+  method: string;
+  attempts: number;
+  correct: number;
+  total: number;
+  lastAttemptAt: string | null;
+  passThreshold: number;
+}
+
+export interface CourseMastery {
+  items: SkillMastery[];
+  coursePercent: number;
+  reviewDueCount: number;
+}
+
+export interface LearningPathReason {
+  code: string;
+  message: string;
+}
+
+export interface LearningPath {
+  nextLesson: { lessonId: string; title: string; reason: LearningPathReason } | null;
+  reviewLessonId: string | null;
+  reviewDueCount: number;
+  blockedBy: {
+    lessonId: string;
+    title: string;
+    prerequisites: { skillId: string; title: string; masteryScore: number; met: boolean }[];
+    reason: LearningPathReason;
+  }[];
+  prerequisitesDag: {
+    nodes: { id: string; title: string; bloomLevel: string }[];
+    edges: string[][];
+  };
+}
+
+export interface DueReview {
+  cardId: string;
+  lessonId: string;
+  lessonTitle: string;
+  dueAt: string;
+  state: number;
+  overdueDays: number;
+}
+
+export interface DueReviewList {
+  items: DueReview[];
+  total: number;
+}
+
+export interface ReviewGradeResult {
+  card: {
+    cardId: string;
+    lessonId: string;
+    state: number;
+    dueAt: string;
+    lastReviewAt: string | null;
+  };
+  eventId: string;
+  duplicate: boolean;
+}
+
+export function fetchCourseMastery(courseId: string): Promise<CourseMastery> {
+  return api<CourseMastery>(`/v1/courses/${courseId}/mastery`);
+}
+
+export function fetchLearningPath(courseId: string): Promise<LearningPath> {
+  return api<LearningPath>(`/v1/courses/${courseId}/learning-path`);
+}
+
+export function fetchDueReviews(
+  courseId?: string,
+  limit = 20
+): Promise<DueReviewList> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (courseId) params.set("courseId", courseId);
+  return api<DueReviewList>(`/v1/reviews/due?${params.toString()}`);
+}
+
+export function gradeReview(
+  cardId: string,
+  body: { rating: number; clientReviewId: string; durationMs?: number }
+): Promise<ReviewGradeResult> {
+  return api<ReviewGradeResult>(`/v1/reviews/${cardId}/grade`, {
+    method: "POST",
+    body,
+  });
+}
+
+export function reviewStateLabel(state: number): string {
+  switch (state) {
+    case 1:
+      return "Đang học";
+    case 2:
+      return "Ôn tập";
+    case 3:
+      return "Học lại";
+    default:
+      return "Không rõ";
+  }
+}

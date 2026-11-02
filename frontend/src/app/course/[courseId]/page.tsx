@@ -5,7 +5,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   api,
+  ApiError,
+  fetchCourseMastery,
   fetchCourseSources,
+  fetchLearningPath,
   isVerifiedStatus,
   verificationLabel,
 } from "@/lib/api";
@@ -52,6 +55,29 @@ export default function CoursePage() {
     queryFn: () => fetchCourseSources(courseId),
     retry: false,
   });
+
+  // P5.0 — hai query này trả 503 khi cờ P50_ENABLED tắt; UI hiển thị trạng thái
+  // "Chưa bật" thay vì báo lỗi, để trang không hỏng khi tính năng tắt.
+  const masteryKey = useSessionQueryKey("course-mastery", courseId);
+  const pathKey = useSessionQueryKey("course-learning-path", courseId);
+
+  const mastery = useQuery({
+    queryKey: masteryKey,
+    enabled: !!courseId && isAuthenticated,
+    queryFn: () => fetchCourseMastery(courseId),
+    retry: false,
+  });
+
+  const learningPath = useQuery({
+    queryKey: pathKey,
+    enabled: !!courseId && isAuthenticated,
+    queryFn: () => fetchLearningPath(courseId),
+    retry: false,
+  });
+
+  const p50Disabled =
+    (mastery.error instanceof ApiError && mastery.error.status === 503) ||
+    (learningPath.error instanceof ApiError && learningPath.error.status === 503);
 
   if (!courseId) return <div className="container">Thiếu courseId.</div>;
   if (authLoading) return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;
@@ -101,6 +127,73 @@ export default function CoursePage() {
           >
             Thử lại
           </button>
+        </div>
+      )}
+
+      {!p50Disabled && learningPath.data && (
+        <div className="card">
+          <h2>Học tiếp</h2>
+          {learningPath.data.nextLesson ? (
+            <>
+              <p>
+                <Link className="link" href={`/lesson/${learningPath.data.nextLesson.lessonId}`}>
+                  {learningPath.data.nextLesson.title}
+                </Link>
+              </p>
+              <p className="muted">{learningPath.data.nextLesson.reason.message}</p>
+            </>
+          ) : (
+            <p className="muted">
+              {learningPath.data.blockedBy.length > 0
+                ? "Cần đạt kỹ năng trước khi học bài kế tiếp."
+                : "Bạn đã học hết các bài hiện có."}
+            </p>
+          )}
+          {learningPath.data.blockedBy.length > 0 && (
+            <ul className="muted">
+              {learningPath.data.blockedBy.slice(0, 3).map((blocked) => (
+                <li key={blocked.lessonId}>
+                  {blocked.title} — cần:{" "}
+                  {blocked.prerequisites
+                    .filter((p) => !p.met)
+                    .map((p) => `${p.title} (${Math.round(p.masteryScore * 100)}%)`)
+                    .join(", ")}
+                </li>
+              ))}
+            </ul>
+          )}
+          {learningPath.data.reviewLessonId && !learningPath.data.nextLesson && (
+            <p>
+              <Link className="link" href={`/lesson/${learningPath.data.reviewLessonId}`}>
+                Ôn lại bài yếu nhất
+              </Link>
+            </p>
+          )}
+          <p>
+            <Link className="link" href={`/review?courseId=${courseId}`}>
+              Ôn tập ({learningPath.data.reviewDueCount} thẻ đến hạn)
+            </Link>
+          </p>
+        </div>
+      )}
+
+      {!p50Disabled && mastery.data && mastery.data.items.length > 0 && (
+        <div className="card">
+          <h2>Mức nắm kỹ năng</h2>
+          <p className="muted">
+            Chỉ số tham khảo (rule-based, có trọng số thời gian) — không phải điểm số chính thức.
+          </p>
+          <ul className="course-list">
+            {mastery.data.items.map((item) => (
+              <li key={item.skillId}>
+                <span>{item.title}</span>{" "}
+                <span className="badge">
+                  {Math.round(item.masteryScore * 100)}%
+                  {item.masteryScore >= item.passThreshold ? " · đạt" : " · chưa đạt"}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
