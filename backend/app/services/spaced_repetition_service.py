@@ -201,10 +201,17 @@ async def grade_card(
     now = _as_utc(now or datetime.now(UTC))
     last_review_at = _as_utc(card.last_review_at) if card.last_review_at else now
 
+    # Card thiếu stability/difficulty (row legacy hoặc được seed trực tiếp) được
+    # coi là card mới ở Learning: `fsrs` cần 2 giá trị này để tính lịch tiếp theo.
+    if card.stability is None or card.difficulty is None:
+        fsrs_state, fsrs_step = State.Learning, None
+    else:
+        fsrs_state, fsrs_step = State(card.state), card.step
+
     fsrs_card = Card(
         card_id=_card_id(card.id),
-        state=State(card.state),
-        step=card.step,
+        state=fsrs_state,
+        step=fsrs_step,
         stability=card.stability,
         difficulty=card.difficulty,
         due=_as_utc(card.due_at),

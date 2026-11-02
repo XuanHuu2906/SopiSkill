@@ -785,3 +785,104 @@ class TutorStopOut(BaseModel):
     # Luôn False ở P3.1: dừng là best-effort, provider có thể đã tính phí phần đã sinh.
     providerStopGuaranteed: bool = False
     notice: str | None = None
+
+
+# ---------- Learner profile, mastery & FSRS (P5.0) ----------
+class SkillMasteryOut(BaseModel):
+    skillId: str
+    title: str
+    bloomLevel: str
+    # Heuristic accuracy có trọng số thời gian — KHÔNG phải xác suất đã hiệu chuẩn.
+    masteryScore: float
+    method: str = "rule_based"
+    attempts: int
+    correct: int
+    total: int
+    lastAttemptAt: str | None = None
+    passThreshold: float
+
+
+class MasteryOut(BaseModel):
+    items: list[SkillMasteryOut]
+    coursePercent: float
+    reviewDueCount: int
+
+
+class LearningPathReasonOut(BaseModel):
+    code: str
+    message: str
+
+
+class LearningPathNextLessonOut(BaseModel):
+    lessonId: str
+    title: str
+    reason: LearningPathReasonOut
+
+
+class LearningPathPrerequisiteOut(BaseModel):
+    skillId: str
+    title: str
+    masteryScore: float
+    met: bool
+
+
+class LearningPathBlockedOut(BaseModel):
+    lessonId: str
+    title: str
+    prerequisites: list[LearningPathPrerequisiteOut]
+    reason: LearningPathReasonOut
+
+
+class PrerequisiteDagNodeOut(BaseModel):
+    id: str
+    title: str
+    bloomLevel: str
+
+
+class PrerequisiteDagOut(BaseModel):
+    nodes: list[PrerequisiteDagNodeOut]
+    edges: list[list[str]]
+
+
+class LearningPathOut(BaseModel):
+    nextLesson: LearningPathNextLessonOut | None = None
+    reviewLessonId: str | None = None
+    reviewDueCount: int
+    blockedBy: list[LearningPathBlockedOut]
+    prerequisitesDag: PrerequisiteDagOut
+
+
+class DueReviewOut(BaseModel):
+    cardId: str
+    lessonId: str
+    lessonTitle: str
+    # stability/difficulty cố tình KHÔNG trả ra: chỉ dùng nội bộ, tránh gây hiểu
+    # nhầm là điểm số của người học.
+    dueAt: str
+    state: int
+    overdueDays: int
+
+
+class ReviewDueOut(BaseModel):
+    items: list[DueReviewOut]
+    total: int
+
+
+class ReviewGradeRequest(BaseModel):
+    rating: int = Field(ge=1, le=4)
+    clientReviewId: str = Field(min_length=1, max_length=64)
+    durationMs: int | None = Field(default=None, ge=0)
+
+
+class ReviewCardOut(BaseModel):
+    cardId: str
+    lessonId: str
+    state: int
+    dueAt: str
+    lastReviewAt: str | None = None
+
+
+class ReviewGradeOut(BaseModel):
+    card: ReviewCardOut
+    eventId: str
+    duplicate: bool
