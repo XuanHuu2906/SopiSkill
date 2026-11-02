@@ -513,6 +513,12 @@ export interface SourceDocument {
   attempts: number;
   /** P4.2 — đã xác nhận quyền sử dụng nguồn hay chưa (audit). */
   rightsConfirmed?: boolean;
+  /** P4.3 — text đến từ đâu: text layer PDF, OCR, hay cả hai. null = document cũ. */
+  textSource?: "native" | "ocr" | "mixed" | null;
+  /** Số trang phải OCR (máy đọc ảnh). Chỉ để truy vết, không phải độ tin cậy. */
+  ocrPages?: number;
+  ocrEngine?: string | null;
+  ocrVersion?: string | null;
   ingestedAt: string | null;
   createdAt: string | null;
 }
@@ -544,6 +550,13 @@ export interface SourceIngestConfig {
   webMaxFetchBytes?: number;
   webRespectRobots?: boolean;
   arxivEnabled?: boolean;
+  /** P4.3 — OCR cho PDF scan. false ⇒ scan vẫn "không có lớp text". */
+  ocrEnabled?: boolean;
+  ocrConfigured?: boolean;
+  ocrEngine?: string;
+  ocrVersion?: string;
+  ocrMaxPages?: number;
+  ocrDpi?: number;
 }
 
 export interface RagChunk {

@@ -257,7 +257,7 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P4.0 | **DONE 2026-10-31** | High | `0011_p40_source_ingest`; PDF text → provenance, 385 pytest, 59/59 E2E |
 | P4.1 | **DONE 2026-10-31 (offline baseline)** | High | `0012_p41_rag`; lexical+vector+RRF, citation validator, 426 pytest, 72/72 E2E (RAG on) |
 | P4.2 | **DONE 2026-11-01 (offline + guard + mạng thật)** | Medium | `0013_p42_web_ingest`; 511 pytest + race PostgreSQL + E2E mạng thật 33/33 |
-| P4.3 | OPTIONAL | Medium | Chỉ khi có corpus PDF scan thật |
+| P4.3 | **DONE 2026-11-01 (opt-in + engine thật)** | Medium | `0014_p43_ocr`; OCR pretrained `rapidocr` mặc định TẮT, provenance bbox/confidence/textSource; 533 pytest; CER EN 0.000 / VI 0.094 |
 | P5.0 | TODO sau RAG | Medium | Mastery/FSRS có data model và QA |
 | P5.1–P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
 | P6 | TODO (hạng mục có thể làm song song sớm) | High trước public launch | Operational / privacy / security checks |
@@ -604,16 +604,16 @@ Chi tiết: `docs/source-research-agent.md`.
 
 ---
 
-## 16. PHASE P4.3 — Scanned PDF OCR (CNN/ViT) [CONDITIONAL]
+## 16. PHASE P4.3 — Scanned PDF OCR (CNN/ViT) — **DONE 2026-11-01 (opt-in)**
 
 **Điều kiện khởi động:** Có corpus PDF scan thật, text extraction không đủ và chi phí OCR chấp nhận được.
 
-- [ ] P4.3.1 So sánh OCR pretrained CNN-based/ViT-based + layout-aware parser trên sample PDF scan có phép; không train mô hình từ đầu.
-- [ ] P4.3.2 Phân biệt text OCR và text native, giữ page bbox/confidence, bảng/công thức theo bản nguồn.
-- [ ] P4.3.3 Đánh giá CER/WER, bảng/công thức, page provenance, latency/cost; công bố limitation.
-- [ ] P4.3.4 Chỉ bật OCR nếu chất lượng vượt text-only baseline trên corpus; có fallback rõ.
+- [x] P4.3.1 Adapter pretrained `rapidocr` (ONNX PP-OCR: CNN detector + CNN recognizer, chạy cục bộ). Không train/fine-tune; so sánh v6-small/v6-medium (giống nhau) và PP-OCRv4/v5 (không hỗ trợ `vi`). Layout-aware parser **chưa** có.
+- [x] P4.3.2 Phân biệt `textSource=native|ocr|mixed` ở document + chunk; giữ `ocrConfidence` (điểm engine, **không** phải xác suất đúng) và `ocrBbox` chuẩn hoá [0,1]; trang native không bị OCR lại. Bảng/công thức **chưa** dựng lại cấu trúc — chỉ là dòng text.
+- [x] P4.3.3 `evals/ocr_eval.py` đo CER/WER/confidence/latency trên corpus synthetic (EN+VI). Số thật: **CER EN 0.000, CER VI 0.094** (model **rơi dấu tiếng Việt**), WER VI 0.414, ~2.8 s/trang @200 DPI, mean confidence 0.991. Limitation công bố trong `docs/specs/21-P43-OCR.md`.
+- [x] P4.3.4 Mặc định **TẮT** (`OCR_ENABLED=false`); bật nhầm khi thiếu engine ⇒ fail-fast `OCR_NOT_CONFIGURED`, không âm thầm `no_text`/`ready`. Fallback rõ: `OCR_PAGE_LIMIT`/`OCR_TIMEOUT`/`OCR_FAILED` → `failed`, OCR không đọc được chữ → `no_text`+`OCR_NO_TEXT`.
 
-**Gate:** OCR không làm citation sai trang; metric được ghi lại.  
+**Gate:** PASS (opt-in) — citation không sai trang (`pageNumber` giữ nguyên qua OCR, test O13); metric được ghi lại; engine thật chạy trong test O15. **Giới hạn:** corpus synthetic, chưa có scan thật/mờ/nghiêng; tiếng Việt mất dấu ⇒ **chỉ nên bật khi người dùng chấp nhận rà lại**.
 **Không làm:** Bật OCR cho mọi file khi chưa có nhu cầu, giới thiệu CNN như thành phần đã có trong MVP.
 
 ---
@@ -806,6 +806,8 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-11-01 | **P4.2 web/arXiv**: outbound mặc định TẮT + allowlist rỗng; IP phải global-unicast ở cả validate và connect (chống DNS rebinding); redirect validate lại từng hop; robots 5xx ⇒ deny | **CHỌN (an toàn, fail-closed)** | `services/url_fetcher.py`, `tests/test_p42_web_ingest.py` |
 | 2026-11-01 | Quyền sử dụng nguồn do **người dùng xác nhận** (`userConfirmedRights` bắt buộc, 422 nếu thiếu) và lưu audit `rights_confirmed_at`; fetch thành công **không** nâng `verification_status` | **CHỌN (trung thực + pháp lý)** | `services/web_ingest.py`, `api/v1/sources.py` |
 | 2026-11-01 | arXiv chỉ nhận **ID**, host lấy từ config **và** phải nằm trong allowlist; metadata parse bằng `defusedxml` | **CHỌN (chống SSRF/XXE)** | `services/arxiv_service.py` |
+| 2026-11-01 | **P4.3 OCR**: engine pretrained `rapidocr` (ONNX, cục bộ), **opt-in** (mặc định TẮT) + `OCR_MODEL_VERSION` bắt buộc; chỉ OCR trang THIẾU text; chunk mang `textSource`/`ocrConfidence`/`ocrBbox`; bật OCR đổi `pipelineVersion` ⇒ document mới, citation cũ không bị ghi đè | **CHỌN (trung thực + an toàn)** | `services/ocr.py`, `tests/test_p43_ocr.py`, `docs/specs/21-P43-OCR.md` |
+| 2026-11-01 | OCR đo thật: CER EN 0.000 / **VI 0.094 do model rơi dấu**; confidence engine 0.991 **không** dùng làm ngưỡng đúng; corpus synthetic nên **không suy rộng** | **CHỌN (công bố giới hạn)** | `evals/ocr_eval.py` |
 
 ---
 

@@ -44,6 +44,12 @@ function DocRow({
       <strong>{document.originalFilename ?? "tài liệu"}</strong>{" "}
       <span className={`badge ${tone}`}>{documentStatusLabel(document.status)}</span>
       {originLabel && <span className="badge badge-muted"> {originLabel}</span>}{" "}
+      {document.textSource === "ocr" && (
+        <span className="badge badge-muted"> OCR {document.ocrPages ?? 0} trang</span>
+      )}
+      {document.textSource === "mixed" && (
+        <span className="badge badge-muted"> text gốc + OCR</span>
+      )}
       {document.originUrl && (
         <a
           className="link"
@@ -58,6 +64,7 @@ function DocRow({
         {formatBytes(document.byteSize)}
         {document.pageCount != null && ` · ${document.pageCount} trang`}
         {document.status === "ready" && ` · ${document.chunkCount} đoạn text`}
+        {document.status === "ready" && document.textSource === "ocr" && " · do máy đọc"}
         {document.rightsConfirmed && " · đã xác nhận quyền sử dụng"}
         {document.status === "ready" && document.preview && (
           <>
@@ -143,9 +150,15 @@ export default function SourcesPage() {
     onSuccess: (document, variables) => {
       setStatus(
         document.status === "ready"
-          ? "Đã trích xuất xong nội dung PDF."
+          ? document.textSource === "ocr"
+            ? "Đã đọc PDF scan bằng OCR — hãy kiểm tra lại nội dung trước khi dùng."
+            : document.textSource === "mixed"
+              ? "Đã trích xuất text gốc và OCR các trang scan."
+              : "Đã trích xuất xong nội dung PDF."
           : document.status === "no_text"
-            ? "PDF không có lớp text (có thể là bản scan); OCR chưa được bật."
+            ? document.error?.code === "OCR_NO_TEXT"
+              ? "OCR chạy xong nhưng không đọc được chữ nào trên tài liệu."
+              : "PDF không có lớp text (có thể là bản scan); OCR chưa được bật."
             : "Đang xử lý tài liệu…"
       );
       setError("");
@@ -224,6 +237,21 @@ export default function SourcesPage() {
           <p className="muted">
             Giới hạn: tối đa {formatBytes(config.data.maxPdfBytes)} và{" "}
             {config.data.maxPdfPages} trang mỗi file.
+          </p>
+        )}
+        {config.data && !config.data.ocrConfigured && (
+          <div className="notice-box">
+            OCR cho PDF scan đang <strong>tắt</strong>. Tài liệu scan (ảnh, không có lớp
+            text) sẽ ở trạng thái «không có lớp text» — hệ thống không tự đoán nội dung.
+          </div>
+        )}
+        {config.data && config.data.ocrConfigured && (
+          <p className="muted">
+            OCR đang bật: engine <code>{config.data.ocrEngine}</code> /{" "}
+            <code>{config.data.ocrVersion}</code>, tối đa {config.data.ocrMaxPages} trang
+            OCR mỗi tài liệu, render {config.data.ocrDpi} DPI. Text do máy đọc được ghi
+            nhãn <strong>OCR</strong> và có thể sai (đặc biệt dấu tiếng Việt) — xem lại
+            trước khi dùng làm căn cứ.
           </p>
         )}
         {config.data && !uploadReady && (

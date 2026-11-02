@@ -411,6 +411,14 @@ class SourceDocument(Base):
     original_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Object key NGẪU NHIÊN trong private storage; không phải path do client gửi.
     storage_key: Mapped[str] = mapped_column(Text)
+    # P4.3 — text của tài liệu này đến từ đâu. `native` = text layer của PDF;
+    # `ocr` = toàn bộ trang đọc bằng engine; `mixed` = có cả hai. NULL = document
+    # cũ trước P4.3 (không suy đoán ngược). Đây KHÔNG phải độ tin cậy nội dung.
+    text_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Số trang đã OCR + engine/version đã dùng ⇒ truy vết "text do máy đọc".
+    ocr_pages: Mapped[int] = mapped_column(Integer, default=0)
+    ocr_engine: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ocr_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     # P1.2-style lease để retry bounded và không có hai worker cùng ghi.
     attempts_count: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
@@ -470,6 +478,14 @@ class SourceChunk(Base):
     section_anchor: Mapped[str | None] = mapped_column(Text, nullable=True)
     text: Mapped[str] = mapped_column(Text)
     text_hash: Mapped[str] = mapped_column(Text)
+    # P4.3 — provenance của text: `native` (text layer PDF) hay `ocr` (máy đọc ảnh).
+    # Document cũ trước P4.3 có NULL ⇒ coi như `native` ở tầng đọc (không backfill
+    # bịa dữ liệu). `ocr_confidence`/`ocr_bbox` NULL với chunk native — không có
+    # nghĩa "tin cậy 100%".
+    text_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ocr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # bbox chuẩn hoá theo trang: [x0, y0, x1, y1] trong [0,1].
+    ocr_bbox: Mapped[list | None] = mapped_column(JSONVariant, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

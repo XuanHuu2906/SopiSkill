@@ -81,6 +81,10 @@ def _document_out(document: SourceDocument, *, chunk_count: int = 0, preview: st
         error=document.error,
         attempts=document.attempts_count,
         rightsConfirmed=document.rights_confirmed_at is not None,
+        textSource=document.text_source,
+        ocrPages=document.ocr_pages or 0,
+        ocrEngine=document.ocr_engine,
+        ocrVersion=document.ocr_version,
         ingestedAt=document.ingested_at.isoformat() if document.ingested_at else None,
         createdAt=document.created_at.isoformat() if document.created_at else None,
     )
@@ -168,6 +172,12 @@ async def ingest_config(
         webAllowedHostCount=len(settings.web_allowed_hosts),
         webMaxFetchBytes=settings.web_max_fetch_bytes,
         webRespectRobots=settings.web_ingest_respect_robots,
+        ocrEnabled=settings.ocr_enabled,
+        ocrConfigured=settings.ocr_configured,
+        ocrEngine=settings.ocr_engine if settings.ocr_enabled else "",
+        ocrVersion=settings.ocr_model_version if settings.ocr_enabled else "",
+        ocrMaxPages=settings.ocr_max_pages,
+        ocrDpi=settings.ocr_dpi,
         arxivEnabled=(
             settings.web_ingest_active
             and url_fetcher.host_allowed(settings.arxiv_pdf_host, settings.web_allowed_hosts)
@@ -787,6 +797,8 @@ async def search_course_sources(
             sourceTitle=item.source_title,
             sourceVersion=item.source_version,
             sourceUrl=item.source_url,
+            textSource=item.text_source,
+            ocrConfidence=item.ocr_confidence,
             snippet=item.text[:400],
             lexicalRank=item.lexical_rank,
             vectorRank=item.vector_rank,

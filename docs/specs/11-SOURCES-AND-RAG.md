@@ -20,7 +20,7 @@ PolySkill; toàn bộ ở đây là thiết kế của SopiSkill.
 | RAG-009 | Citation server validator: chỉ IDs đã retrieve và tồn tại, user có quyền | P4.1 |
 | RAG-010 | Không có evidence → trả lời không đủ thông tin, không bịa citation | P4.1 |
 | RAG-011 | URL/arXiv ingest chống SSRF, licensing, redirects | P4.2 **IMPL+TESTED offline** |
-| RAG-012 | OCR pretrained chỉ bật khi corpus scan và eval cho thấy cần | P4.3 conditional |
+| RAG-012 | OCR pretrained chỉ bật khi corpus scan và eval cho thấy cần | P4.3 **IMPL+TESTED (opt-in)** |
 
 ## 2. P4.0 ingestion sequence (proposed)
 
@@ -133,10 +133,18 @@ tải về; robots.txt chỉ hỗ trợ luật path-prefix (không wildcard `*`/
 nội dung theo TTL (fetch lại cùng nội dung idempotent ở DB nhưng vẫn gọi mạng); chưa xử lý trang
 render bằng JavaScript.
 
-## 8. P4.3 OCR conditional
+## 8. P4.3 OCR conditional — chi tiết `docs/specs/21-P43-OCR.md`
 
-- Chỉ nghiên cứu OCR CNN/ViT pretrained nếu PDF scan là use case thực; lưu page bbox/confidence và flag `origin=ocr`.
-- Eval CER/WER và độ chính xác bảng/công thức/citation page; nếu không đạt threshold so với baseline thì không bật.
+Đã triển khai (opt-in, mặc định TẮT) và đo trên corpus synthetic:
+
+- Engine pretrained `rapidocr` (ONNX PP-OCR, cục bộ, không train/fine-tune, không gọi API ngoài).
+- Chỉ OCR trang THIẾU text layer; trang native giữ nguyên. Chunk mang `textSource`,
+  `ocrConfidence` (điểm engine, **không** phải xác suất đúng), `ocrBbox` chuẩn hoá theo trang.
+- Bật OCR đổi `pipelineVersion` ⇒ document mới; citation cũ không bị ghi đè.
+- Trần `OCR_MAX_PAGES`/`OCR_DPI`/`OCR_TIMEOUT_SECONDS`; mã lỗi `OCR_NOT_CONFIGURED`,
+  `OCR_PAGE_LIMIT`, `OCR_NO_TEXT`, `OCR_TIMEOUT`, `OCR_FAILED`.
+- Đo thật: CER EN = 0.000; CER VI = 0.094 (model **rơi dấu tiếng Việt**); ~2.8 s/trang @200 DPI.
+- Chưa đo bảng/công thức; corpus synthetic không đại diện scan thật ⇒ không suy rộng.
 
 ## 9. Acceptance & không làm
 

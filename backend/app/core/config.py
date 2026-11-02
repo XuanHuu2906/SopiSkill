@@ -150,6 +150,39 @@ class Settings(BaseSettings):
     source_ingest_lease_seconds: int = 300
     source_ingest_max_attempts: int = 3
 
+    # ---------- P4.3 OCR cho PDF scan ----------
+    # MẶC ĐỊNH TẮT: PDF scan vẫn `no_text` như P4.0. Bật chỉ khi có corpus scan
+    # thật và đã đo CER/WER (`evals/ocr_eval.py`).
+    ocr_enabled: bool = False
+    # Engine pretrained (chạy cục bộ, không network):
+    #   `rapidocr` — ONNX PP-OCR, nhẹ; charset THIẾU dấu tiếng Việt ⇒ CER VI ≈ 9,4%.
+    #   `vietocr`  — VGG-Transformer pretrained VI + detector rapidocr; CER VI ≈ 0,4%,
+    #                cần torch (~250MB) và chậm hơn ~1,5×.
+    # Giá trị khác ⇒ `OCR_NOT_CONFIGURED`, KHÔNG quay về text-only.
+    ocr_engine: str = "rapidocr"
+    # Ngôn ngữ nhận dạng của engine. `vi` cần model Latin của PP-OCR; model mặc
+    # định (Trung/Anh) làm RƠI DẤU tiếng Việt ⇒ phải khai báo và đo lại CER.
+    ocr_lang: str = "vi"
+    # Phiên bản model/pipeline OCR. Đổi ⇒ `pipeline_version` đổi ⇒ document mới,
+    # chunk cũ không bị ghi đè.
+    ocr_model_version: str = ""
+    # VietOCR (engine `vietocr`): weight pretrained CỤC BỘ. Để trống ⇒ Predictor
+    # dùng cache của VietOCR; ingest KHÔNG tự tải từ mạng.
+    ocr_vietocr_weights: str = ""
+    # File config VietOCR tuỳ biến (rỗng = dùng cấu hình có sẵn `vgg_transformer`).
+    ocr_vietocr_config: str = ""
+    # Trần số trang OCR cho MỘT tài liệu (0 = không giới hạn — KHÔNG khuyến nghị:
+    # OCR là CPU-bound, vài giây/trang).
+    ocr_max_pages: int = 20
+    # DPI render trang trước khi OCR. 200 là mức cân bằng chất lượng/thời gian;
+    # dưới 150 mất dấu tiếng Việt, trên 300 chậm mà ít cải thiện.
+    ocr_dpi: int = 200
+    # Trần thời gian OCR toàn bộ một tài liệu (giây) ⇒ `OCR_TIMEOUT`.
+    ocr_timeout_seconds: float = 300.0
+    # Ngưỡng confidence tối thiểu để giữ một dòng OCR (0–1). Dòng dưới ngưỡng bị
+    # BỎ chứ không bịa; đây là lọc nhiễu, KHÔNG phải bảo đảm độ chính xác.
+    ocr_min_confidence: float = 0.0
+
     # Kho lưu trữ: `s3` (MinIO/S3-compatible) cho mọi môi trường thật;
     # `memory` chỉ là backend test/dev (mất khi restart, KHÔNG dùng production).
     # Rỗng = chưa cấu hình ⇒ upload bị từ chối 503, không ghi file cục bộ ngầm.
@@ -311,6 +344,20 @@ class Settings(BaseSettings):
     def web_ingest_active(self) -> bool:
         """Chỉ có hiệu lực khi bật cờ VÀ có ít nhất một host được phép."""
         return bool(self.web_ingest_enabled and self.web_allowed_hosts)
+
+    @property
+    def ocr_configured(self) -> bool:
+        """OCR có hiệu lực thật? Cờ bật + engine hợp lệ + version khai báo.
+
+        Import `app.services.ocr` ở đây sẽ tạo vòng import (ocr đọc Settings), nên
+        chỉ kiểm tra cấu hình tĩnh; việc kiểm tra engine importable do
+        `app.services.ocr.configured()` làm (dùng cùng điều kiện).
+        """
+        if not self.ocr_enabled:
+            return False
+        if (self.ocr_engine or "").strip().lower() not in ("rapidocr", "vietocr"):
+            return False
+        return bool((self.ocr_model_version or "").strip())
 
     # Auth
     jwt_secret: str = ""

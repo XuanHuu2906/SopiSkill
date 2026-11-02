@@ -250,6 +250,13 @@ class SourceDocumentOut(BaseModel):
     error: dict | None = None
     attempts: int = 0
     rightsConfirmed: bool = False
+    # P4.3 — text đến từ đâu: `native` (text layer PDF), `ocr`, hay `mixed`.
+    # `null` = document cũ trước P4.3 (không suy đoán ngược).
+    textSource: Literal["native", "ocr", "mixed"] | None = None
+    # Số trang đã OCR + engine/version. Chỉ để truy vết "text do máy đọc".
+    ocrPages: int = 0
+    ocrEngine: str | None = None
+    ocrVersion: str | None = None
     ingestedAt: str | None = None
     createdAt: str | None = None
 
@@ -285,6 +292,14 @@ class SourceIngestConfigOut(BaseModel):
     webMaxFetchBytes: int = 0
     webRespectRobots: bool = True
     arxivEnabled: bool = False
+    # P4.3 — OCR cho PDF scan. `ocrConfigured=false` ⇒ scan vẫn `no_text`; UI phải
+    # nói thật là "chưa bật OCR", không hứa đọc được bản scan.
+    ocrEnabled: bool = False
+    ocrConfigured: bool = False
+    ocrEngine: str = ""
+    ocrVersion: str = ""
+    ocrMaxPages: int = 0
+    ocrDpi: int = 0
 
 
 class RagSearchRequest(BaseModel):
@@ -314,6 +329,11 @@ class RagChunkOut(BaseModel):
     sourceVersion: str | None = None
     # P4.2 — URL nguồn thực (web/arXiv); None với PDF upload.
     sourceUrl: str | None = None
+    # P4.3 — `native` hay `ocr`. Đoạn do máy đọc ảnh phải được nói rõ cho người
+    # học/người review, không giả vờ là text gốc.
+    textSource: Literal["native", "ocr"] = "native"
+    ocrConfidence: float | None = None
+    ocrBbox: list[float] | None = None
     snippet: str
     lexicalRank: int | None = None
     vectorRank: int | None = None

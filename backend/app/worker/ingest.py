@@ -1,9 +1,10 @@
-"""Ingest worker (P4.0) — claim, extract, chunk, persist; bounded retry.
+"""Ingest worker (P4.0 + P4.3) — claim, extract, (OCR), chunk, persist; bounded retry.
 
 Luồng giống `worker/generation.py` (P1.2) nhưng cho tài liệu nguồn:
   1. `claim_document` nguyên tử (queued → extracting + lease).
   2. Đọc bytes từ private storage (server-side key, không lấy từ client).
-  3. `extract_pages` → `chunk_pages` (text-only; PDF scan ⇒ `no_text`).
+  3. `extract_pages` → OCR trang scan nếu BẬT → `chunk_pages`.
+     (text-only; PDF scan không OCR ⇒ `no_text`)
   4. `finish_ready` ghi chunk + trạng thái trong một transaction.
   5. Lỗi tạm thời → requeue bounded; lỗi dữ liệu (corrupt/encrypted/no text)
      → `failed` với mã ổn định, KHÔNG retry vô ích.
@@ -107,8 +108,14 @@ async def _ingest(Session, document_id: str) -> None:
                 return
 
             try:
-                extraction = await asyncio.to_thread(ingest_service.extract_pages, data)
+                extraction = await asyncio.to_thread(
+                    ingest_service.extract_document, data, settings=get_settings()
+                )
             except ingest_service.IngestError as exc:
+                if exc.code == "OCR_NO_TEXT":
+                    await ingest_service.finish_no_text(db, document, code="OCR_NO_TEXT")
+                    logger.info("ingest ocr_no_text document_id=%s source_id=%s", did, source_id)
+                    return
                 if exc.code == "NO_EXTRACTABLE_TEXT":
                     await ingest_service.finish_no_text(db, document)
                     logger.info("ingest no_text document_id=%s source_id=%s", did, source_id)
@@ -123,11 +130,12 @@ async def _ingest(Session, document_id: str) -> None:
 
             await ingest_service.finish_ready(db, document, extraction.pages, drafts)
             logger.info(
-                "ingest ready document_id=%s source_id=%s pages=%s chunks=%s",
+                "ingest ready document_id=%s source_id=%s pages=%s chunks=%s text_source=%s",
                 did,
                 source_id,
                 len(extraction.pages),
                 len(drafts),
+                extraction.text_source,
             )
             # P4.1 — tạo embedding cho chunk vừa ghi. Best-effort: lỗi embedding
             # KHÔNG được biến document thành `failed`, vì nội dung đã ingest xong
@@ -226,14 +234,19 @@ async def _ingest_fetched(
         return
 
     try:
-        extraction = await asyncio.to_thread(ingest_service.extract_pages, data)
+        # P4.3 — dùng CÙNG pipeline với PDF upload để bật OCR áp dụng nhất quán cho
+        # arXiv/PDF fetched; tắt OCR ⇒ hành vi P4.0 giữ nguyên.
+        extraction = await asyncio.to_thread(
+            ingest_service.extract_document, data, settings=get_settings()
+        )
     except ingest_service.IngestError as exc:
-        if exc.code == "NO_EXTRACTABLE_TEXT":
-            await ingest_service.finish_no_text(db, document)
+        if exc.code in ("NO_EXTRACTABLE_TEXT", "OCR_NO_TEXT"):
+            await ingest_service.finish_no_text(db, document, code=exc.code)
             logger.info(
-                "ingest arxiv no_text document_id=%s source_id=%s",
+                "ingest arxiv no_text document_id=%s source_id=%s code=%s",
                 document.id,
                 document.source_id,
+                exc.code,
             )
             return
         raise

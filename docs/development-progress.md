@@ -2,6 +2,87 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-01 — P4.3 OCR cho PDF scan (opt-in, engine pretrained)
+
+- Base commit: `e3cb783` (`feat/p4.3-ocr`, working tree)
+- New commit/branch: branch `feat/p4.3-ocr` — **NOT COMMITTED**
+- Scope & decisions:
+  - **Mặc định TẮT** (`OCR_ENABLED=false`): hành vi P4.0/P4.2 giữ nguyên; PDF scan vẫn `no_text`.
+    Bật cờ mà engine chưa cài/`OCR_MODEL_VERSION` trống ⇒ upload **422 `OCR_NOT_CONFIGURED`**,
+    không ghi file, không âm thầm quay về text-only.
+  - **Pretrained only**: `rapidocr` (ONNX PP-OCR, CNN det + CNN rec, chạy cục bộ). Không
+    train/fine-tune, không gửi tài liệu ra API ngoài. So sánh v6-small/v6-medium (kết quả giống
+    nhau), PP-OCRv4/v5 (không hỗ trợ `vi`).
+  - **Chỉ OCR trang THIẾU text**; trang native không bị đọc lại ⇒ tài liệu hỗn hợp có
+    `textSource=mixed`, chunk native giữ `ocrConfidence=NULL` (không bịa điểm tin cậy).
+  - **Provenance**: chunk OCR mang `textSource=ocr`, `ocrConfidence` (điểm engine, **không** phải
+    xác suất đúng đã hiệu chuẩn) và `ocrBbox=[x0,y0,x1,y1]` chuẩn hoá theo trang; offset vẫn cắt
+    đúng substring text trang.
+  - **Bật OCR đổi `pipelineVersion`** (`p4.0-v1+ocr-rapidocr-<ver>`, web: `p4.2-v1+…`) ⇒ document
+    cũ (`no_text`) không bị ghi đè, citation cũ giữ đúng dữ liệu đã sinh ra nó.
+  - **Fail-closed**: trần `OCR_MAX_PAGES` kiểm TRƯỚC khi chạy engine; `OCR_TIMEOUT`/`OCR_FAILED`
+    retryable → `failed`; OCR không đọc được chữ → `no_text` + `OCR_NO_TEXT`.
+- IMPLEMENTED:
+  - `backend/app/services/ocr.py` (mới): `OcrLine{text,confidence,bbox}`, `OcrPage`, `OcrError`,
+    `engine_available`, `configured`, `ocr_pdf_pages` (render pypdfium2 → engine ONNX), cache
+    engine có lock, `reset_engine`.
+  - `backend/app/services/ingest.py`: `LineSpan`, `ExtractedPage.text_source/line_spans`,
+    `ChunkDraft.text_source/ocr_confidence/ocr_bbox`, `pages_without_text`, `build_ocr_pages`,
+    `apply_ocr`/`apply_ocr_pages`, `extract_document`, `pipeline_version_for`/`ocr_pipeline_version`,
+    `_annotate_provenance`, `finish_ready`/`finish_no_text(code=…)`.
+  - `backend/app/worker/ingest.py`: PDF upload và arXiv/PDF fetched dùng chung `extract_document`.
+  - `backend/app/services/web_ingest.py`: `pipeline_version_for` cho web/arXiv.
+  - `backend/app/services/retrieval_service.py`: `RetrievedChunk.text_source/ocr_confidence`.
+  - `backend/app/services/citation_service.py`: citation/pointer có `textSource`, `ocrConfidence`.
+  - `backend/app/models/models.py`, `alembic/versions/0014_p43_ocr.py` (expand-only): document
+    `text_source|ocr_pages|ocr_engine|ocr_version`; chunk `text_source|ocr_confidence|ocr_bbox`.
+  - `backend/app/core/config.py`: 8 cấu hình `OCR_*` + `ocr_configured`.
+  - `backend/app/schemas/schemas.py`, `backend/app/api/v1/sources.py`: `textSource/ocrPages/
+    ocrEngine/ocrVersion` trong document; `ocrEnabled/ocrConfigured/ocrEngine/ocrVersion/
+    ocrMaxPages/ocrDpi` trong ingest-config; `textSource/ocrConfidence/ocrBbox` trong search.
+  - `frontend/src/lib/api.ts`, `frontend/src/app/sources/page.tsx`: badge OCR/mixed, notice khi
+    OCR tắt, thông điệp trung thực khi `OCR_NO_TEXT`.
+  - `backend/requirements-ocr.txt` (mới), `backend/Dockerfile` (`ARG INSTALL_OCR=false`),
+    `.env.example`, `docker-compose.yml`, `docs/specs/21-P43-OCR.md` (mới), `docs/specs/
+    11-SOURCES-AND-RAG.md`, `docs/SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md`.
+  - `backend/evals/ocr_eval.py` (mới): CER/WER/confidence/latency trên corpus synthetic EN+VI.
+  - `backend/tests/scan_fixtures.py`, `backend/tests/test_p43_ocr.py` (O01–O15 + web/upload
+    pipeline), `backend/tests/test_p43_migration_contract.py`.
+- TESTED (đã chạy trong phiên này):
+  - `cd backend && python -m pytest -q` → **534 passed, 25 skipped, 16 warnings** (exit 0). Suite
+    gồm 16 test P4.3 + 7 test migration contract; test O15 chạy **engine rapidocr thật** trên PDF
+    scan tự sinh.
+  - `python -m evals.ocr_eval --lang vi` → 8 case: **CER avg 0.0470** (EN 0.000 / **VI 0.0939**),
+    **WER avg 0.2068**, mean confidence 0.9913, detectedPageRate 1.000, **~2770 ms/trang @200 DPI**.
+    Model **rơi dấu tiếng Việt** ("Cấu trúc" → "Cu trúc"); thử v6-medium/v4/v5 không cải thiện.
+  - `python -m evals.ocr_eval --lang en --language vi` → CER 0.0939, WER 0.4137 (xác nhận lỗi do
+    model/ngôn ngữ, không do tham số eval).
+  - Migration trên **PostgreSQL tạm** `p43_mig_check` (container `reverseengineer-db-1`, port 5433):
+    `alembic upgrade head` → `current` = `0014_p43_ocr` → `downgrade -1` (6 cột biến mất, bảng còn)
+    → `upgrade head` → `0014_p43_ocr`. DB tạm đã `DROP DATABASE` sau kiểm tra; **không đụng DB
+    chính**.
+  - `docker compose config` OK; `docker compose build backend` OK (image mặc định **không** có OCR
+    deps ⇒ fail-fast giữ nguyên).
+  - `cd frontend && npx tsc --noEmit` OK; `npm run build` OK (10 route).
+  - `git diff --check` sạch.
+- NOT TESTED:
+  - OCR trên **corpus scan thật** (mờ/nghiêng/bảng/công thức/chữ viết tay). Corpus hiện tại là
+    synthetic dựng bằng font hệ thống ⇒ không suy rộng CER.
+  - Layout-aware parser cho bảng/công thức (chưa làm; chỉ dòng text).
+  - E2E Docker full stack với `OCR_ENABLED=true` (image chưa cài `requirements-ocr.txt`).
+  - `e2e_acceptance.py` chưa chạy lại trong phiên này (stack Docker không được bật).
+- BLOCKED: không. **Quyết định cần người dùng**: có chấp nhận chất lượng tiếng Việt hiện tại
+  (mất dấu) cho bật OCR production hay không, và có cho phép cài OCR deps vào image production.
+- Database: `0014_p43_ocr` (expand-only, downgrade chỉ drop 6 cột mới). Không backfill document cũ
+  (`text_source=NULL` ⇒ tầng đọc coi là `native`).
+- Security: không tin client (magic/size/page); text OCR là **untrusted** (vẫn qua `wrap_untrusted`
+  khi vào prompt); engine chạy cục bộ, không request outbound; log không chứa nội dung tài liệu;
+  cross-user vẫn 404 (O10); config API không lộ credential.
+- Regressions: 0 — 518 test cũ vẫn pass, P4.0/P4.2 giữ nguyên hành vi khi OCR tắt.
+- Known limitations: xem `docs/specs/21-P43-OCR.md` mục 5.
+- PHASE GATE: **PASS (opt-in)** — kèm giới hạn tiếng Việt + corpus synthetic đã công bố.
+- NEXT: quyết định bật OCR production (cần corpus thật + chấp nhận sai dấu), hoặc chuyển P5.0/P6.
+
 ## 2026-11-01 — P4.2 Web/arXiv Sources (offline + SSRF guard đầy đủ)
 
 - Base commit: `bc78efe` (`main`, working tree)
