@@ -866,3 +866,147 @@ class XpEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class Skill(Base):
+    """Skill ổn định trong MỘT course, backfill từ `CurriculumSkill` của proposal.
+
+    `key` = `CurriculumSkill.id` (ổn định trong phạm vi course, KHÔNG phải UUID
+    toàn cục). Upsert theo `(course_id, key)` — không delete+insert, vì
+    `skill_mastery.skill_id` là CASCADE.
+    """
+
+    __tablename__ = "skills"
+    __table_args__ = (UniqueConstraint("course_id", "key", name="uq_skill_course_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE"), index=True
+    )
+    key: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    bloom_level: Mapped[str] = mapped_column(Text, default="understand")
+    outcome: Mapped[str] = mapped_column(Text, default="")
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class LessonSkill(Base):
+    """Liên kết lesson ↔ skill. Mỗi lesson hiện có đúng 1 skill (P2.1)."""
+
+    __tablename__ = "lesson_skills"
+    __table_args__ = (Index("ix_lesson_skills_skill", "skill_id"),)
+
+    lesson_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lessons.id", ondelete="CASCADE"), primary_key=True
+    )
+    skill_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("skills.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SkillMastery(Base):
+    """Snapshot mastery theo (user, skill).
+
+    `mastery_score` là heuristic accuracy có trọng số thời gian — **KHÔNG** phải
+    xác suất đã hiệu chuẩn. Chỉ có row khi user đã có attempt thật.
+    """
+
+    __tablename__ = "skill_mastery"
+    __table_args__ = (Index("ix_skill_mastery_skill", "skill_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    skill_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("skills.id", ondelete="CASCADE"), primary_key=True
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    correct: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    mastery_score: Mapped[float] = mapped_column(Float, default=0.0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReviewCard(Base):
+    """Snapshot FSRS hiện tại cho (user, lesson) — 1 card / cặp.
+
+    `scheduler_version` pin thuật toán đã tạo ra lịch để tái lập về sau.
+    """
+
+    __tablename__ = "review_cards"
+    __table_args__ = (
+        UniqueConstraint("user_id", "lesson_id", name="uq_review_card_user_lesson"),
+        Index("ix_review_cards_user_due", "user_id", "due_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    lesson_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lessons.id", ondelete="CASCADE")
+    )
+    skill_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("skills.id", ondelete="SET NULL"), nullable=True
+    )
+    state: Mapped[int] = mapped_column(Integer, default=2)
+    step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    difficulty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_review_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    scheduler_version: Mapped[str] = mapped_column(Text)
+    created_from_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("lesson_attempts.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReviewEvent(Base):
+    """Audit append-only của mỗi lần review. Không sửa/xoá lịch sử."""
+
+    __tablename__ = "review_events"
+    __table_args__ = (
+        UniqueConstraint("card_id", "client_review_id", name="uq_review_event_client_id"),
+        Index("ix_review_events_card_reviewed", "card_id", "reviewed_at"),
+        Index("ix_review_events_user_reviewed", "user_id", "reviewed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    card_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("review_cards.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    rating: Mapped[int] = mapped_column(Integer)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    elapsed_days: Mapped[int] = mapped_column(Integer, default=0)
+    scheduled_days: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    state_before: Mapped[int] = mapped_column(Integer, default=0)
+    state_after: Mapped[int] = mapped_column(Integer, default=0)
+    scheduler_version: Mapped[str] = mapped_column(Text)
+    client_review_id: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
