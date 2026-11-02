@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useEffect, useRef } from "react";
 import {
   api,
   ApiError,
@@ -10,6 +11,7 @@ import {
   fetchCourseSources,
   fetchLearningPath,
   isVerifiedStatus,
+  recordRecommendation,
   verificationLabel,
 } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
@@ -78,6 +80,17 @@ export default function CoursePage() {
   const p50Disabled =
     (mastery.error instanceof ApiError && mastery.error.status === 503) ||
     (learningPath.error instanceof ApiError && learningPath.error.status === 503);
+
+  // P5.2b — báo exposure MỘT lần cho mỗi token mới. Hoàn toàn ẩn: không hiện
+  // loading/error, không invalidate cache; lỗi bị bỏ qua có chủ đích.
+  const reportedToken = useRef<string | null>(null);
+  const recommendationToken = learningPath.data?.recommendationToken ?? null;
+  useEffect(() => {
+    if (!courseId || !recommendationToken) return;
+    if (reportedToken.current === recommendationToken) return;
+    reportedToken.current = recommendationToken;
+    recordRecommendation(courseId, recommendationToken).catch(() => {});
+  }, [courseId, recommendationToken]);
 
   if (!courseId) return <div className="container">Thiếu courseId.</div>;
   if (authLoading) return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;

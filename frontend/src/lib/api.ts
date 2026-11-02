@@ -747,6 +747,15 @@ export interface LearningPath {
     nodes: { id: string; title: string; bloomLevel: string }[];
     edges: string[][];
   };
+  // P5.2b — token server ký để báo exposure. null khi cờ tắt hoặc không có arm.
+  recommendationToken?: string | null;
+}
+
+export interface RecommendationEventResult {
+  recorded: boolean;
+  duplicate: boolean;
+  exposureId: string | null;
+  reason: string | null;
 }
 
 export interface DueReview {
@@ -781,6 +790,20 @@ export function fetchCourseMastery(courseId: string): Promise<CourseMastery> {
 
 export function fetchLearningPath(courseId: string): Promise<LearningPath> {
   return api<LearningPath>(`/v1/courses/${courseId}/learning-path`);
+}
+
+/**
+ * Báo exposure cho gợi ý vừa hiển thị. Server tự verify token + tính lại arm;
+ * client không gửi arm/propensity. Lỗi bị nuốt ở caller (hành vi ẩn, không UI).
+ */
+export function recordRecommendation(
+  courseId: string,
+  recommendationToken: string
+): Promise<RecommendationEventResult> {
+  return api<RecommendationEventResult>(
+    `/v1/courses/${courseId}/recommendation-events`,
+    { method: "POST", body: { recommendationToken } }
+  );
 }
 
 export function fetchDueReviews(
