@@ -32,6 +32,8 @@ ID_PREFIXES = (
     "crs_", "lsn_", "unt_", "job_", "att_", "src_", "tth_", "tmsg_",
     # P5.0 reviews
     "rvc_", "rve_",
+    # P5.2 exposure
+    "rce_",
 )
 
 

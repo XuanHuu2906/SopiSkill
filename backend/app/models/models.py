@@ -1010,3 +1010,57 @@ class ReviewEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class RecommendationEvent(Base):
+    """Audit append-only của MỘT lần gợi ý đã hiển thị (P5.2b).
+
+    Không có cột `reward_*`: reward suy ra **offline** bằng JOIN với `lesson_attempts`
+    (theo `arm_id` + `lesson_content_version`) và `review_events` (đi qua
+    `review_cards` vì `review_events` không có `lesson_id`). Nhờ vậy bảng này
+    append-only thật: service không UPDATE, không xoá (chỉ CASCADE khi user/course
+    bị xoá theo yêu cầu privacy).
+
+    UNIQUE = "một exposure cho mỗi (user, course, context, arm)", **KHÔNG** phải đếm
+    impression. Nếu sau này bandit cần impression count thì phải thêm bảng riêng —
+    không được ngầm đổi nghĩa ràng buộc này.
+
+    `arm_id` NOT NULL có chủ đích: arm luôn là một lesson cụ thể, tránh phụ thuộc
+    NULL-semantics của PostgreSQL (NULL != NULL sẽ làm UNIQUE không chặn được trùng).
+
+    `propensity = 1.0` phản ánh policy deterministic hiện tại ⇒ **OPE chưa hợp lệ**;
+    module eval ghi `opeSupported=false`.
+    """
+
+    __tablename__ = "recommendation_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "course_id",
+            "context_hash",
+            "arm_kind",
+            "arm_id",
+            name="uq_recommendation_event_context",
+        ),
+        Index("ix_recommendation_events_course", "course_id", "exposed_at"),
+        Index("ix_recommendation_events_user", "user_id", "exposed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE")
+    )
+    context_hash: Mapped[str] = mapped_column(Text)
+    policy_version: Mapped[str] = mapped_column(Text)
+    arm_kind: Mapped[str] = mapped_column(Text)
+    arm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"))
+    lesson_content_version: Mapped[int] = mapped_column(Integer)
+    propensity: Mapped[float] = mapped_column(Float)
+    reason_code: Mapped[str] = mapped_column(Text)
+    exposed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
