@@ -350,6 +350,73 @@ st, forged = call("POST", f"/v1/lessons/{lesson_id}/attempts", {
 forged_ok = st == 422 or (st == 201 and forged.get("score", {}).get("correct") == 0)
 step("8d. Client gui correct=true khong doi diem", forged_ok, f"status={st} score={forged.get('score')}")
 
+# 8e. P5.0 — mastery / learning-path / review. Flag P50_ENABLED quyết định hành vi:
+#     tắt ⇒ 503 có mã; bật ⇒ mastery có dữ liệu, learning-path có lý do, review
+#     grade idempotent theo clientReviewId. Không tự bật cờ.
+st, mastery_out = call("GET", f"/v1/courses/{course_id}/mastery")
+if st == 503:
+    _code = (mastery_out.get("detail") or {}).get("code")
+    step(
+        "8e. P5.0 tat -> 503 co ma ro rang",
+        _code == "P50_NOT_ENABLED",
+        f"status={st} code={_code}",
+    )
+else:
+    _items = mastery_out.get("items") or []
+    _has_rule_based = bool(_items) and all(
+        item.get("method") == "rule_based"
+        and isinstance(item.get("masteryScore"), (int, float))
+        and "probability" not in json.dumps(item).lower()
+        for item in _items
+    )
+    step(
+        "8e. P5.0 bat -> mastery rule-based (khong gia xac suat)",
+        st == 200
+        and _has_rule_based
+        and attempt.get("reviewCardCreated") is True,
+        f"status={st} skills={len(_items)} cardCreated={attempt.get('reviewCardCreated')}",
+    )
+
+    st_path, path_out = call("GET", f"/v1/courses/{course_id}/learning-path")
+    step(
+        "8f. Learning path co ly do kiem tra duoc",
+        st_path == 200
+        and isinstance(path_out.get("reviewDueCount"), int)
+        and (
+            path_out.get("nextLesson") is None
+            or (path_out["nextLesson"].get("reason") or {}).get("code")
+            in ("NEXT_IN_SEQUENCE", "PREREQUISITES_MET")
+        ),
+        f"status={st_path} blocked={len(path_out.get('blockedBy') or [])}",
+    )
+
+    st_due, due_out = call("GET", f"/v1/reviews/due?courseId={course_id}")
+    _due_items = due_out.get("items") or []
+    if _due_items:
+        _card_id = _due_items[0]["cardId"]
+        _review_id = uuid.uuid4().hex[:16]
+        st_g1, g1 = call(
+            "POST", f"/v1/reviews/{_card_id}/grade", {"rating": 3, "clientReviewId": _review_id}
+        )
+        st_g2, g2 = call(
+            "POST", f"/v1/reviews/{_card_id}/grade", {"rating": 3, "clientReviewId": _review_id}
+        )
+        step(
+            "8g. Review grade idempotent theo clientReviewId",
+            st_g1 == 200
+            and g1.get("duplicate") is False
+            and st_g2 == 200
+            and g2.get("duplicate") is True
+            and g1["card"]["dueAt"] == g2["card"]["dueAt"],
+            f"first={g1.get('duplicate')} second={g2.get('duplicate')}",
+        )
+    else:
+        step(
+            "8g. Review due rong o lan dau (chua den han) - chap nhan duoc",
+            st_due == 200,
+            f"status={st_due} total={due_out.get('total')}",
+        )
+
 # 9. "Reload trang" — GET lại lesson + course; progress tính từ attempts (P1.1)
 st, lesson_reload = call("GET", f"/v1/lessons/{lesson_id}", None, 200)
 st, detail_reload = call("GET", f"/v1/courses/{course_id}", None, 200)

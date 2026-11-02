@@ -2,6 +2,106 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-02 — P5.0 Learner Profile, Mastery Baseline & FSRS
+
+- Base commit: `2150b0d` (`feat/p4.3-ocr`); branch `feat/p5.0-learner-profile` (chưa push)
+- Scope & decisions (người dùng đã chốt):
+  - **Snapshot bền vững + thư viện `fsrs`** (không tự viết lại thuật toán), pin
+    `FSRS_SCHEDULER_VERSION = "py-fsrs-6.3.2"` vào từng card/event.
+  - **Review card tạo ngay ở attempt đầu tiên** (kể cả <80%) ⇒ rating `Again/Hard`
+    là luồng thật (ôn bài yếu), không phải code chết.
+  - **1 card/(user, lesson)**, recall theo **chủ đề bài + skill** — không lộ answer key quiz.
+  - **Mastery = accuracy có trọng số thời gian** (half-life 30 ngày), ngưỡng đạt `0.7`.
+    Đây là **heuristic**, KHÔNG phải xác suất đã hiệu chuẩn; API trả `method="rule_based"`.
+  - **`contentVersion` đổi ⇒ không reset mastery**: mastery chỉ tính attempt đúng version
+    hiện hành nên tự rơi về 0 cho tới khi có attempt mới; dữ liệu cũ giữ nguyên.
+  - **Prerequisite chưa đạt ⇒ CHẶN bài mới** + trả `blockedBy` kèm lý do, và fallback
+    `reviewLessonId` = bài đã học có mastery thấp nhất (tránh dead-end).
+  - **Skill map theo VỊ TRÍ** `(unit.order_index, lesson.order_index)`, không theo title —
+    generation ghi đè `lesson.title` bằng `content.title` của provider.
+  - **`learning_steps=()`** ⇒ card vào thẳng `State.Review`, lịch theo ngày
+    (đo thật với `fsrs` 6.3.2: Again 1d / Hard 1d / Good 2d / Easy 8d),
+    `enable_fuzzing=False` để tái lập.
+- IMPLEMENTED:
+  - `backend/requirements.txt`: `fsrs>=6.3,<7` (pure Python, chỉ kéo `typing-extensions`;
+    optimizer extras KHÔNG cài).
+  - `backend/app/core/config.py`: `p50_enabled`, `p50_backfill_enabled`,
+    `mastery_pass_threshold`, `mastery_recency_half_life_days`, `fsrs_desired_retention`.
+  - `backend/app/models/models.py` + `models/__init__.py`: `Skill`, `LessonSkill`,
+    `SkillMastery`, `ReviewCard`, `ReviewEvent`.
+  - `backend/alembic/versions/0015_p50_learner_profile.py` (expand-only, downgrade đối xứng).
+  - `backend/app/services/learner_profile_service.py`: `backfill_course_skills`,
+    `skills_for_course`, `skill_for_lesson`, `compute_mastery`, `refresh_skill_mastery`,
+    `course_mastery`, `backfill_all_skills`, `_as_utc`.
+  - `backend/app/services/spaced_repetition_service.py`: `scheduler`, `new_card`, `review`,
+    `initial_rating`, `ensure_card_for_attempt`, `grade_card`, `due_cards`, `_card_id`.
+  - `backend/app/services/learning_path_service.py`: `build_learning_path`, `position_key`,
+    reason codes `NEXT_IN_SEQUENCE`/`PREREQUISITES_MET`/`PREREQUISITE_NOT_MET`/
+    `FALLBACK_REVIEW_WEAKEST`.
+  - `backend/app/services/lesson_service.py`: `submit_attempt` trả 3-tuple, cập nhật mastery
+    + tạo card trong **cùng transaction** khi `P50_ENABLED`.
+  - `backend/app/api/v1/learner.py` + `main.py`: 4 endpoint, 503 `P50_NOT_ENABLED` khi tắt.
+  - `backend/app/worker/generation.py`: backfill skill sau generation (lỗi không làm job fail).
+  - `backend/app/worker/reconcile.py` + `celery_app.py`: task `reconcile_skills` trên beat,
+    chỉ chạy khi `P50_BACKFILL_ENABLED`.
+  - Frontend: `lib/api.ts` (5 hàm + types), khối "Học tiếp"/"Ôn tập"/"Mức nắm kỹ năng" ở
+    `/course/[courseId]`, trang mới `/review` (hàng đợi, reveal, 4 mức rating, một
+    `clientReviewId` mỗi lần chấm), thông báo "Đã thêm vào lịch ôn tập" ở lesson.
+  - `backend/e2e_acceptance.py`: check `8e`/`8f`/`8g` (503 khi tắt; mastery rule-based;
+    learning-path có lý do; review grade idempotent).
+  - Docs: `docs/specs/22-P50-LEARNER-PROFILE.md`, plan
+    `docs/superpowers/plans/2026-11-02-p50-learner-profile.md`, `database-design.md`,
+    `migration-runbook.md`, `.env.example`, `docker-compose.yml` (3 service).
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **597 passed, 25 skipped** (trước 540/25; +57).
+    Mới: `test_p50_config.py` (2), `test_p50_migration_contract.py` (5), `test_p50_skills.py` (6),
+    `test_p50_mastery.py` (11), `test_p50_fsrs.py` (16), `test_p50_learning_path.py` (5),
+    `test_p50_api.py` (9), `test_p50_generation_hook.py` (3).
+  - Phủ: FSRS interval chính xác cho 4 rating; ép UTC cho datetime naive; card tạo ở attempt
+    đầu (kể cả `score_total=0`); idempotency theo `clientReviewId`; cross-user ⇒ 404;
+    mastery deterministic + không tăng khi nộp lại cùng version; version mới ⇒ không còn
+    attempt hợp lệ (row cũ giữ nguyên); backfill theo vị trí khi title khác; slug trùng ⇒
+    hậu tố deterministic; backfill không xoá mastery; prerequisite chưa đạt ⇒ chặn + fallback;
+    cờ tắt ⇒ 503; CSRF 403; rating ngoài 1..4 ⇒ 422.
+  - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK (11 route, thêm `/review`).
+  - `docker compose config` → OK (biến P50 có ở backend/worker/beat).
+- TESTED (PostgreSQL throwaway `p50_migration_check`, đã `DROP DATABASE`):
+  - `alembic upgrade head` → `0015_p50_learner_profile (head)`; `skills` có
+    `uq_skill_course_key` + FK CASCADE; `review_cards` có `uq_review_card_user_lesson`,
+    `ix_review_cards_user_due`, FK `lesson_attempts ON DELETE SET NULL`;
+    `review_events` có `uq_review_event_client_id` + 2 index composite.
+  - `downgrade -1` → `0014_p43_ocr`; 5 bảng biến mất, `users`/`lessons` **còn 1/1**;
+    `upgrade head` lại thành công, row legacy đọc được.
+- NOT TESTED:
+  - **E2E Docker full stack** với `P50_ENABLED=true` — chưa chạy `e2e_acceptance.py` trong
+    phiên này (stack chỉ bật container `db`); các check `8e/8f/8g` mới chỉ được review tĩnh.
+  - **Race PostgreSQL** cho review grade/`ensure_card_for_attempt` đồng thời (SQLite không
+    mô phỏng đúng gap lock). Idempotency đã test tuần tự + unique constraint.
+  - **Chất lượng sư phạm thật** của mastery/ngưỡng 0.7: chưa có dữ liệu học thật để hiệu
+    chuẩn; các ngưỡng là PROPOSAL.
+  - Browser E2E (Playwright) cho `/review`.
+  - `fsrs` optimizer / cá nhân hoá tham số (cố ý không dùng).
+- BLOCKED: không blocked code. Cần quyết định vận hành: có bật `P50_ENABLED=true` ở production
+  ngay không (thay đổi UX + ghi dữ liệu mới), và có chạy `P50_BACKFILL_ENABLED` một lần cho
+  course cũ hay để course mới tự sinh skill.
+- Database: `0015_p50_learner_profile` (expand-only). Backup trước trên DB thật:
+  `docker compose exec db pg_dump -U ailp ailp > backup_pre_p50_YYYYmmdd_HHMMSS.sql`.
+- Security: ownership ở SQL (course/card ⇒ 404); mastery tính từ attempt đã lưu, không nhận
+  score từ client; rating client chỉ là input FSRS, không ảnh hưởng XP/điểm; CSRF + rate limit
+  120/60s cho grade; `stability/difficulty` **không** trả ra API người học; log chỉ id + interval.
+- Regressions: 0 — 540 test cũ vẫn pass; `submit_attempt` chỉ đổi tuple khi `P50_ENABLED`,
+  contract HTTP thêm field additive `reviewCardCreated` (mặc định false).
+- Known limitations:
+  - Mastery không phân biệt độ khó câu hỏi, không hiệu chuẩn xác suất, chưa tính
+    `duration_ms`.
+  - `review_cards` 1 card/lesson: không ôn theo từng block/câu sai.
+  - Chưa có notify/push/email nhắc ôn; due date hiển thị theo giờ máy người dùng.
+  - `fsrs` chạy in-process; chưa có job dọn card/event cũ.
+- PHASE GATE: **GATE-PARTIAL** — code + offline tests + migration PostgreSQL thật đầy đủ; E2E
+  Docker và race PostgreSQL còn NOT TESTED (ghi rõ, không tuyên bố PASS toàn phần).
+- NEXT: chạy E2E Docker với `P50_ENABLED=true` (cần approve), hoặc P6 (production hardening)
+  nếu ưu tiên release.
+
 ## 2026-11-01 — P4.3 OCR cho PDF scan (opt-in, engine pretrained)
 
 - Base commit: `e3cb783` (`feat/p4.3-ocr`, working tree)

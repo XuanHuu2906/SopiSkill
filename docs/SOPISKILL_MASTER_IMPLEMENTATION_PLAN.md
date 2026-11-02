@@ -258,7 +258,7 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P4.1 | **DONE 2026-10-31 (offline baseline)** | High | `0012_p41_rag`; lexical+vector+RRF, citation validator, 426 pytest, 72/72 E2E (RAG on) |
 | P4.2 | **DONE 2026-11-01 (offline + guard + mạng thật)** | Medium | `0013_p42_web_ingest`; 511 pytest + race PostgreSQL + E2E mạng thật 33/33 |
 | P4.3 | **DONE 2026-11-01 (opt-in + engine thật)** | Medium | `0014_p43_ocr`; OCR pretrained `rapidocr` mặc định TẮT, provenance bbox/confidence/textSource; 533 pytest; CER EN 0.000 / VI 0.094 |
-| P5.0 | TODO sau RAG | Medium | Mastery/FSRS có data model và QA |
+| P5.0 | **DONE 2026-11-02 (offline + migration)** | Medium | `0015_p50_learner_profile`; skill backfill theo vị trí, mastery rule-based (half-life 30d, ngưỡng 0.7), FSRS `py-fsrs-6.3.2` (Again 1d/Hard 1d/Good 2d/Easy 8d), next-lesson chặn theo prereq + fallback ôn bài yếu; 597 pytest; E2E Docker + race PG NOT TESTED |
 | P5.1–P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
 | P6 | TODO (hạng mục có thể làm song song sớm) | High trước public launch | Operational / privacy / security checks |
 | P7 | FUTURE | Low | Chỉ làm khi có quyết định sản phẩm |
@@ -618,18 +618,18 @@ Chi tiết: `docs/source-research-agent.md`.
 
 ---
 
-## 17. PHASE P5.0 — Learner Profile, Mastery Baseline & FSRS
+## 17. PHASE P5.0 — Learner Profile, Mastery Baseline & FSRS — **DONE 2026-11-02 (offline + migration)**
 
 **Mục tiêu:** Cá nhân hóa dựa trên **lịch sử học thực**, không chỉ 5 câu interview.
 
 **Modules:** `models` (skills, lesson-skill links, review events), `services/progress_service.py`, `services/recommendation_service.py`, FSRS scheduler adapter, frontend profile/review queue.
 
-- [ ] P5.0.1 Gắn stable skill IDs, prerequisite graph, learning objectives cho lesson; migration mới, backfill có chiến lược không giả dữ liệu.
-- [ ] P5.0.2 Mastery baseline **rule-based** từ các attempts tagged theo skill, difficulty/time; không gọi thang điểm heuristic là xác suất ML hiệu chuẩn.
-- [ ] P5.0.3 Next lesson policy: chỉ đề xuất bài mà prerequisites đã đạt; không vượt quyền/course entitlement.
-- [ ] P5.0.4 FSRS spaced repetition dựa trên review event có rating/response; lưu schedule, due dates theo timezone được chọn; thuật toán/library versioned để tái lập.
-- [ ] P5.0.5 UI “học tiếp/ôn tập”, mô tả vì sao được đề xuất, cho user bỏ qua hoặc điều chỉnh.
-- [ ] P5.0.6 Tests deterministic progression, timezone, missed reviews, content version update, missing skill tags, cross-user data.
+- [x] P5.0.1 `skills`/`lesson_skills` + backfill từ `course_proposals.payload` theo **vị trí** (không theo title); migration `0015_p50_learner_profile` expand-only.
+- [x] P5.0.2 Mastery **rule-based**: accuracy có trọng số thời gian (half-life 30 ngày, ngưỡng 0.7); API ghi `method="rule_based"`, không gọi là xác suất.
+- [x] P5.0.3 Next-lesson chỉ khi prereq đã đạt; thiếu prereq ⇒ **chặn** + `blockedBy` + fallback `reviewLessonId` (bài yếu nhất). Ownership ở SQL.
+- [x] P5.0.4 FSRS thật qua `fsrs` 6.3.2, `scheduler_version` pin trong card/event; `learning_steps=()` ⇒ lịch theo ngày; due lưu UTC.
+- [x] P5.0.5 UI: khối "Học tiếp"/"Ôn tập (N)"/"Mức nắm kỹ năng" ở course, trang `/review` với 4 mức rating + reveal; hiển thị lý do đề xuất.
+- [x] P5.0.6 Tests deterministic (pin `now`): FSRS interval, UTC coercion, idempotent `clientReviewId`, mastery không farm, version bump, thiếu skill không crash, cross-user 404.
 
 **Gate:** mọi gợi ý có lý do có thể kiểm tra; dữ liệu progress không xung đột P1.1; không có dự đoán bí ẩn thiếu dataset.  
 **Không làm:** Tự tuyên bố có RL/Deep Learning adaptive khi chỉ dùng rules.
@@ -808,6 +808,9 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-11-01 | arXiv chỉ nhận **ID**, host lấy từ config **và** phải nằm trong allowlist; metadata parse bằng `defusedxml` | **CHỌN (chống SSRF/XXE)** | `services/arxiv_service.py` |
 | 2026-11-01 | **P4.3 OCR**: engine pretrained `rapidocr` (ONNX, cục bộ), **opt-in** (mặc định TẮT) + `OCR_MODEL_VERSION` bắt buộc; chỉ OCR trang THIẾU text; chunk mang `textSource`/`ocrConfidence`/`ocrBbox`; bật OCR đổi `pipelineVersion` ⇒ document mới, citation cũ không bị ghi đè | **CHỌN (trung thực + an toàn)** | `services/ocr.py`, `tests/test_p43_ocr.py`, `docs/specs/21-P43-OCR.md` |
 | 2026-11-01 | OCR đo thật: CER EN 0.000 / **VI 0.094 do model rơi dấu**; confidence engine 0.991 **không** dùng làm ngưỡng đúng; corpus synthetic nên **không suy rộng** | **CHỌN (công bố giới hạn)** | `evals/ocr_eval.py` |
+| 2026-11-02 | **P5.0**: review card tạo ở **attempt đầu tiên** (không chỉ ≥80%) để ôn bài yếu là luồng thật; mastery là heuristic half-life 30 ngày (ngưỡng 0.7) — **không** xác suất hiệu chuẩn; prereq thiếu ⇒ chặn + fallback ôn bài yếu | **CHỌN (trung thực + tránh dead-end)** | `spaced_repetition_service.py`, `learner_profile_service.py`, `docs/specs/22-P50-LEARNER-PROFILE.md` |
+| 2026-11-02 | **P5.0**: skill↔lesson map theo **vị trí** `(unit.order_index, lesson.order_index)` vì generation ghi đè `lesson.title`; `skills` upsert theo `(course_id,key)` để không cascade xoá mastery | **CHỌN (đúng dữ liệu)** | `learner_profile_service.backfill_course_skills`, `tests/test_p50_skills.py` |
+| 2026-11-02 | **P5.0**: dùng thư viện `fsrs` 6.3.2 (pure Python) thay vì tự viết; pin `scheduler_version`; tắt fuzzing + `learning_steps=()` để tái lập lịch | **CHỌN (tái lập được)** | `spaced_repetition_service.py`, `requirements.txt` |
 
 ---
 
