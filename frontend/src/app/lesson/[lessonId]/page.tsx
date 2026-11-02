@@ -57,6 +57,8 @@ interface AttemptOut {
   score: { correct: number; total: number };
   rewards: { xp: number; xpEarned: number };
   results: AttemptResult[];
+  // P5.0 — additive; false khi P50_ENABLED tắt.
+  reviewCardCreated?: boolean;
 }
 
 type AnswerValue = number | string | number[] | Record<string, number> | null;
@@ -409,6 +411,9 @@ export default function LessonPage() {
             {result.rewards.xpEarned === 0 && !result.duplicate &&
               " — bài này đã được cộng XP tối đa, nộp lại không cộng thêm"}
           </p>
+          {result.reviewCardCreated && (
+            <p className="muted">Đã thêm bài này vào lịch ôn tập.</p>
+          )}
         </div>
       )}
     </div>
