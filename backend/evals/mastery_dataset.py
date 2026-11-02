@@ -115,6 +115,20 @@ async def load_sequences(
     has_skill = all(name in tables for name in SKILL_TABLES)
     effective = granularity if (granularity == "skill" and has_skill) else "lesson"
 
+    if "lesson_attempts" not in tables or "lessons" not in tables:
+        # DB rỗng/chưa migrate: trả rỗng thay vì crash. Lỗi CỘT vẫn phải nổi lên.
+        return [], DatasetReport(
+            database="<masked>",
+            skill_granularity=effective == "skill",
+            users=0,
+            sequences=0,
+            raw_attempts=0,
+            versioned_attempts=0,
+            length_histogram={},
+            sequences_ge={str(n): 0 for n in LENGTH_THRESHOLDS},
+            min_sequence=int(min_sequence),
+        )
+
     async with engine.connect() as conn:
         raw_attempts = int(
             (await conn.execute(text("SELECT COUNT(*) FROM lesson_attempts"))).scalar_one()
