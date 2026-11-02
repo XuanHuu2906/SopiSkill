@@ -262,7 +262,7 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P5.1 (BKT) | **DONE (research-only) 2026-11-02** | Low | `app/services/bkt.py` + `evals/bkt_eval.py`; KHÔNG runtime/migration/route; DB thật 37 event/21 user ⇒ `INSUFFICIENT_DATA`; **deploy BLOCKED** (`docs/specs/23-P51-BKT.md`) |
 | P5.2a (readiness) | **DONE (research-only) 2026-11-02** | Low | `evals/p52_readiness.py`; DKT/BANDIT đều **BLOCKED** (`opeSupported=false`) |
 | P5.2b (exposure log) | **DONE (flag TẮT) 2026-11-02** | Low | `0016_p52_exposure` + `POST .../recommendation-events`; propensity=1.0 ⇒ chưa OPE; **chưa huấn luyện model nào** |
-| P6.1 (CI pipeline) | **DONE (local) 2026-11-02** | High | `.github/workflows/ci.yml`; 691 pytest, migration PG rỗng + downgrade -1, 29 race test PG, lint/typecheck/build, bandit 0 issue, pip-audit sạch, audit runtime 0; **GitHub Actions run NOT TESTED** |
+| P6.1 (CI pipeline) | **DONE (local) 2026-11-02** | High | `.github/workflows/ci.yml`; 698 pytest, migration PG rỗng + `downgrade base`→`upgrade head`, 29 race test PG, lint/typecheck/build, bandit 0, pip-audit sạch, audit runtime 0; shuffle quiz dùng HMAC khoá server; **GitHub Actions run NOT TESTED** |
 | P6 (phần còn lại P6.2–P6.9) | TODO | High trước public launch | Operational / privacy / security checks |
 | P7 | FUTURE | Low | Chỉ làm khi có quyết định sản phẩm |
 
@@ -679,7 +679,7 @@ Chi tiết: `docs/source-research-agent.md`.
 
 **Modules:** `.github/workflows/`, Dockerfiles, Compose/prod config, migration/runbooks, `core/config.py`, `core/limits.py`, security headers, logging, monitoring, tests.
 
-- [x] P6.1 CI pipeline: Python tests, frontend build/lint/typecheck, migration upgrade on empty PostgreSQL, static security scanning & dependency checks (có baseline, avoid noisy auto-fix). — **DONE 2026-11-02 (local)** `docs/specs/25-P61-CI-PIPELINE.md`; `.github/workflows/ci.yml`, 691 pytest (+11 contract test), bandit 0 issue, pip-audit clean, `npm audit --omit=dev` 0; **runner thật NOT TESTED** (chưa push).
+- [x] P6.1 CI pipeline: Python tests, frontend build/lint/typecheck, migration upgrade on empty PostgreSQL, static security scanning & dependency checks (có baseline, avoid noisy auto-fix). — **DONE 2026-11-02 (local)** `docs/specs/25-P61-CI-PIPELINE.md`; `.github/workflows/ci.yml`, 698 pytest (+15 contract test), bandit 0, pip-audit sạch (cả dev req), `npm audit --omit=dev` 0. Fix pass sau review: khoá HMAC cho shuffle `order`/`match` (đáp án không còn suy ra từ public data), race test tự tạo schema + job race trỏ cả `DATABASE_URL`, chống gate xanh-giả (guard skip + `downgrade base`/`heads`=1). **runner thật NOT TESTED** (chưa push).
 - [ ] P6.2 API security review: JWT/cookie/CSRF/issuer/audience/secret rotation, login abuse limits, scope checks, uploads/SSRF, redacted logs, session cache isolation.
 - [ ] P6.3 HTTPS/TLS, `COOKIE_SECURE=true`, trusted proxy, CSP, HSTS/cookie domain policy phù hợp deployment, CORS chính xác. Không bật `SameSite=None` bừa bãi.
 - [ ] P6.4 Redis distributed rate limiting và quotas nếu nhiều replicas; network/proxy IP trust; không coi in-memory limiter là production protection.
@@ -830,6 +830,8 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-11-02 | **P5.0**: skill↔lesson map theo **vị trí** `(unit.order_index, lesson.order_index)` vì generation ghi đè `lesson.title`; `skills` upsert theo `(course_id,key)` để không cascade xoá mastery | **CHỌN (đúng dữ liệu)** | `learner_profile_service.backfill_course_skills`, `tests/test_p50_skills.py` |
 | 2026-11-02 | **P5.0**: dùng thư viện `fsrs` 6.3.2 (pure Python) thay vì tự viết; pin `scheduler_version`; tắt fuzzing + `learning_steps=()` để tái lập lịch | **CHỌN (tái lập được)** | `spaced_repetition_service.py`, `requirements.txt` |
 | 2026-11-02 | **P5.2**: tách P5.2a (readiness, research-only) và **P5.2b (exposure logging)** — người dùng **duyệt riêng** phần runtime dù plan cũ ghi P5.2 "chỉ nghiên cứu", vì thiếu exposure thì OPE vĩnh viễn không hợp lệ. Không huấn luyện model, không đổi thứ tự bài, `propensity=1.0` và công bố `opeSupported=false` | **CHỌN (có phê duyệt, trung thực)** | `evals/p52_readiness.py`, `0016_p52_exposure`, `docs/specs/24-P52-ADAPTIVE-READINESS.md` |
+| 2026-11-02 | **P6.1 CI gates**: không dùng `next lint` (wizard tương tác) mà flat config + `--max-warnings=0`; nâng Next 15.1.6→15.5.28 (advisory critical/high) + `overrides.postcss`; bandit sửa `assert` thật, 5 `# nosec` có lý do | **CHỌN (an toàn, tái lập)** | `.github/workflows/ci.yml`, `docs/specs/25-P61-CI-PIPELINE.md` |
+| 2026-11-02 | **P6.1 C1 (Critical)**: seed shuffle `order`/`match` đổi từ `sha256(lessonId:version:blockIndex)` — suy ra được từ dữ liệu public — sang `HMAC-SHA256` với `LESSON_SHUFFLE_SECRET` (fallback `JWT_SECRET`); production thiếu khoá ⇒ lỗi rõ ràng. Xoay khoá làm attempt đang mở chấm sai ⇒ phải rotate cùng `contentVersion` | **CHỌN (chống lộ đáp án)** | `services/lesson_content.py`, `tests/test_grading.py`, `docker-compose.yml` |
 
 ---
 

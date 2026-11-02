@@ -74,8 +74,39 @@
     `--omit=dev --audit-level=high` nên không chặn; `npm audit fix --force` sẽ đổi major
     toolchain ⇒ không tự làm.
   - Backend chưa có lint/format gate (ruff/flake8) — chưa có baseline, đề xuất P6.2.
-- PHASE GATE: **GATE-PARTIAL** — P6.1 IMPLEMENTED + TESTED local; runner thật NOT TESTED
-  theo đúng định nghĩa TESTED của plan.
+- **Fix pass sau fresh review (Critical + Important), cùng phase:**
+  - **C1 (Critical) — hoán vị `order`/`match` suy ra được từ dữ liệu công khai.** Seed cũ
+    `sha256("<lessonId>:<version>:<blockIndex>")` dùng toàn thành phần public (`lessonId`
+    trong URL `lsn_<uuid>`), nên dựng lại đúng hoán vị ⇒ đọc được đáp án. Đã chứng minh
+    bằng script chỉ dùng public data cho cả `order` và `match`. Sửa: seed =
+    `HMAC-SHA256(khoá server, msg)`, khoá từ `LESSON_SHUFFLE_SECRET` (fallback
+    `JWT_SECRET`); `ENV=production` + không có khoá ⇒ **RuntimeError**, không dùng khoá
+    công khai. `docker-compose.yml` chia sẻ khoá cho `backend` và `worker` (grading và
+    projection phải khớp). Test: `test_shuffle_seed_is_keyed_and_not_reproducible_from_public_data`,
+    `test_shuffle_seed_changes_when_server_secret_changes`,
+    `test_production_without_any_secret_refuses_to_shuffle` (RED trước fix).
+    **Hệ quả phải biết:** xoay khoá làm attempt đang mở bị chấm sai; mọi replica (backend/
+    worker/beat) phải cùng khoá.
+  - **I1 — race test p50/p52 chỉ pass nhờ thứ tự module.** Chạy một mình trên DB rỗng ⇒
+    `UndefinedTableError`; nay fixture tự `create_all`. Kiểm chứng: chạy riêng từng file
+    trên DB rỗng ⇒ 4 passed; stash fix ⇒ 1 failed.
+  - **I2 — job race không trỏ `DATABASE_URL` sang PostgreSQL** ⇒ `SessionLocal`/
+    `record_standalone` vẫn chạy SQLite; nay set cả hai ở job level.
+  - **I3 — gate có thể pass giả khi mọi test skip** (`pytest` exit 0). Thêm bước guard
+    kiểm tra `POSTGRES_TEST_URL` là PostgreSQL; test contract chặn `|| true` và
+    `continue-on-error: true`.
+  - **I4 — bước "verify revisions" chỉ in history** ⇒ nay `downgrade base → upgrade head`
+    và assert đúng một head.
+  - **I5 — `@eslint/eslintrc` không khai báo**, chỉ resolve nhờ npm hoist ⇒ đã thêm
+    `3.3.7`.
+  - Minor cùng pass: job race cài `requirements-dev.txt`; `pip-audit` đặt `PYTHONUTF8=1`
+    và quét cả `requirements-dev.txt`; commit `next-env.d.ts` như Next 15.5 sinh ra.
+  - Bằng chứng sau fix: `pytest -q` → **698 passed, 29 skipped**; bandit **0/0/0**;
+    `pip-audit` sạch cho cả hai file requirements; race `-k postgres_concurrency` với
+    cả hai biến PostgreSQL → **29 passed**; `alembic downgrade base → upgrade head` OK,
+    `heads` = 1; frontend lint/typecheck/build exit 0.
+- PHASE GATE: **GATE-PARTIAL** — P6.1 IMPLEMENTED + TESTED local (kể cả fix pass C1/I1–I5);
+  **GitHub Actions runner thật NOT TESTED** (chưa push) — đúng định nghĩa TESTED của plan.
 - NEXT: P6.2 API security review (JWT/CSRF/issuer/audience/secret rotation, login abuse
   limit, scope checks, uploads/SSRF, redacted logs, session cache isolation).
 
