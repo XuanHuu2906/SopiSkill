@@ -372,6 +372,13 @@ class Settings(BaseSettings):
     p52_exposure_enabled: bool = False
     p52_token_ttl_seconds: int = 900
 
+    # P6.1 — khoá HMAC cho seed shuffle của `order`/`match`. Trước P6.1 seed chỉ
+    # là sha256(lessonId:version:blockIndex) — mọi thành phần đều công khai nên
+    # client tự dựng lại được hoán vị và suy ra đáp án. Đổi khoá này sẽ đổi mapping
+    # hiển thị (không đổi nội dung/đáp án). Rỗng ⇒ fallback `JWT_SECRET`; ở
+    # production cả hai rỗng ⇒ lỗi rõ ràng, KHÔNG rơi về khoá công khai.
+    lesson_shuffle_secret: str = ""
+
     # Auth
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"

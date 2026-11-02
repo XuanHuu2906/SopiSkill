@@ -167,6 +167,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENV: development
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (copy .env.example)}
+      # Rỗng ⇒ backend dùng JWT_SECRET làm khoá shuffle quiz.
+      LESSON_SHUFFLE_SECRET: ${LESSON_SHUFFLE_SECRET:-}
       ALLOW_DEMO_HEADER: ${ALLOW_DEMO_HEADER:-false}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       # Có broker Redis → không chạy generation inline trong process API.
@@ -189,6 +191,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
+      # Cùng khoá shuffle với backend: nếu worker grade/project mà thiếu khoá,
+      # hoán vị sẽ khác và đáp án đúng bị chấm sai.
+      LESSON_SHUFFLE_SECRET: ${LESSON_SHUFFLE_SECRET:-${JWT_SECRET:-}}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_MAX_SCHEMA_RETRIES: ${LLM_MAX_SCHEMA_RETRIES:-1}

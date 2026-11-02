@@ -6,4 +6,7 @@
 # thêm rule mới của công cụ không âm thầm đổi kết quả gate.
 bandit==1.9.4
 pip-audit==2.10.1
+
+# Test CI contract (test_p61_ci_contract.py) parse ci.yml. Uvicorn kéo PyYAML
+# theo qua extra `standard`, nhưng không dựa vào quan hệ bắc cầu đó trong gate.
 PyYAML==6.0.3

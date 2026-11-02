@@ -78,14 +78,66 @@ def test_migration_job_upgrades_empty_db_and_exercises_downgrade(workflow):
     )
 
 
-def test_race_job_sets_postgres_test_url(workflow):
+def _job_env(job: dict, workflow: dict) -> dict:
+    """env hiệu lực của job: workflow-level rồi job-level rồi step-level."""
+    merged: dict = dict(workflow.get("env") or {})
+    merged.update(job.get("env") or {})
+    for step in _steps(job):
+        merged.update(step.get("env") or {})
+    return merged
+
+
+def test_race_job_points_both_database_vars_at_postgresql(workflow):
+    """`POSTGRES_TEST_URL` chỉ lái fixture của test.
+
+    Code resolve settings (`SessionLocal`, `llm_usage_service.record_standalone`)
+    đọc `DATABASE_URL`; nếu biến đó vẫn là SQLite thì job tên "PostgreSQL" vẫn
+    chạy SQLite ở các đường ấy.
+    """
     job = workflow["jobs"]["postgres-race"]
-    steps = _steps(job)
-    envs = {}
-    for step in steps:
-        envs.update(step.get("env") or {})
-    assert "POSTGRES_TEST_URL" in envs
-    assert "postgres_concurrency" in _run_text(steps)
+    env = _job_env(job, workflow)
+    for name in ("POSTGRES_TEST_URL", "DATABASE_URL"):
+        assert env.get(name, "").startswith("postgresql"), f"{name}={env.get(name)!r}"
+    assert "postgres_concurrency" in _run_text(_steps(job))
+
+
+def test_race_job_cannot_pass_vacuously(workflow):
+    """`pytest` thoát 0 khi mọi test bị skip ⇒ sai tên biến sẽ 'xanh' mà 0 test."""
+    steps = _steps(workflow["jobs"]["postgres-race"])
+    run_text = _run_text(steps)
+    assert "POSTGRES_TEST_URL" in run_text, "phải có bước guard kiểm tra biến môi trường"
+    for bad in ("|| true", "--ignore", "-p no:cacheprovider --co"):
+        assert bad not in run_text, f"race job chứa {bad!r} — gate có thể pass giả"
+
+
+def test_no_gate_step_swallows_failures(workflow):
+    """`|| true`, `continue-on-error: true` biến gate thành lời khuyên."""
+    for name, job in workflow["jobs"].items():
+        for step in _steps(job):
+            assert step.get("continue-on-error") is not True, f"{name}/{step.get('name')}"
+            assert "|| true" not in str(step.get("run", "")), f"{name}/{step.get('name')}"
+
+
+def test_migration_job_walks_all_the_way_down_to_base(workflow):
+    """`history --verbose` chỉ in chuỗi; phải thật sự downgrade hết rồi upgrade lại."""
+    run_text = _run_text(_steps(workflow["jobs"]["postgres-migrations"]))
+    assert "alembic downgrade base" in run_text
+    assert "alembic upgrade head" in run_text
+    assert "alembic heads" in run_text, "phải kiểm tra graph chỉ có một head"
+
+
+def test_eslint_flat_config_dependency_is_declared():
+    """`eslint.config.mjs` import `@eslint/eslintrc` trực tiếp.
+
+    Hiện nó chỉ resolve được nhờ eslint kéo theo và npm hoist; khai báo tường
+    minh để đổi lockfile/hoisting hoặc chuyển package manager không làm gãy lint.
+    """
+    pkg = json.loads(FRONTEND_PKG.read_text(encoding="utf-8"))
+    assert "@eslint/eslintrc" in pkg["devDependencies"]
+
+    config = (REPO_ROOT / "frontend" / "eslint.config.mjs").read_text(encoding="utf-8")
+    if "@eslint/eslintrc" in config:
+        assert "@eslint/eslintrc" in pkg["devDependencies"]
 
 
 def test_frontend_job_runs_lint_typecheck_and_build(workflow):

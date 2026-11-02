@@ -17,12 +17,27 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+async def _create_schema(engine) -> None:
+    from app.db.base import Base
+    import app.models  # noqa: F401 — populate metadata trước create_all
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
 @pytest.fixture
 def sessionmaker_pg():
+    """Tự tạo schema: module này phải chạy được MỘT MÌNH.
+
+    Bản trước chỉ `create_async_engine` rồi seed ngay, nên nó chỉ pass khi một
+    module race khác (chạy trước theo alphabet) đã `create_all`. Chạy riêng file
+    sẽ hỏng `UndefinedTableError: relation "users" does not exist`.
+    """
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from sqlalchemy.pool import NullPool
 
     engine = create_async_engine(POSTGRES_URL, poolclass=NullPool)
+    asyncio.run(_create_schema(engine))
     yield async_sessionmaker(engine, expire_on_commit=False)
     asyncio.run(engine.dispose())
 

@@ -4,31 +4,80 @@ Nguyên tắc (P1.1):
   - DB `lessons.content` là **private**: chứa answer key, thứ tự đúng, cặp ghép đúng.
   - API `GET /v1/lessons/{id}` chỉ trả **public blocks** — không có answer key.
   - `order`/`match` không dùng thứ tự mảng làm lời giải: public gửi danh sách item
-    đã shuffle ổn định (seed = lessonId + contentVersion + blockIndex) kèm id;
-    client trả về id, server tự dựng lại đáp án từ private content.
+    đã shuffle ổn định kèm id; client trả về id, server tự dựng lại đáp án từ
+    private content.
+  - **Seed shuffle là HMAC có khoá server** (`LESSON_SHUFFLE_SECRET`, fallback
+    `JWT_SECRET`). Trước P6.1 seed là sha256(lessonId:version:blockIndex) — cả ba
+    thành phần đều công khai (lessonId nằm trong URL) nên client tự dựng lại được
+    hoán vị và suy ra đáp án. Khoá không rời server nên không tái lập được.
   - Grading deterministic, không nhận bất kỳ cờ `correct` nào từ client.
 """
 
 import hashlib
+import hmac
+import logging
 import random
 import uuid
 
+from app.core.config import get_settings
 from app.schemas.schemas import AttemptAnswer
 
-# ---------- deterministic shuffle ----------
+logger = logging.getLogger(__name__)
+
+# Chỉ dùng khi chạy dev/test không cấu hình secret. Production mà thiếu secret thì
+# `_shuffle_key()` raise thay vì âm thầm rơi về khoá công khai (tức là lộ đáp án).
+_DEV_INSECURE_KEY = "sopiskill-dev-insecure-shuffle-key"
+
+_key_cache: tuple[str, bytes] | None = None
+
+
+def reset_shuffle_key_cache() -> None:
+    """Xoá cache khoá — dùng cho test đổi env."""
+    global _key_cache
+    _key_cache = None
+
+
+def _shuffle_key() -> bytes:
+    """Khoá HMAC server-side cho seed shuffle. KHÔNG bao giờ trả về client."""
+    global _key_cache
+    settings = get_settings()
+    raw = (settings.lesson_shuffle_secret or settings.jwt_secret or "").strip()
+    if not raw:
+        if settings.env == "production":
+            raise RuntimeError(
+                "LESSON_SHUFFLE_SECRET (hoặc JWT_SECRET) chưa cấu hình: không thể "
+                "tạo shuffle không đoán được ở production."
+            )
+        raw = _DEV_INSECURE_KEY
+        logger.warning(
+            "lesson shuffle dùng khoá dev không bảo mật — đặt LESSON_SHUFFLE_SECRET "
+            "trước khi chạy production"
+        )
+    if _key_cache is not None and _key_cache[0] == raw:
+        return _key_cache[1]
+    key = raw.encode("utf-8")
+    _key_cache = (raw, key)
+    return key
 
 
 def _seed(lesson_id: uuid.UUID | str, content_version: int, block_index: int) -> int:
-    raw = f"{lesson_id}:{content_version}:{block_index}".encode("utf-8")
-    return int(hashlib.sha256(raw).hexdigest()[:16], 16)
+    """Seed = HMAC-SHA256(khoá server, lessonId:version:blockIndex).
+
+    Khoá nằm server-side nên client **không** tái lập được hoán vị, dù biết đủ
+    lessonId/version/blockIndex.
+    """
+    message = f"{lesson_id}:{content_version}:{block_index}".encode("utf-8")
+    digest = hmac.new(_shuffle_key(), message, hashlib.sha256).digest()
+    return int.from_bytes(digest[:8], "big")
 
 
 def _shuffled(items: list, lesson_id: uuid.UUID | str, content_version: int, block_index: int) -> list:
     """Shuffle ổn định và **không bao giờ** trả về đúng thứ tự gốc (khi len > 1)."""
     if len(items) < 2:
         return list(items)
-    # PRNG tất định theo seed, KHÔNG dùng cho bảo mật: shuffle hiển thị, đáp án
-    # đúng nằm server-side và không suy ra được từ thứ tự.
+    # PRNG tất định theo seed HMAC có khoá server (xem `_seed`). Bản thân PRNG
+    # không phải CSPRNG nhưng khoá bí mật mới là thứ bảo vệ hoán vị, nên B311 là
+    # false positive ở đây.
     rng = random.Random(_seed(lesson_id, content_version, block_index))  # nosec B311
     work = list(items)
     for _ in range(8):
