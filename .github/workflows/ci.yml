@@ -1,0 +1,222 @@
+name: CI
+
+# P6.1 — quality gate tối thiểu trước khi merge/release.
+# Nguyên tắc: mọi bước ở đây phải chạy được offline/local với cùng lệnh; không
+# gọi provider LLM thật (tốn tiền), không deploy, không sửa dữ liệu ngoài runner.
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Test suite dùng SQLite in-memory + mock provider; không cần secret thật.
+  DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+  LLM_PROVIDER: mock
+  REDIS_URL: ""
+  JWT_SECRET: ci-only-not-a-production-secret
+  ALLOW_DEMO_HEADER: "false"
+  GENERATION_INLINE_BLOCKING: "true"
+  SOURCE_STORAGE_BACKEND: memory
+  PYTHONUTF8: "1"
+
+jobs:
+  backend-tests:
+    name: Backend tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run pytest
+        working-directory: backend
+        run: python -m pytest -q
+
+  postgres-migrations:
+    name: Alembic migrations on empty PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ailp
+          POSTGRES_PASSWORD: ailp_password
+          POSTGRES_DB: ci_migration
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ailp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Upgrade head on empty database
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5432/ci_migration
+        run: |
+          alembic upgrade head
+          alembic current
+
+      - name: Downgrade one revision then upgrade again
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5432/ci_migration
+        run: |
+          alembic downgrade -1
+          alembic upgrade head
+
+      - name: Verify every revision is reachable from base
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5432/ci_migration
+        run: alembic history --verbose
+
+  postgres-race:
+    name: PostgreSQL concurrency tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ailp
+          POSTGRES_PASSWORD: ailp_password
+          POSTGRES_DB: ci_race
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ailp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run race/idempotency tests against PostgreSQL
+        working-directory: backend
+        env:
+          POSTGRES_TEST_URL: postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5432/ci_race
+        run: python -m pytest tests -q -k "postgres_concurrency"
+
+  frontend:
+    name: Frontend lint, typecheck, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+        run: npm run build
+
+  security:
+    name: Static security and dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Bandit (Python static analysis)
+        working-directory: backend
+        run: python -m bandit -r app -q
+
+      - name: pip-audit (Python dependency vulnerabilities)
+        working-directory: backend
+        run: python -m pip_audit -r requirements.txt --progress-spinner off
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+
+      - name: npm audit (runtime dependencies, gate at high)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
