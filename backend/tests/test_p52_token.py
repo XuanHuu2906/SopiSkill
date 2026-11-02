@@ -123,3 +123,33 @@ def test_mint_requires_secret(monkeypatch):
     monkeypatch.setattr(tok, "_secret", lambda: "")
     with pytest.raises(RuntimeError):
         tok.mint(**_mint())
+
+
+# ---- Final review fixes -------------------------------------------------
+
+
+def test_verify_rejects_non_ascii_signature_without_crashing():
+    """`hmac.compare_digest` trên str non-ASCII ném TypeError ⇒ phải thành TokenError."""
+    args = _mint()
+    token = tok.mint(**args)
+    payload_part, _sig = token.split(".", 1)
+    with pytest.raises(tok.TokenError):
+        tok.verify(
+            f"{payload_part}.chữ_ký_giả",
+            user_id=args["user_id"],
+            course_id=args["course_id"],
+        )
+
+
+def test_verify_rejects_garbage_without_crashing():
+    args = _mint()
+    for bad in ("", ".", "....", "not-base64!!.also-bad!!", "a.b"):
+        with pytest.raises(tok.TokenError):
+            tok.verify(bad, user_id=args["user_id"], course_id=args["course_id"])
+
+
+def test_verify_exposes_policy_version():
+    args = _mint(policy_version="p5.0-rule-v1")
+    token = tok.mint(**args)
+    payload = tok.verify(token, user_id=args["user_id"], course_id=args["course_id"])
+    assert payload["policyVersion"] == "p5.0-rule-v1"

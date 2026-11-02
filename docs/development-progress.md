@@ -35,11 +35,11 @@
   - `.env.example`, `docker-compose.yml` (backend/worker/beat).
   - Frontend: `recordRecommendation` + effect gọi 1 lần mỗi token (`useRef` chống
     StrictMode), fire-and-forget, không đổi UI.
-  - Tests mới: `test_p52_migration_contract.py` (5), `test_p52_token.py` (9),
-    `test_p52_exposure_service.py` (10), `test_p52_api.py` (9), `test_p52_readiness.py` (5),
+  - Tests mới: `test_p52_migration_contract.py` (5), `test_p52_token.py` (12),
+    `test_p52_exposure_service.py` (11), `test_p52_api.py` (12), `test_p52_readiness.py` (5),
     `test_p52_postgres_concurrency.py` (1, skip khi không có URL).
 - TESTED (offline, SQLite in-memory):
-  - `cd backend && python -m pytest -q` → **673 passed, 29 skipped** (trước 635/28).
+  - `cd backend && python -m pytest -q` → **680 passed, 29 skipped** (trước 635/28).
   - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK.
   - `docker compose config` → exit 0.
 - TESTED (PostgreSQL throwaway, đã drop):
@@ -74,7 +74,23 @@
   - Reward review dùng rating 1..4 làm proxy, chưa hiệu chuẩn với quiz score.
   - Chưa có job tổng hợp reward; `reward_for_events` gọi thủ công.
   - `P52` phụ thuộc `P50` (POST trả 503 nếu P50 tắt), không ngầm bật.
-- Review toàn branch: xem mục review bên dưới sau khi chạy fresh reviewer.
+- Review toàn branch (fresh reviewer) đã tìm và sửa trong cùng phase (680 pytest):
+  - **I1** UNIQUE thiếu `lesson_content_version`: sau khi lesson regenerate, POST bị
+    dedupe vào row version cũ ⇒ reward của attempt version mới không bao giờ khớp. Nay
+    UNIQUE gồm version; có test `test_exposure_after_version_bump_is_not_deduped`
+    (RED→GREEN) và đã kiểm lại constraint trên PostgreSQL thật.
+  - **I2** `hmac.compare_digest` so hai `str` của client ⇒ chữ ký non-ASCII ném
+    `TypeError` → HTTP 500. Nay decode/encode hai phía về base64 ASCII trước khi so;
+    test `test_verify_rejects_non_ascii_signature_without_crashing` (RED→GREEN).
+  - **I3** `policyVersion` có trong token nhưng không được kiểm khi POST ⇒ token policy
+    cũ ghi nhận dưới policy mới, sai attribution. Nay so cả `policyVersion`; test
+    `test_post_stale_policy_version_is_rejected` (RED→GREEN).
+  - **I4** Chưa có test chứng minh cờ TẮT không chạm bảng. Nay
+    `test_flag_off_never_queries_the_table` gắn listener `before_cursor_execute` và
+    assert 0 statement chạm `recommendation_events`.
+  - **I5** Chưa có test token arm A không ghi được arm B. Nay
+    `test_token_for_other_arm_cannot_record` (RED→GREEN).
+  - Dọn design doc: bỏ tham chiếu `p52_bandit_eval.py`/`token_service.py` chưa ship.
 - PHASE GATE: **GATE-PARTIAL** — P5.2a và P5.2b IMPLEMENTED + TESTED (offline + PG
   migration/race); bandit/DKT **BLOCKED** theo điều kiện của plan, không phải lỗi code.
 - NEXT: P6 (production hardening) hoặc tích luỹ dữ liệu rồi chạy lại readiness.

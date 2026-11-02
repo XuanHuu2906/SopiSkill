@@ -1034,12 +1034,17 @@ class RecommendationEvent(Base):
 
     __tablename__ = "recommendation_events"
     __table_args__ = (
+        # `lesson_content_version` PHẢI nằm trong UNIQUE: sau khi lesson regenerate,
+        # cùng context+arm vẫn là một **exposure mới** (arm là nội dung khác). Thiếu nó
+        # thì POST sau regenerate bị dedupe vào row cũ và reward của attempt version mới
+        # không bao giờ khớp (JOIN đòi bằng content_version).
         UniqueConstraint(
             "user_id",
             "course_id",
             "context_hash",
             "arm_kind",
             "arm_id",
+            "lesson_content_version",
             name="uq_recommendation_event_context",
         ),
         Index("ix_recommendation_events_course", "course_id", "exposed_at"),

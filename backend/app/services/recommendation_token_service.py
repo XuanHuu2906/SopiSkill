@@ -108,11 +108,17 @@ def verify(
     try:
         payload_part, signature_part = token.split(".", 1)
         raw = _b64decode(payload_part)
-        expected = _sign(raw, secret)
+        expected = _b64encode(
+            hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).digest()
+        )
+        provided = _b64encode(_b64decode(signature_part))
     except Exception as exc:  # token rỗng/sai định dạng/base64 hỏng
         raise TokenError("TOKEN_INVALID") from exc
 
-    if not hmac.compare_digest(expected, signature_part):
+    # So sánh hai chuỗi base64 **ASCII** đã chuẩn hoá. Không dùng `compare_digest`
+    # trực tiếp trên str do client gửi: str non-ASCII sẽ ném TypeError (⇒ HTTP 500)
+    # thay vì bị coi là token không hợp lệ.
+    if not hmac.compare_digest(expected, provided):
         raise TokenError("TOKEN_INVALID")
 
     try:

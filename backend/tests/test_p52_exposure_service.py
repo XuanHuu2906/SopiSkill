@@ -352,3 +352,45 @@ async def test_reward_ignores_events_before_exposure():
         ).scalars().all()
         rewards = await svc.reward_for_events(db, events)
         assert rewards[0]["reward"] is None
+
+
+async def test_exposure_after_version_bump_is_not_deduped():
+    """Lesson regenerate (v1 -> v2) với cùng context phải ghi exposure MỚI.
+
+    Nếu UNIQUE bỏ qua `lesson_content_version`, POST sau regenerate bị dedupe vào row
+    cũ (version 1) ⇒ reward của attempt version 2 không bao giờ khớp ⇒ mất tín hiệu.
+    """
+    user_id, course_id, lesson_id = await _seed(content_version=1)
+    path = _path(f"lsn_{lesson_id}")
+
+    async with SessionLocal() as db:
+        course = (await db.execute(select(Course).where(Course.id == course_id))).scalar_one()
+        first = await svc.record_exposure(
+            db, user_id=user_id, course=course, path=path, lesson_content_version=1
+        )
+        await db.commit()
+
+    async with SessionLocal() as db:
+        lesson = (await db.execute(select(Lesson).where(Lesson.id == lesson_id))).scalar_one()
+        lesson.content_version = 2
+        await db.commit()
+
+    async with SessionLocal() as db:
+        course = (await db.execute(select(Course).where(Course.id == course_id))).scalar_one()
+        second = await svc.record_exposure(
+            db, user_id=user_id, course=course, path=path, lesson_content_version=2
+        )
+        await db.commit()
+
+    assert second["duplicate"] is False
+    assert second["exposureId"] != first["exposureId"]
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(RecommendationEvent)
+                .where(RecommendationEvent.course_id == course_id)
+                .order_by(RecommendationEvent.lesson_content_version)
+            )
+        ).scalars().all()
+        assert [r.lesson_content_version for r in rows] == [1, 2]

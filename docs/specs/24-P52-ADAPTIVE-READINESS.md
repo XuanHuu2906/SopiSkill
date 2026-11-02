@@ -93,10 +93,12 @@ Append-only, expand-only. Không có cột `reward_*`: reward suy **offline**.
 | `exposed_at`, `created_at` | thời điểm |
 
 Ràng buộc: `uq_recommendation_event_context (user_id, course_id, context_hash, arm_kind,
-arm_id)`, 2 index `(course_id, exposed_at)` và `(user_id, exposed_at)`.
+arm_id, lesson_content_version)`, 2 index `(course_id, exposed_at)` và `(user_id, exposed_at)`.
 
-**Quyết định phạm vi:** UNIQUE = "một exposure cho mỗi (context, arm)", **không phải**
-đếm impression. Bandit cần impression count sau này thì phải thêm bảng riêng — không
+**Quyết định phạm vi:** UNIQUE = "một exposure cho mỗi (context, arm, **version**)",
+**không phải** đếm impression. Gồm `lesson_content_version` là bắt buộc: sau khi lesson
+regenerate, cùng context+arm là một exposure **mới**; thiếu version thì POST bị dedupe vào
+row cũ và reward của attempt version mới không bao giờ khớp. Bandit cần impression count sau này thì phải thêm bảng riêng — không
 được ngầm đổi nghĩa ràng buộc.
 
 `arm_id NOT NULL` có chủ đích: PostgreSQL coi `NULL != NULL`, nên nếu cho phép arm NULL

@@ -109,7 +109,7 @@ Chỉ số đo:
 | `maxAttemptsPerUser` | `MAX(count)` | DKT |
 | `sequencesGe5` (user,skill) | tái dùng extractor P5.1 | DKT |
 | `coursesWithGe2Users` | đếm course có ≥2 user có attempt | DKT / bandit |
-| `exposureTable` | bảng `recommendation_events` có tồn tại? | bandit |
+| `tables` | danh sách bảng hiện có (dò qua inspect) | bandit |
 | `exposureRows` | `COUNT(recommendation_events)` | bandit |
 | `distinctPolicies` | `COUNT(DISTINCT policy_version)` | bandit |
 | `distinctArms` | `COUNT(DISTINCT arm_kind, arm_id)` | bandit |
@@ -260,8 +260,7 @@ Nếu không ai gọi thì bảng luôn rỗng và (B) vô nghĩa. Vì vậy **c
 | `backend/app/schemas/schemas.py` | `RecommendationEventRequest/Out`, thêm field additive `recommendationToken` vào `LearningPathOut` |
 | `backend/app/core/config.py` | `p52_exposure_enabled`, `p52_token_ttl_seconds` |
 | `backend/evals/p52_readiness.py` | mới |
-| `backend/evals/p52_bandit_eval.py` | mới |
-| `backend/app/services/token_service.py` | mới — HMAC token cho `recommendationToken` |
+| `backend/app/services/recommendation_token_service.py` | mới — HMAC token cho `recommendationToken` |
 | `backend/tests/test_p52_*.py` | mới (≥5 file) |
 | `.env.example`, `docker-compose.yml` (3 service) | cờ mới |
 | `frontend/src/lib/api.ts` | thêm type + `recordRecommendation` |

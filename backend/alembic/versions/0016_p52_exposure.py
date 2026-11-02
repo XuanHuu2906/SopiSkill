@@ -10,8 +10,10 @@ Phạm vi (EXPAND-ONLY, không sửa/xoá bảng hay cột cũ):
     `lesson_content_version` (snapshot tại thời điểm gợi ý) để reward suy ra
     offline về sau mà không phải UPDATE bảng.
 
-  UNIQUE(user_id, course_id, context_hash, arm_kind, arm_id) = idempotent cho
-  "một exposure mỗi (context, arm)". KHÔNG phải đếm impression.
+  UNIQUE(user_id, course_id, context_hash, arm_kind, arm_id, lesson_content_version)
+  = idempotent cho "một exposure mỗi (context, arm, version)". Gồm version để lesson
+  regenerate tạo exposure MỚI (reward JOIN đòi khớp content_version). KHÔNG phải đếm
+  impression.
 
 Rollback (downgrade): chỉ drop `recommendation_events`. KHÔNG đụng bảng cũ.
 Mất exposure đã ghi (dữ liệu audit mới, không phải dữ liệu học) ⇒ backup trước
@@ -86,6 +88,7 @@ def upgrade() -> None:
                 "context_hash",
                 "arm_kind",
                 "arm_id",
+                "lesson_content_version",
                 name="uq_recommendation_event_context",
             ),
         )

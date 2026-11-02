@@ -78,6 +78,7 @@ async def _existing(
     context_hash: str,
     arm_kind: str,
     arm_id: str,
+    lesson_content_version: int,
 ) -> RecommendationEvent | None:
     return (
         await db.execute(
@@ -87,6 +88,7 @@ async def _existing(
                 RecommendationEvent.context_hash == context_hash,
                 RecommendationEvent.arm_kind == arm_kind,
                 RecommendationEvent.arm_id == uuid.UUID(arm_id),
+                RecommendationEvent.lesson_content_version == int(lesson_content_version),
             )
         )
     ).scalars().first()
@@ -124,6 +126,7 @@ async def record_exposure(
         context_hash=context_hash,
         arm_kind=arm_kind,
         arm_id=arm_id,
+        lesson_content_version=lesson_content_version,
     )
     if existing is not None:
         return _payload(existing, duplicate=True)
@@ -154,6 +157,7 @@ async def record_exposure(
             context_hash=context_hash,
             arm_kind=arm_kind,
             arm_id=arm_id,
+            lesson_content_version=lesson_content_version,
         )
         if winner is not None:
             return _payload(winner, duplicate=True)

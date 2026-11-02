@@ -178,6 +178,9 @@ async def record_recommendation_event(
         token_payload["contextHash"] != current_hash
         or token_payload["armKind"] != arm_kind
         or token_payload["armId"] != arm_id
+        # Policy version cũng phải khớp: token phát dưới policy cũ không được ghi
+        # nhận như thể do policy mới sinh ra (sẽ làm sai attribution khi bump).
+        or token_payload["policyVersion"] != recommendation_log_service.POLICY_VERSION
         or version is None
         or int(token_payload["lessonContentVersion"]) != int(version)
     ):
