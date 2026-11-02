@@ -72,11 +72,16 @@
     `review_events` có `uq_review_event_client_id` + 2 index composite.
   - `downgrade -1` → `0014_p43_ocr`; 5 bảng biến mất, `users`/`lessons` **còn 1/1**;
     `upgrade head` lại thành công, row legacy đọc được.
+- TESTED (PostgreSQL throwaway `p50_race_check`, đã drop):
+  - `POSTGRES_TEST_URL=…/p50_race_check python -m pytest tests/test_p50_postgres_concurrency.py -q`
+    → **3 passed** (tạo card đồng thời, grade đồng thời, cross-user grade).
+  - Full suite sau khi thêm file này: **600 passed, 28 skipped** (25 skip cũ + 3 skip khi
+    không có `POSTGRES_TEST_URL`).
 - NOT TESTED:
   - **E2E Docker full stack** với `P50_ENABLED=true` — chưa chạy `e2e_acceptance.py` trong
     phiên này (stack chỉ bật container `db`); các check `8e/8f/8g` mới chỉ được review tĩnh.
-  - **Race PostgreSQL** cho review grade/`ensure_card_for_attempt` đồng thời (SQLite không
-    mô phỏng đúng gap lock). Idempotency đã test tuần tự + unique constraint.
+  - ~~Race PostgreSQL cho review grade/`ensure_card_for_attempt`~~ — **đã chạy** (xem mục
+    TESTED PostgreSQL bên dưới); vẫn chưa chạy E2E Docker có worker thật.
   - **Chất lượng sư phạm thật** của mastery/ngưỡng 0.7: chưa có dữ liệu học thật để hiệu
     chuẩn; các ngưỡng là PROPOSAL.
   - Browser E2E (Playwright) cho `/review`.
@@ -112,6 +117,10 @@
   - **I7** `fsrs>=6.3,<7` có thể lệch với `scheduler_version`: **pin `fsrs==6.3.2`**.
   - **I8** backfill sau generation đọc proposal mới nhất thay vì version job đã pin: truyền
     `proposal_version=job.proposal_version`.
+  - Thêm `tests/test_p50_postgres_concurrency.py` và chạy thật trên PostgreSQL throwaway
+    (`p50_race_check`, đã drop): 6 task tạo card đồng thời ⇒ **đúng 1 card**, mọi task không
+    ném exception (SAVEPOINT giữ attempt), attempt còn 1 row; 4 grade đồng thời khác
+    `clientReviewId` ⇒ 5 event, không lost update; cross-user ⇒ `CardNotFoundError`.
 - PHASE GATE: **GATE-PARTIAL** — code + offline tests + migration PostgreSQL thật đầy đủ; E2E
   Docker và race PostgreSQL (bao gồm race grade mới) còn NOT TESTED (ghi rõ, không tuyên bố PASS).
 - NEXT: chạy E2E Docker với `P50_ENABLED=true` (cần approve), hoặc P6 (production hardening)
