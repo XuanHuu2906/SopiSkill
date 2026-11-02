@@ -663,6 +663,8 @@ class AttemptOut(BaseModel):
     score: dict
     rewards: dict
     results: list[AttemptResultOut]
+    # P5.0 — additive: UI hiện "Đã thêm vào lịch ôn tập" khi True.
+    reviewCardCreated: bool = False
 
 
 # ---------- AI Tutor (P3.0) ----------
