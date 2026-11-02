@@ -367,6 +367,11 @@ class Settings(BaseSettings):
     mastery_recency_half_life_days: int = 30
     fsrs_desired_retention: float = 0.9
 
+    # P5.2b — exposure logging (mặc định TẮT). Token HMAC dùng `jwt_secret`;
+    # bật cờ mà thiếu secret ⇒ mint fail (endpoint trả token null, API 503).
+    p52_exposure_enabled: bool = False
+    p52_token_ttl_seconds: int = 900
+
     # Auth
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
