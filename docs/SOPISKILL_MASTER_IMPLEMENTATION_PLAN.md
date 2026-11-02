@@ -259,7 +259,8 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P4.2 | **DONE 2026-11-01 (offline + guard + mạng thật)** | Medium | `0013_p42_web_ingest`; 511 pytest + race PostgreSQL + E2E mạng thật 33/33 |
 | P4.3 | **DONE 2026-11-01 (opt-in + engine thật)** | Medium | `0014_p43_ocr`; OCR pretrained `rapidocr` mặc định TẮT, provenance bbox/confidence/textSource; 533 pytest; CER EN 0.000 / VI 0.094 |
 | P5.0 | **DONE 2026-11-02 (offline + migration)** | Medium | `0015_p50_learner_profile`; skill backfill theo vị trí, mastery rule-based (half-life 30d, ngưỡng 0.7), FSRS `py-fsrs-6.3.2` (Again 1d/Hard 1d/Good 2d/Easy 8d), next-lesson chặn theo prereq + fallback ôn bài yếu; 597 pytest; E2E Docker + race PG NOT TESTED |
-| P5.1–P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
+| P5.1 (BKT) | **DONE (research-only) 2026-11-02** | Low | `app/services/bkt.py` + `evals/bkt_eval.py`; KHÔNG runtime/migration/route; DB thật 37 event/21 user ⇒ `INSUFFICIENT_DATA`; **deploy BLOCKED** (`docs/specs/23-P51-BKT.md`) |
+| P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
 | P6 | TODO (hạng mục có thể làm song song sớm) | High trước public launch | Operational / privacy / security checks |
 | P7 | FUTURE | Low | Chỉ làm khi có quyết định sản phẩm |
 
@@ -640,9 +641,11 @@ Chi tiết: `docs/source-research-agent.md`.
 
 ### P5.1 — Bayesian Knowledge Tracing (BKT)
 
-- [ ] Chuẩn bị dataset chuỗi attempt theo `(user, skill, timestamp, correct)` có đủ độ dài, split train/test theo user/time tránh leakage.
-- [ ] So sánh BKT với heuristic baseline, kiểm tra calibration, Brier/log loss, drift, fairness; không deploy nếu không vượt baseline đáng kể.
-- [ ] Khi deploy, feature flag và shadow evaluation trước; có rollback và fallback rule-based.
+- [x] Chuẩn bị dataset chuỗi attempt theo `(user, skill, timestamp, correct)` có đủ độ dài, split train/test theo user/time tránh leakage. — `evals/mastery_dataset.py` (read-only, fallback schema `0012`), split theo user + time, kiểm `leakage`. Mục tiêu dùng **điểm mềm** `score_correct/score_total`.
+- [x] So sánh BKT với heuristic baseline, kiểm tra calibration, Brier/log loss, drift, fairness; không deploy nếu không vượt baseline đáng kể. — `evals/bkt_eval.py`: Brier/log loss/AUC/ECE/drift/leakage; baseline **as-of** chống leakage. Chạy thật: 37 event/21 user ⇒ `INSUFFICIENT_DATA`.
+- [ ] Khi deploy, feature flag và shadow evaluation trước; có rollback và fallback rule-based. — **BLOCKED**: dataset dưới ngưỡng (0 chuỗi ≥5 event). Không có thay đổi runtime ở phase này.
+
+> Chi tiết quyết định, công thức, ngưỡng go/no-go và số liệu: `docs/specs/23-P51-BKT.md`.
 
 ### P5.2 — LSTM/DKT và Contextual Bandit (chỉ nghiên cứu)
 
@@ -650,7 +653,7 @@ Chi tiết: `docs/source-research-agent.md`.
 - [ ] Contextual bandit cho gợi ý độ khó/hoạt động nếu có reward rõ ràng và logging policy đúng; đánh giá offline, tránh gây hại cho người học bằng thí nghiệm không kiểm soát.
 - [ ] K-Means/Random Forest/XGBoost chỉ mở backlog khi có câu hỏi nghiệp vụ cụ thể, nhãn/dữ liệu và tiêu chí hơn baseline.
 
-**Gate chung:** quality gains có số liệu held-out, privacy review, rollback; nếu chưa đủ dữ liệu → `NOT STARTED`, **không cố triển khai**.  
+**Gate chung:** quality gains có số liệu held-out, privacy review, rollback; nếu chưa đủ dữ liệu → `NOT STARTED`, **không cố triển khai**. P5.1 đã dựng hạ tầng đo và kết luận `INSUFFICIENT_DATA`; P5.2 vẫn `NOT STARTED`.  
 **Không làm:** Full RL tự động trên người học, dùng dữ liệu cá nhân không có quyền/chính sách.
 
 ---

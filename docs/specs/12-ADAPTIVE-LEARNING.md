@@ -15,7 +15,7 @@ Cá nhân hóa giai đoạn đầu dựa trên **5 câu interview, mục tiêu v
 | ADAPT-003 | Gợi ý bài tiếp theo khi prerequisites đạt | Explainable recommendation |
 | ADAPT-004 | FSRS dựa trên review events có rating/timezone | Deterministic schedule tests |
 | ADAPT-005 | User biết lý do được gợi ý và có thể skip | UX review |
-| ADAPT-006 | BKT chỉ khi có dataset đủ và vượt baseline | Held-out calibration |
+| ADAPT-006 | BKT chỉ khi có dataset đủ và vượt baseline (research-only 2026-11-02: hạ tầng đo xong, dữ liệu chưa đủ) | Held-out calibration |
 | ADAPT-007 | LSTM/DKT/contextual bandit chỉ nghiên cứu, rollout có kiểm soát | Proof of value + privacy |
 
 ## 3. Rule-based baseline (P5.0 proposed)
@@ -34,6 +34,14 @@ Cá nhân hóa giai đoạn đầu dựa trên **5 câu interview, mục tiêu v
 ## 5. Statistical models (conditional)
 
 - **BKT:** yêu cầu chuỗi event user-skill-timestamp-correct đủ dài, train/test split theo user hoặc thời gian tránh leakage, calibration (Brier/log loss), fairness review, shadow mode.
+  - **Trạng thái 2026-11-02 — RESEARCH-ONLY:** đã cài `backend/app/services/bkt.py`
+    (thuần Python, 4 tham số, mục tiêu mềm `score_correct/score_total`), extractor
+    read-only `backend/evals/mastery_dataset.py`, harness `backend/evals/bkt_eval.py`
+    (Brier/log loss/AUC/ECE/drift/leakage, baseline as-of). **Không** thay mastery
+    runtime: API vẫn trả `method="rule_based"`.
+  - Dữ liệu thật 2026-11-02: 127 attempt nhưng chỉ 37 đúng `contentVersion`, 21 user,
+    **0 chuỗi ≥5 event** ⇒ kết quả `INSUFFICIENT_DATA`; deploy **BLOCKED**.
+    Chi tiết: `docs/specs/23-P51-BKT.md`.
 - **DKT/LSTM, bandit:** chỉ khi baseline/BKT không đủ và dataset đủ; reward/bias rõ, offline evaluation và rollback trước online experimentation.
 - Không tự đưa K-Means, XGBoost, full RL vào kiến trúc chỉ vì phổ biến.
 

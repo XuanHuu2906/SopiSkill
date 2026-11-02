@@ -2,6 +2,82 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-02 — P5.1 Bayesian Knowledge Tracing (research-only)
+
+- Base commit: `e4f9017` (branch `feat/p5.0-learner-profile`); branch `feat/p5.1-bkt-research` (chưa push)
+- Scope & decisions (người dùng đã chốt):
+  - **Research-only offline**: không route, không feature flag runtime, không migration,
+    không bảng prediction, không worker shadow. API mastery **giữ** `method="rule_based"`.
+  - **Dữ liệu thật chưa đủ** ⇒ mục tiêu trung thực là dựng hạ tầng đo và công bố
+    `INSUFFICIENT_DATA`, không phải tuyên bố BKT tốt hơn baseline.
+  - **Mục tiêu so sánh là điểm mềm** `y = score_correct/score_total` cho **cả** BKT và
+    baseline (tránh so lệch mục tiêu mềm vs nhị phân); Brier = `(p-y)^2`.
+  - **Baseline as-of** theo từng mốc thời gian (trọng số `0.5^(age/30d)` trên event
+    trước đó cùng chuỗi), **không** gọi `compute_mastery(now=...)` ⇒ không nhìn tương lai.
+  - **Chỉ attempt khớp `contentVersion`** (`score_total>0`) được dùng, đồng bộ policy P1.1/P5.0.
+  - **Extractor read-only**, không `create_all` (khác `rag_eval.py`): bảng skill luôn tồn tại
+    nếu tạo bảng, sẽ che mất schema cũ. Phát hiện bảng bằng
+    `run_sync(inspect)` vì `inspect(AsyncEngine)` không hợp lệ.
+  - **Không thêm dependency**: BKT/AUC/ECE viết pure Python (`numpy`/`sklearn` không có
+    trong `requirements.txt`).
+- IMPLEMENTED:
+  - `backend/app/services/bkt.py`: `BktParams`, `validate`, `observe` (Bayes mềm),
+    `apply_learning`, `predict_correct`, `predict_sequence` (không leakage),
+    `brier`, `fit_grid` (grid cố định, deterministic).
+  - `backend/evals/mastery_dataset.py`: `Sequence`, `DatasetReport`, `redact_dsn`,
+    `detect_tables`, `load_sequences` (fallback skill→lesson, DB rỗng an toàn),
+    `summarize`.
+  - `backend/evals/bkt_eval.py`: `split_by_user`, `split_by_time`, `evaluate`
+    (Brier/log loss/AUC/ECE/drift/leakage), `simulate`, `decide_gate`, CLI
+    `--dataset real|simulated`, `--save`, `--json`.
+  - Tests: `test_p51_bkt.py` (11), `test_p51_dataset.py` (5), `test_p51_eval.py` (9).
+  - Docs: `docs/specs/23-P51-BKT.md` (mới), `docs/specs/12-ADAPTIVE-LEARNING.md`,
+    `docs/SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md` mục 3 + 18.
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **625 passed, 28 skipped** (trước 600/28; +25).
+  - `python -m pytest tests/test_p51_bkt.py tests/test_p51_dataset.py tests/test_p51_eval.py -q`
+    → **25 passed** (không cần PostgreSQL/network).
+  - `git diff --stat e4f9017 -- backend/app/models backend/alembic backend/app/api
+    backend/app/core/config.py backend/app/services/learner_profile_service.py
+    backend/app/services/learning_path_service.py backend/requirements.txt frontend`
+    → **rỗng** (chứng minh không đổi runtime/schema/dependency).
+- TESTED (PostgreSQL thật, chỉ SELECT — container `db`, DB `ailp`):
+  - `python -m evals.bkt_eval --dataset real --database-url postgresql+asyncpg://ailp:***@127.0.0.1:5433/ailp`
+    → `users=21 sequences=21 rawAttempts=127 versionedAttempts=37 skillGranularity=False`;
+    `lengthHistogram={'1': 6, '2': 14, '3': 1}`; **`INSUFFICIENT_DATA`** với lý do
+    `0 chuỗi ≥5 event` và `37 event < 300`.
+  - Đối chiếu `psql` cùng DB: **37** event đúng version, **21** user — khớp extractor.
+  - `... --granularity lesson --database-url sqlite+aiosqlite:///./tmp_bkt_check.db`
+    → DB rỗng không crash, trả 0 và `INSUFFICIENT_DATA`.
+  - `python -m evals.bkt_eval --dataset simulated --seed 20261102 --save`
+    → `dataSource=simulated`, 800 event, `brier bkt≈0.0228` vs `baseline≈0.0526`,
+    `auc≈0.868`, `ece≈0.026`, `leakage=0`, gate `PASS`; report
+    `backend/evals/reports/bkt_simulated_<ts>.json`. **Chỉ chứng minh code đúng.**
+  - `... --dataset simulated --force-correct` → gate **`NOT_MET`** (baseline Brier=0,
+    ECE vượt ngưỡng, AUC không xác định) ⇒ harness không tự khen.
+- NOT TESTED:
+  - **BKT trên dữ liệu người học thật** — bất khả thi với 0 chuỗi ≥5 event.
+  - **Calibration/fairness kết luận** — slice nhỏ, không đủ n; report chỉ mô tả.
+  - Chưa chạy trên schema `0015` có bảng skill thật (DB dev vẫn `0012`); nhánh skill
+    chỉ được test bằng SQLite in-memory trong `test_p51_dataset.py`.
+- BLOCKED: deploy BKT (gate #18) — cần ≥30 chuỗi ≥5 event và ≥300 event đúng version;
+  cần quyết định sản phẩm về việc hiển thị "dự đoán" cho người học.
+- Database: **N/A** — không migration, không ghi dữ liệu.
+- Security: extractor chỉ SELECT; DSN in ra đã che mật khẩu; không log nội dung bài học;
+  không có endpoint/route mới; không mở đường đọc chéo user (script chạy cục bộ, không serve).
+- Regressions: 0 — 600 test cũ vẫn pass; không file runtime bị sửa.
+- Known limitations:
+  - Mục tiêu mềm (`k/5`) khác BKT nhị phân cổ điển, chọn để so cùng đại lượng với mastery.
+  - 1 skill/bài (kế thừa P2.1) ⇒ chuỗi skill thực chất là chuỗi bài.
+  - `skills.key` chỉ ổn định trong một course ⇒ không gộp chuỗi xuyên course.
+  - `question`-level (`results`) chưa map skill nên chưa dùng trong gate.
+  - Baseline trong harness là bản tái lập `compute_mastery`; nếu đổi baseline runtime
+    phải cập nhật song song, nếu không so sánh sẽ sai.
+- PHASE GATE: **GATE-PARTIAL** — code + test + số liệu thật đầy đủ, nhưng gate deploy
+  là **BLOCKED** vì dữ liệu chưa đủ (đúng điều kiện của plan, không phải lỗi triển khai).
+- NEXT: tích luỹ dữ liệu attempt (đặc biệt user có ≥5 bài cùng skill) rồi chạy lại
+  `evals.bkt_eval --dataset real`; hoặc chuyển P6 (production hardening).
+
 ## 2026-11-02 — P5.0 Learner Profile, Mastery Baseline & FSRS
 
 - Base commit: `2150b0d` (`feat/p4.3-ocr`); branch `feat/p5.0-learner-profile` (chưa push)
