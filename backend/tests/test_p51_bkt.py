@@ -43,10 +43,15 @@ def test_predict_correct_formula():
 
 
 def test_predict_sequence_no_future_leakage():
+    """Đổi bất kỳ quan sát nào từ vị trí k trở đi KHÔNG được đổi dự đoán < k."""
     params = bkt.BktParams()
-    first = bkt.predict_sequence([1, 1, 1, 1], params)
-    changed = bkt.predict_sequence([1, 0, 0, 0], params)
-    assert first[0] == pytest.approx(changed[0])
+    base = bkt.predict_sequence([1.0, 0.0, 1.0, 0.0, 1.0], params)
+    for k in range(1, 5):
+        mutated = [1.0, 0.0, 1.0, 0.0, 1.0]
+        mutated[k] = 1.0 - mutated[k]
+        changed = bkt.predict_sequence(mutated, params)
+        for i in range(k):
+            assert base[i] == pytest.approx(changed[i]), f"leak tại k={k}, i={i}"
 
 
 def test_predict_sequence_all_correct_increases():

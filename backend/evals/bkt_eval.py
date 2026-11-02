@@ -118,7 +118,7 @@ def _log_loss(preds: list[float], targets: list[float]) -> float | None:
     return total / len(preds)
 
 
-def _auc(preds: list[float], binary: list[int]) -> float | None:
+def auc_score(preds: list[float], binary: list[int]) -> float | None:
     """AUC rank-based; trả None nếu chỉ có một lớp nhãn."""
     positives = [p for p, label in zip(preds, binary) if label == 1]
     negatives = [p for p, label in zip(preds, binary) if label == 0]
@@ -135,7 +135,7 @@ def _auc(preds: list[float], binary: list[int]) -> float | None:
     return wins / (len(positives) * len(negatives))
 
 
-def _ece(preds: list[float], targets: list[float], bins: int = 10) -> float | None:
+def ece_bucket_score(preds: list[float], targets: list[float], bins: int = 10) -> float | None:
     if not preds:
         return None
     buckets: list[list[tuple[float, float]]] = [[] for _ in range(bins)]
@@ -154,7 +154,10 @@ def _ece(preds: list[float], targets: list[float], bins: int = 10) -> float | No
 
 
 def _baseline_predictions(
-    train: list[list[float]], test: list[list[Any]]
+    train: list[list[float]],
+    test: list[list[Any]],
+    *,
+    half_life_days: int = 30,
 ) -> list[float]:
     """Baseline as-of: trung bình có trọng số thời gian của event TRƯỚC đó."""
     train_flat = [y for seq in train for y in seq]
@@ -179,7 +182,7 @@ def _baseline_predictions(
                             weights.append(1.0)
                         else:
                             age_days = max(0.0, (ts - hist_ts).total_seconds() / 86400.0)
-                            weights.append(0.5 ** (age_days / 30.0))
+                            weights.append(0.5 ** (age_days / max(1, half_life_days)))
                 total_weight = sum(weights)
                 if total_weight <= 0:
                     preds.append(fallback)
@@ -191,12 +194,59 @@ def _baseline_predictions(
     return preds
 
 
+def _history_slices(test: list[list[Any]]) -> dict:
+    """Slice fairness MÔ TẢ theo độ dài lịch sử (không kết luận khi n nhỏ).
+
+    Chia chuỗi test thành `short` (<5 event) và `long` (>=5 event), báo số chuỗi và
+    tỷ lệ `y >= 0.8` mỗi nhóm. Chỉ để kiểm tra phân bố, KHÔNG dùng làm gate.
+    """
+    buckets: dict[str, list[float]] = {"short": [], "long": []}
+    for seq in test:
+        flat = [_event_y(event) for event in seq]
+        key = "long" if len(flat) >= 5 else "short"
+        buckets[key].extend(flat)
+
+    def _summary(values: list[float]) -> dict:
+        if not values:
+            return {"sequences": 0, "events": 0, "shareHigh": None}
+        high = sum(1 for v in values if v >= CUTOFF_THRESHOLD)
+        return {
+            "events": len(values),
+            "shareHigh": round(high / len(values), 4),
+        }
+
+    return {name: _summary(values) for name, values in buckets.items()}
+
+
+def chronological_drift(
+    triples: list[tuple[datetime, float, float]],
+) -> float | None:
+    """Brier nửa SAU trừ nửa ĐẦU, sắp xếp theo timestamp (không theo vị trí list).
+
+    `triples` là `(timestamp, prediction, target)`. Chia theo trung vị thời gian để
+    hai nửa gần bằng nhau về thời gian; trả None nếu không đủ dữ liệu.
+    """
+    if len(triples) < 2:
+        return None
+    ordered = sorted(triples, key=lambda item: item[0])
+    half = len(ordered) // 2
+    early = ordered[:half]
+    late = ordered[half:]
+    if not early or not late:
+        return None
+    early_brier = sum((p - t) ** 2 for _, p, t in early) / len(early)
+    late_brier = sum((p - t) ** 2 for _, p, t in late) / len(late)
+    return late_brier - early_brier
+
+
 def evaluate(
     train: list[list[Any]],
     test: list[list[Any]],
     *,
     train_users: list[str] | None = None,
     test_users: list[str] | None = None,
+    baseline_half_life_days: int = 30,
+    min_sequence: int = 5,
 ) -> dict:
     """So BKT (fit trên train) với baseline as-of, đo trên test."""
     train_float = _as_float_sequences(train)
@@ -215,6 +265,9 @@ def evaluate(
         "nEvents": n_train + n_test,
         "nSequencesTrain": len(train_float),
         "nSequencesTest": len(test_float),
+        "nQualifyingTrain": sum(1 for seq in train_float if len(seq) >= min_sequence),
+        "nQualifyingTest": sum(1 for seq in test_float if len(seq) >= min_sequence),
+        "minSequence": min_sequence,
         "leakage": leakage,
         "brierBkt": None,
         "brierBaseline": None,
@@ -225,6 +278,8 @@ def evaluate(
         "eceBkt": None,
         "eceBaseline": None,
         "driftBrier": None,
+        "aucThreshold": CUTOFF_THRESHOLD,
+        "baselineHalfLifeDays": baseline_half_life_days,
         "params": None,
         "trainBrier": None,
         "grid": [p.p_learn for p in DEFAULT_GRID],
@@ -249,7 +304,9 @@ def evaluate(
     bkt_preds = [
         p for seq in test_float if seq for p in bkt.predict_sequence(seq, params)
     ]
-    base_preds = _baseline_predictions(train_float, test)
+    base_preds = _baseline_predictions(
+        train_float, test, half_life_days=baseline_half_life_days
+    )
     targets = [y for seq in test_float for y in seq]
     binary = [1 if y >= CUTOFF_THRESHOLD else 0 for y in targets]
 
@@ -257,18 +314,22 @@ def evaluate(
     result["brierBaseline"] = _brier(base_preds, targets)
     result["logLossBkt"] = _log_loss(bkt_preds, targets)
     result["logLossBaseline"] = _log_loss(base_preds, targets)
-    result["aucBkt"] = _auc(bkt_preds, binary)
-    result["aucBaseline"] = _auc(base_preds, binary)
-    result["eceBkt"] = _ece(bkt_preds, targets)
-    result["eceBaseline"] = _ece(base_preds, targets)
+    result["aucBkt"] = auc_score(bkt_preds, binary)
+    result["aucBaseline"] = auc_score(base_preds, binary)
+    result["eceBkt"] = ece_bucket_score(bkt_preds, targets)
+    result["eceBaseline"] = ece_bucket_score(base_preds, targets)
 
-    # Drift: Brier trên nửa sau trừ nửa đầu của test (theo thứ tự chuỗi).
-    half = len(targets) // 2
-    if half > 0:
-        early = _brier(bkt_preds[:half], targets[:half])
-        late = _brier(bkt_preds[half:], targets[half:])
-        if early is not None and late is not None:
-            result["driftBrier"] = late - early
+    # Drift: sắp xếp test event theo THỜI GIAN rồi chia đôi (xem chronological_drift).
+    triples: list[tuple[datetime, float, float]] = []
+    cursor = 0
+    for raw_seq, seq in zip(test, test_float):
+        for event, target in zip(raw_seq, seq):
+            ts = _event_ts(event)
+            if ts is None:
+                ts = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(microseconds=cursor)
+            triples.append((ts, bkt_preds[cursor], target))
+            cursor += 1
+    result["driftBrier"] = chronological_drift(triples)
     return result
 
 
@@ -320,18 +381,34 @@ def decide_gate(results: dict, thresholds: dict) -> dict:
     min_auc = float(thresholds.get("min_auc", 0.60))
     max_drift = float(thresholds.get("max_drift", 0.05))
 
-    n_test_sequences = int(results.get("nSequencesTest", 0) or 0)
     n_events = int(results.get("nEvents", 0) or 0)
-    required_test = max(10, min_sequences // 3)
+    # `nQualifying*` = số chuỗi có >= min_sequence event ở mỗi phía (spec §6.4:
+    # "train và test mỗi phía ≥ 10"). Thiếu key ⇒ fallback về tổng số chuỗi để
+    # không vô tình nới lỏng gate khi caller cũ.
+    qualifying_train = int(
+        results.get("nQualifyingTrain", results.get("nSequencesTrain", 0)) or 0
+    )
+    qualifying_test = int(
+        results.get("nQualifyingTest", results.get("nSequencesTest", 0)) or 0
+    )
+    per_side = max(10, min_sequences // 3)
 
     reasons: list[str] = []
-    if int(results.get("nSequencesTrain", 0) or 0) < required_test:
+    if qualifying_train < per_side:
         reasons.append(
-            f"train cần ≥{required_test} chuỗi, chỉ có "
-            f"{int(results.get('nSequencesTrain', 0) or 0)}"
+            f"qualifying train cần ≥{per_side} chuỗi ≥{results.get('minSequence', 5)} event, "
+            f"chỉ có {qualifying_train}"
         )
-    if n_test_sequences < required_test:
-        reasons.append(f"test cần ≥{required_test} chuỗi, chỉ có {n_test_sequences}")
+    if qualifying_test < per_side:
+        reasons.append(
+            f"qualifying test cần ≥{per_side} chuỗi ≥{results.get('minSequence', 5)} event, "
+            f"chỉ có {qualifying_test}"
+        )
+    if qualifying_train + qualifying_test < min_sequences:
+        reasons.append(
+            f"min_sequences={min_sequences}: chỉ có "
+            f"{qualifying_train + qualifying_test} chuỗi đủ dài (train+test)"
+        )
     if n_events < min_events:
         reasons.append(f"min_events={min_events}: chỉ có {n_events} event")
     if reasons:
@@ -465,7 +542,15 @@ async def _run_real(args) -> dict:
     train_users = [seq.user_id for seq in sequences if f"{seq.user_id}:{seq.key}" in train_keys]
     test_users = [seq.user_id for seq in sequences if f"{seq.user_id}:{seq.key}" in test_keys]
 
-    results = evaluate(train, test, train_users=train_users, test_users=test_users)
+    results = evaluate(
+        train,
+        test,
+        train_users=train_users,
+        test_users=test_users,
+        baseline_half_life_days=args.baseline_half_life_days,
+        min_sequence=args.min_sequence,
+    )
+    results["slices"] = _history_slices(test)
     payload["status"] = "evaluated"
     payload["results"] = results
     payload["gate"] = decide_gate(results, payload["thresholds"])
@@ -494,7 +579,15 @@ def _run_simulated(args) -> dict:
     train_users = [seq.user_id for seq in sequences if f"{seq.user_id}:{seq.key}" in train_keys]
     test_users = [seq.user_id for seq in sequences if f"{seq.user_id}:{seq.key}" in test_keys]
 
-    results = evaluate(train, test, train_users=train_users, test_users=test_users)
+    results = evaluate(
+        train,
+        test,
+        train_users=train_users,
+        test_users=test_users,
+        baseline_half_life_days=args.baseline_half_life_days,
+        min_sequence=args.min_sequence,
+    )
+    results["slices"] = _history_slices(test)
     report = md.DatasetReport(
         database="<simulated>",
         skill_granularity=True,
@@ -563,6 +656,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-ece", type=float, default=0.10)
     parser.add_argument("--min-auc", type=float, default=0.60)
     parser.add_argument("--max-drift", type=float, default=0.05)
+    parser.add_argument(
+        "--baseline-half-life-days",
+        type=int,
+        default=0,
+        help="Half-life của baseline; 0 = dùng MASTERY_RECENCY_HALF_LIFE_DAYS",
+    )
     parser.add_argument("--seed", type=int, default=20261102)
     parser.add_argument("--sim-users", type=int, default=40)
     parser.add_argument("--sim-per-user", type=int, default=20)
@@ -578,6 +677,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.baseline_half_life_days <= 0:
+        from app.core.config import get_settings
+
+        args.baseline_half_life_days = int(
+            get_settings().mastery_recency_half_life_days
+        )
     payload = (
         asyncio.run(_run_real(args))
         if args.dataset == "real"

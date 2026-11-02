@@ -73,10 +73,24 @@ def redact_dsn(dsn: str) -> str:
     except ValueError:
         return "<invalid dsn>"
     if parts.password is None:
-        return dsn
-    netloc = parts.netloc.replace(f":{parts.password}@", ":***@")
+        # Không có mật khẩu dạng user:pass@ (có thể percent-encoded hoặc query).
+        return dsn if "@" not in parts.netloc else urllib.parse.urlunsplit(
+            (
+                parts.scheme,
+                f"{parts.username or ''}:***@{parts.hostname or ''}"
+                + (f":{parts.port}" if parts.port else ""),
+                parts.path,
+                parts.query,
+                parts.fragment,
+            )
+        )
+    # Dựng lại netloc từ các thành phần đã parse thay vì replace chuỗi con: mật
+    # khẩu percent-encoded (`p%40ss`) không khớp nguyên văn với `parts.password`.
+    authority = f"{parts.username or ''}:***@{parts.hostname or ''}"
+    if parts.port:
+        authority = f"{authority}:{parts.port}"
     return urllib.parse.urlunsplit(
-        (parts.scheme, netloc, parts.path, parts.query, parts.fragment)
+        (parts.scheme, authority, parts.path, parts.query, parts.fragment)
     )
 
 
@@ -135,40 +149,38 @@ async def load_sequences(
         )
 
         if effective == "skill":
+            # `MIN(s.key)` chọn ĐÚNG MỘT skill mỗi bài (deterministic) khi dữ liệu cũ
+            # có nhiều `lesson_skills`; nếu không, LEFT JOIN sẽ nhân đôi event của
+            # cùng một attempt và làm sai mọi metric.
             sql = """
                 SELECT a.user_id, a.created_at, a.score_correct, a.score_total,
-                       COALESCE(s.key, 'lesson:' || l.id) AS seq_key
+                       MIN(s.key) AS skill_key, 'lesson:' || l.id AS lesson_key
                 FROM lesson_attempts a
                 JOIN lessons l ON l.id = a.lesson_id
                 LEFT JOIN lesson_skills ls ON ls.lesson_id = l.id
                 LEFT JOIN skills s ON s.id = ls.skill_id
                 WHERE a.content_version = l.content_version AND a.score_total > 0
+                GROUP BY a.id, a.user_id, a.created_at, a.score_correct,
+                         a.score_total, l.id
                 ORDER BY a.created_at, a.id
             """
-            prefix = "skill:"
         else:
             sql = """
                 SELECT a.user_id, a.created_at, a.score_correct, a.score_total,
-                       'lesson:' || l.id AS seq_key
+                       NULL AS skill_key, 'lesson:' || l.id AS lesson_key
                 FROM lesson_attempts a
                 JOIN lessons l ON l.id = a.lesson_id
                 WHERE a.content_version = l.content_version AND a.score_total > 0
                 ORDER BY a.created_at, a.id
             """
-            prefix = ""
 
         rows = (await conn.execute(text(sql))).all()
 
-    # Với granularity=skill nhưng skill fallback đã có sẵn prefix `lesson:`, không
-    # thêm `skill:` lần nữa; khi có skill thật thì key cần prefix `skill:`.
-    def _key(raw_key: str) -> str:
-        if prefix and not raw_key.startswith("lesson:"):
-            return f"{prefix}{raw_key}"
-        return raw_key
-
     grouped: dict[tuple[str, str], Sequence] = {}
-    for user_id, created_at, correct, total, raw_key in rows:
-        key = _key(str(raw_key))
+    for user_id, created_at, correct, total, skill_key, lesson_key in rows:
+        # Skill thật ⇒ khoá `skill:<key>`; bài không gắn skill ⇒ `lesson:<id>`
+        # (không âm thầm bỏ attempt).
+        key = f"skill:{skill_key}" if skill_key else str(lesson_key)
         bucket = grouped.get((str(user_id), key))
         if bucket is None:
             bucket = Sequence(user_id=str(user_id), key=key)

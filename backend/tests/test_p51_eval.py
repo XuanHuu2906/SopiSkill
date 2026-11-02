@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.services import bkt
 from evals import bkt_eval as ev
 
@@ -65,7 +67,13 @@ def test_simulate_mismatched_model_does_not_beat_baseline():
     half = len(seqs) // 2
     res = ev.evaluate([s.events for s in seqs[:half]], [s.events for s in seqs[half:]])
     assert res["leakage"] == 0
-    assert res["brierBkt"] <= 0.25
+    # Dữ liệu toàn đúng mà BKT vẫn dự đoán < 1 và ECE cao ⇒ KHÔNG được PASS.
+    gate = ev.decide_gate(
+        {**res, "nSequencesTrain": 40, "nSequencesTest": 40,
+         "nQualifyingTrain": 40, "nQualifyingTest": 40},
+        {"min_sequences": 30, "min_events": 100},
+    )
+    assert gate["gate"] == "NOT_MET"
 
 
 def test_decide_gate_insufficient_when_too_few():
@@ -108,3 +116,108 @@ def test_decide_gate_passes_when_all_criteria_met():
     gate = ev.decide_gate(result, {"min_sequences": 10, "min_events": 100})
     assert gate["gate"] == "PASS"
     assert gate["status"] == "evaluated"
+
+
+# ---- Final review fixes -------------------------------------------------
+
+
+def test_decide_gate_requires_min_sequence_per_side():
+    """Gate phải dùng chuỗi ĐỦ DÀI ở cả hai phía, không chỉ tổng số event."""
+    result = {
+        "nSequencesTrain": 40,
+        "nSequencesTest": 40,
+        "nEvents": 900,
+        "nQualifyingTrain": 30,
+        "nQualifyingTest": 2,  # chỉ 2 chuỗi test đủ dài
+        "brierBkt": 0.10,
+        "brierBaseline": 0.20,
+        "eceBkt": 0.05,
+        "aucBkt": 0.75,
+        "driftBrier": 0.01,
+        "leakage": 0,
+    }
+    gate = ev.decide_gate(result, {"min_sequences": 30, "min_events": 300})
+    assert gate["gate"] == "NOT_MET"
+    assert any("qualifying" in r for r in gate["reasons"])
+
+
+def test_decide_gate_requires_total_min_sequences():
+    """Tổng chuỗi đủ dài phải >= min_sequences (không được tự hạ xuống)."""
+    result = {
+        "nSequencesTrain": 12,
+        "nSequencesTest": 10,
+        "nEvents": 900,
+        "nQualifyingTrain": 12,
+        "nQualifyingTest": 10,
+        "brierBkt": 0.10,
+        "brierBaseline": 0.20,
+        "eceBkt": 0.05,
+        "aucBkt": 0.75,
+        "driftBrier": 0.01,
+        "leakage": 0,
+    }
+    gate = ev.decide_gate(result, {"min_sequences": 30, "min_events": 300})
+    assert gate["gate"] == "NOT_MET"
+    assert any("qualifying" in r or "min_sequences" in r for r in gate["reasons"])
+
+
+def test_decide_gate_never_passes_with_leakage():
+    result = {
+        "nSequencesTrain": 40,
+        "nSequencesTest": 40,
+        "nEvents": 900,
+        "nQualifyingTrain": 40,
+        "nQualifyingTest": 40,
+        "brierBkt": 0.10,
+        "brierBaseline": 0.20,
+        "eceBkt": 0.02,
+        "aucBkt": 0.80,
+        "driftBrier": 0.0,
+        "leakage": 3,
+    }
+    gate = ev.decide_gate(result, {"min_sequences": 30, "min_events": 300})
+    assert gate["gate"] == "NOT_MET"
+
+
+def test_chronological_drift_sorts_by_timestamp():
+    """Drift phải chia theo THỜI GIAN, không theo vị trí trong list."""
+    t0 = datetime(2026, 10, 1, tzinfo=UTC)
+    # Thứ tự list: sai(ngày 10) → đúng(ngày 1) → sai(ngày 20) → đúng(ngày 2).
+    # Theo thời gian: đúng, đúng, sai, sai ⇒ nửa sau tệ hơn ⇒ drift > 0.
+    triples = [
+        (t0 + timedelta(days=10), 0.9, 0.0),
+        (t0 + timedelta(days=1), 0.9, 1.0),
+        (t0 + timedelta(days=20), 0.9, 0.0),
+        (t0 + timedelta(days=2), 0.9, 1.0),
+    ]
+    drift = ev.chronological_drift(triples)
+    assert drift is not None
+    # Theo thời gian: nửa đầu (ngày 1–2) y=1, nửa sau (ngày 10–20) y=0.
+    # Prediction 0.9 ⇒ nửa sau sai nhiều hơn ⇒ drift dương, ~0.72.
+    assert drift > 0.5
+
+
+def test_evaluate_uses_chronological_drift():
+    t0 = datetime(2026, 10, 1, tzinfo=UTC)
+    mixed = [
+        (t0 + timedelta(days=10), 0.0),
+        (t0 + timedelta(days=1), 0.0),
+    ]
+    res = ev.evaluate([[1.0, 1.0, 1.0]], [mixed])
+    # 2 event ⇒ nửa trước 1 event, nửa sau 1 event; có timestamp nên phải tính được.
+    assert res["driftBrier"] is not None
+
+
+def test_evaluate_reports_auc_threshold_and_params():
+    res = ev.evaluate([[1.0, 0.0, 1.0, 1.0]], [[1.0, 1.0], [0.0, 1.0]])
+    assert res["aucThreshold"] == 0.8
+    assert res["baselineHalfLifeDays"] >= 1
+
+
+def test_auc_ties_are_half_credit():
+    assert ev.auc_score([0.5, 0.5], [1, 0]) == 0.5
+
+
+def test_ece_ignores_empty_bins():
+    # Một dự đoán duy nhất: ECE = |p - y|, không bị chia nhỏ bởi bin rỗng.
+    assert ev.ece_bucket_score([0.25], [0.75]) == pytest.approx(0.5)

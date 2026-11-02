@@ -30,13 +30,13 @@
   - `backend/evals/bkt_eval.py`: `split_by_user`, `split_by_time`, `evaluate`
     (Brier/log loss/AUC/ECE/drift/leakage), `simulate`, `decide_gate`, CLI
     `--dataset real|simulated`, `--save`, `--json`.
-  - Tests: `test_p51_bkt.py` (11), `test_p51_dataset.py` (5), `test_p51_eval.py` (9).
+  - Tests: `test_p51_bkt.py` (11), `test_p51_dataset.py` (7), `test_p51_eval.py` (17).
   - Docs: `docs/specs/23-P51-BKT.md` (mới), `docs/specs/12-ADAPTIVE-LEARNING.md`,
     `docs/SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md` mục 3 + 18.
 - TESTED (offline, SQLite in-memory):
-  - `cd backend && python -m pytest -q` → **625 passed, 28 skipped** (trước 600/28; +25).
+  - `cd backend && python -m pytest -q` → **635 passed, 28 skipped** (trước 600/28; +35).
   - `python -m pytest tests/test_p51_bkt.py tests/test_p51_dataset.py tests/test_p51_eval.py -q`
-    → **25 passed** (không cần PostgreSQL/network).
+    → **35 passed** (không cần PostgreSQL/network).
   - `git diff --stat e4f9017 -- backend/app/models backend/alembic backend/app/api
     backend/app/core/config.py backend/app/services/learner_profile_service.py
     backend/app/services/learning_path_service.py backend/requirements.txt frontend`
@@ -66,6 +66,25 @@
 - Security: extractor chỉ SELECT; DSN in ra đã che mật khẩu; không log nội dung bài học;
   không có endpoint/route mới; không mở đường đọc chéo user (script chạy cục bộ, không serve).
 - Regressions: 0 — 600 test cũ vẫn pass; không file runtime bị sửa.
+- Review toàn branch (fresh reviewer) đã tìm và sửa trong cùng phase (635 pytest):
+  - **C1** gate không thực thi `min_sequences` đúng nghĩa: dùng `max(10, min//3)` và chỉ
+    kiểm tổng event ⇒ 30 chuỗi train dài + 10 chuỗi test 1-event vẫn có thể PASS. Nay gate
+    đếm **chuỗi đủ dài riêng từng phía** (`nQualifyingTrain/Test`) + tổng ≥ `min_sequences`.
+  - **C2** `driftBrier` chia theo vị trí list (thứ tự user/key), không theo thời gian, và
+    `split_by_time` là dead code. Nay `chronological_drift` sắp theo timestamp trước khi chia.
+  - **C3** baseline hard-code half-life 30d trong khi runtime dùng
+    `MASTERY_RECENCY_HALF_LIFE_DAYS`; nay đọc setting, ghi vào report, có `--baseline-half-life-days`.
+  - **C4** quảng cáo fairness slice và "báo cả hai split" nhưng chưa có code; nay thêm
+    `slices` (short/long, chỉ mô tả) và ghi rõ CLI mới chạy split theo user.
+  - **C5** test chống leakage quá yếu (chỉ so index 0); nay đột biến từng vị trí k và assert
+    toàn bộ prefix `< k` không đổi.
+  - **C6** test "mismatched model" không assert gate; nay assert `NOT_MET`.
+  - **C7** `LEFT JOIN lesson_skills` nhân đôi event khi một bài gắn nhiều skill (data
+    inflation) — nay `MIN(s.key)` + `GROUP BY a.id`, có test đếm event.
+  - **C8** `redact_dsn` có thể lộ mật khẩu percent-encoded; nay dựng lại netloc từ thành
+    phần đã parse, có test `p%40ss`.
+  - **C9** tài liệu gọi simulation PASS là "chứng minh code đúng" ⇒ hạ xuống "chứng minh tự
+    nhất quán của đường ống", nhấn mạnh chiều `--force-correct` mới là bằng chứng không tự khen.
 - Known limitations:
   - Mục tiêu mềm (`k/5`) khác BKT nhị phân cổ điển, chọn để so cùng đại lượng với mastery.
   - 1 skill/bài (kế thừa P2.1) ⇒ chuỗi skill thực chất là chuỗi bài.

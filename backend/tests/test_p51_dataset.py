@@ -135,3 +135,33 @@ async def test_summarize_counts_length_thresholds(tmp_path):
     assert summary2["enough"] is False
     assert "min_sequences" in summary2["reasons"][0]
     await engine.dispose()
+
+
+async def test_extractor_deduplicates_multi_skill_lessons(tmp_path):
+    """Một lesson gắn nhiều skill không được nhân đôi attempt/event."""
+    engine = await _build(tmp_path, with_skills=True)
+    await _seed(engine, version_match=True, users=1, attempts=4)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO skills (id,course_id,key) VALUES ('s0','c0','alpha')")
+        )
+        await conn.execute(
+            text("INSERT INTO skills (id,course_id,key) VALUES ('s1','c0','beta')")
+        )
+        await conn.execute(
+            text("INSERT INTO lesson_skills (lesson_id,skill_id) VALUES ('l0','s0')")
+        )
+        await conn.execute(
+            text("INSERT INTO lesson_skills (lesson_id,skill_id) VALUES ('l0','s1')")
+        )
+    seqs, report = await md.load_sequences(engine, granularity="skill", min_sequence=1)
+    total_events = sum(len(seq.events) for seq in seqs)
+    assert total_events == report.versioned_attempts == 4
+    await engine.dispose()
+
+
+def test_redact_dsn_handles_percent_encoded_password():
+    redacted = md.redact_dsn("postgresql+asyncpg://u:p%40ss%3Aword@h:5432/db")
+    assert "p%40ss" not in redacted
+    assert "word@h" not in redacted
+    assert "h:5432" in redacted
