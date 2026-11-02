@@ -850,6 +850,28 @@ class LearningPathOut(BaseModel):
     reviewDueCount: int
     blockedBy: list[LearningPathBlockedOut]
     prerequisitesDag: PrerequisiteDagOut
+    # P5.2b — additive: token server ký để client báo exposure. `None` khi cờ TẮT
+    # hoặc learning-path không có arm nào. Client KHÔNG được tự tạo giá trị này.
+    recommendationToken: str | None = None
+
+
+class RecommendationEventRequest(BaseModel):
+    """Body của POST /v1/courses/{courseId}/recommendation-events.
+
+    Chỉ nhận token do server phát. `arm`, `propensity`, `userId`, `courseId`,
+    `contextHash` tự tính đều bị từ chối (extra=forbid) để client không ghi khống.
+    """
+
+    recommendationToken: str = Field(min_length=8, max_length=4096)
+
+    model_config = {"extra": "forbid"}
+
+
+class RecommendationEventOut(BaseModel):
+    recorded: bool
+    duplicate: bool = False
+    exposureId: str | None = None
+    reason: str | None = None
 
 
 class DueReviewOut(BaseModel):
