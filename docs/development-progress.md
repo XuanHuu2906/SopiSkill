@@ -2,6 +2,83 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-02 — P6.1 CI pipeline, static security & dependency gates
+
+- Base commit: `8afc688` (branch `feat/p5.2-adaptive-readiness`); branch
+  `feat/p6.0-ci-pipeline` (chưa push)
+- Scope & decisions:
+  - **P6 trong plan không có mục "P6.0"**; mục đầu tiên và độc lập là **P6.1 CI pipeline**
+    ⇒ dùng làm lát cắt đầu của P6, giữ đúng thứ tự plan.
+  - **Không trộn việc:** không làm P6.2–P6.9 (security review, TLS, Redis rate limit,
+    backup drill, observability, privacy, a11y, release checklist) trong commit này.
+  - **`next lint` bị loại khỏi gate**: khi thiếu cấu hình ESLint nó mở wizard tương tác
+    và treo CI. Thay bằng flat config + `eslint . --max-warnings=0`.
+  - **Warning chặn merge** (không chỉ error), và 4 warning có sẵn đã được dọn thật.
+  - **Nâng Next 15.1.6 → 15.5.28** vì baseline có advisory critical/high (RCE Image
+    Optimization, RCE Windows-hosted, DoS Server Actions, cache poisoning, SSRF rewrites).
+    Thêm `overrides.postcss ^8.5.32` cho advisory transitive. **Không** nâng Next 16
+    (breaking major, ngoài phạm vi).
+  - **Bandit: sửa code thay vì `# nosec` mù.** 3 `assert` (bị bỏ khi `python -O`) đổi thành
+    raise tường minh; 5 chỗ `# nosec` còn lại đều là false positive có lý do ghi kèm
+    (PRNG seed cho shuffle/backoff, đóng connection best-effort, mã lỗi hằng chuỗi).
+- IMPLEMENTED:
+  - `.github/workflows/ci.yml` — 5 job: `backend-tests`, `postgres-migrations`,
+    `postgres-race`, `frontend`, `security`; `permissions.contents: read`, concurrency
+    cancel, **không đọc `secrets.*`** (PR từ fork chạy được).
+  - `backend/requirements-dev.txt` — pin `bandit==1.9.4`, `pip-audit==2.10.1`,
+    `PyYAML==6.0.3`; không đụng `requirements.txt` runtime.
+  - `backend/tests/test_p61_ci_contract.py` — 11 test đọc `ci.yml`/`package.json` chặn
+    tái phát: mất job, mất `downgrade -1`, mất `POSTGRES_TEST_URL`, quay lại `next lint`,
+    bỏ `--max-warnings=0`, hạ Next xuống bản dính advisory, thêm `secrets.*`.
+  - `frontend/eslint.config.mjs` (flat config, `next/core-web-vitals` + `next/typescript`).
+  - `frontend/package.json` — `lint` = `eslint . --max-warnings=0`, thêm `typecheck`,
+    `eslint@^9.39.5`, `eslint-config-next@15.5.28`, `next@15.5.28`, `overrides.postcss`.
+  - Dọn warning thật: bỏ import `CourseList` không dùng (`src/app/page.tsx`), bỏ tham số
+    callback không dùng (`src/app/sources/page.tsx`).
+  - Sửa `assert` → raise: `api/v1/tutor.py`, `providers/openai_compatible_provider.py` ×2.
+  - `docs/specs/25-P61-CI-PIPELINE.md` (spec + baseline + lý do) và cập nhật
+    `docs/specs/README.md`, master plan P6.1.
+- TESTED (local, Windows):
+  - `cd backend && python -m pytest -q` → **691 passed, 29 skipped** (trước 680/29;
+    +11 test contract).
+  - `cd backend && python -m bandit -r app` → **Low 0 / Medium 0 / High 0**, 5 `# nosec`
+    có giải thích.
+  - `cd backend && PYTHONUTF8=1 python -m pip_audit -r requirements.txt --progress-spinner off`
+    → **No known vulnerabilities found**.
+  - `cd frontend && npm ci && npm run lint && npm run typecheck && npm run build`
+    → exit 0/0/0/0 (lint `--max-warnings=0` sạch).
+  - `cd frontend && npm audit --omit=dev --audit-level=high` → **0 vulnerabilities**
+    (baseline trước đó: 3 vulnerabilities, 1 critical + 2 high).
+  - PostgreSQL throwaway `p60_migration_check` (đã drop): `alembic upgrade head` →
+    `0016_p52_exposure (head)`; `downgrade -1` → `0015_p50_learner_profile`;
+    `upgrade head` → `0016_p52_exposure (head)`, exit 0.
+  - PostgreSQL throwaway `p60_race_check`: `pytest -k postgres_concurrency` →
+    **29 passed, 680 deselected**.
+  - `.github/workflows/ci.yml` parse bằng `yaml.safe_load` → 5 job hợp lệ.
+  - Test contract được kiểm chứng **có hiệu lực**: tạm đổi `lint` về `next lint` ⇒ 1
+    failed; khôi phục ⇒ 11 passed.
+- NOT TESTED:
+  - **GitHub Actions runner thật** — không push/PR trong phiên; chưa có run log ⇒ **không
+    được báo "CI green"**. Người có quyền push cần xác nhận.
+  - Docker image build backend/frontend với Next 15.5.28 (chỉ `npm run build` local).
+  - Coverage threshold, CodeQL/Semgrep, SBOM/license, OpenAPI diff — đề xuất P6.2/P6.9.
+  - `mypy`/`pyright` backend (chưa có type baseline; bật ngay sẽ đỏ hàng loạt).
+- BLOCKED: không.
+- Database: **không có migration mới**. Chỉ chạy migration hiện có trên DB throwaway.
+- Security: CI không đọc secrets; token `contents: read`; static scan sửa lỗi thật;
+  dependency Next/postcss được nâng tới bản đã vá; không thêm endpoint/field nào.
+- Regressions: 0 — 680 test cũ vẫn pass; UI/API không đổi hành vi (chỉ bỏ import/tham số
+  không dùng và đổi `assert` thành raise tương đương).
+- Known limitations:
+  - `minimatch < 11.0.1` (moderate, **dev-only** qua `@typescript-eslint`) còn lại; gate
+    `--omit=dev --audit-level=high` nên không chặn; `npm audit fix --force` sẽ đổi major
+    toolchain ⇒ không tự làm.
+  - Backend chưa có lint/format gate (ruff/flake8) — chưa có baseline, đề xuất P6.2.
+- PHASE GATE: **GATE-PARTIAL** — P6.1 IMPLEMENTED + TESTED local; runner thật NOT TESTED
+  theo đúng định nghĩa TESTED của plan.
+- NEXT: P6.2 API security review (JWT/CSRF/issuer/audience/secret rotation, login abuse
+  limit, scope checks, uploads/SSRF, redacted logs, session cache isolation).
+
 ## 2026-11-02 — P5.2 Adaptive readiness + exposure logging (flag TẮT)
 
 - Base commit: `44a2bc9` (`feat/p5.1-bkt-research`); branch `feat/p5.2-adaptive-readiness` (chưa push)

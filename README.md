@@ -66,13 +66,31 @@ Backend có **fallback mode**: nếu `REDIS_URL` không cấu hình/không kết
 
 ```bash
 cd backend
-pytest -v
+pip install -r requirements-dev.txt   # runtime + bandit/pip-audit cho CI gate
+pytest -q
+
+# Static security + dependency audit (P6.1, chạy local giống CI)
+python -m bandit -r app -q
+PYTHONUTF8=1 python -m pip_audit -r requirements.txt --progress-spinner off
 
 # E2E acceptance (cần Docker stack đang chạy; mặc định http://127.0.0.1:8001)
 E2E_BASE=http://127.0.0.1:8001 python e2e_acceptance.py
 ```
 
-Kết quả hiện tại: **232 unit+integration tests pass (+10 PostgreSQL race tests riêng); 50/50 E2E acceptance pass trên Docker Compose stack (flag P2.SR tắt) và 52/52 khi bật**. Mock provider vẫn là mặc định. Adapter LLM thật (OpenAI-compatible) có mocked tests và đã smoke test thật 3 request qua Deploy.com/DeepSeek (xem `docs/llm-provider.md`); tự động hoá real-provider trong CI vẫn **BLOCKED**. Chi tiết: `docs/development-progress.md`, `docs/llm-provider.md`, `docs/source-first-architecture.md`.
+```bash
+cd frontend
+npm ci
+npm run lint        # eslint . --max-warnings=0
+npm run typecheck   # tsc --noEmit
+npm run build
+npm audit --omit=dev --audit-level=high
+```
+
+CI (`.github/workflows/ci.yml`, P6.1) chạy đúng các lệnh trên, cộng thêm migration
+`upgrade head → downgrade -1 → upgrade head` trên PostgreSQL rỗng và race test
+`-k postgres_concurrency` trên PostgreSQL thật. Chi tiết: `docs/specs/25-P61-CI-PIPELINE.md`.
+
+Kết quả mới nhất (2026-11-02): **691 unit+integration tests pass (+29 PostgreSQL race tests riêng khi có `POSTGRES_TEST_URL`)**. Mock provider vẫn là mặc định. Adapter LLM thật (OpenAI-compatible) có mocked tests và đã smoke test thật 3 request qua Deploy.com/DeepSeek (xem `docs/llm-provider.md`); real-provider trong CI vẫn **BLOCKED** (tốn phí). Chi tiết: `docs/development-progress.md`, `docs/llm-provider.md`, `docs/source-first-architecture.md`.
 
 ## Alembic migration
 

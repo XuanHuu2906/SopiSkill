@@ -262,7 +262,8 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P5.1 (BKT) | **DONE (research-only) 2026-11-02** | Low | `app/services/bkt.py` + `evals/bkt_eval.py`; KHÔNG runtime/migration/route; DB thật 37 event/21 user ⇒ `INSUFFICIENT_DATA`; **deploy BLOCKED** (`docs/specs/23-P51-BKT.md`) |
 | P5.2a (readiness) | **DONE (research-only) 2026-11-02** | Low | `evals/p52_readiness.py`; DKT/BANDIT đều **BLOCKED** (`opeSupported=false`) |
 | P5.2b (exposure log) | **DONE (flag TẮT) 2026-11-02** | Low | `0016_p52_exposure` + `POST .../recommendation-events`; propensity=1.0 ⇒ chưa OPE; **chưa huấn luyện model nào** |
-| P6 | TODO (hạng mục có thể làm song song sớm) | High trước public launch | Operational / privacy / security checks |
+| P6.1 (CI pipeline) | **DONE (local) 2026-11-02** | High | `.github/workflows/ci.yml`; 691 pytest, migration PG rỗng + downgrade -1, 29 race test PG, lint/typecheck/build, bandit 0 issue, pip-audit sạch, audit runtime 0; **GitHub Actions run NOT TESTED** |
+| P6 (phần còn lại P6.2–P6.9) | TODO | High trước public launch | Operational / privacy / security checks |
 | P7 | FUTURE | Low | Chỉ làm khi có quyết định sản phẩm |
 
 ---
@@ -678,7 +679,7 @@ Chi tiết: `docs/source-research-agent.md`.
 
 **Modules:** `.github/workflows/`, Dockerfiles, Compose/prod config, migration/runbooks, `core/config.py`, `core/limits.py`, security headers, logging, monitoring, tests.
 
-- [ ] P6.1 CI pipeline: Python tests, frontend build/lint/typecheck, migration upgrade on empty PostgreSQL, static security scanning & dependency checks (có baseline, avoid noisy auto-fix).
+- [x] P6.1 CI pipeline: Python tests, frontend build/lint/typecheck, migration upgrade on empty PostgreSQL, static security scanning & dependency checks (có baseline, avoid noisy auto-fix). — **DONE 2026-11-02 (local)** `docs/specs/25-P61-CI-PIPELINE.md`; `.github/workflows/ci.yml`, 691 pytest (+11 contract test), bandit 0 issue, pip-audit clean, `npm audit --omit=dev` 0; **runner thật NOT TESTED** (chưa push).
 - [ ] P6.2 API security review: JWT/cookie/CSRF/issuer/audience/secret rotation, login abuse limits, scope checks, uploads/SSRF, redacted logs, session cache isolation.
 - [ ] P6.3 HTTPS/TLS, `COOKIE_SECURE=true`, trusted proxy, CSP, HSTS/cookie domain policy phù hợp deployment, CORS chính xác. Không bật `SameSite=None` bừa bãi.
 - [ ] P6.4 Redis distributed rate limiting và quotas nếu nhiều replicas; network/proxy IP trust; không coi in-memory limiter là production protection.
