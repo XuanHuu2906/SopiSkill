@@ -53,6 +53,12 @@ if _settings.redis_url:
                 "task": "app.worker.ingest.reconcile_embeddings",
                 "schedule": float(_settings.generation_reconcile_interval_seconds),
             },
+            # P5.0 — backfill skill cho course sinh trước P5.0 (chỉ chạy khi
+            # P50_BACKFILL_ENABLED=true; service tự no-op khi tắt).
+            "backfill-course-skills": {
+                "task": "app.worker.reconcile.reconcile_skills",
+                "schedule": float(_settings.generation_reconcile_interval_seconds),
+            },
         },
     )
 else:  # pragma: no cover

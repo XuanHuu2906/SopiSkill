@@ -345,6 +345,19 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
 
     if await job_service.is_superseded(db, job):
         raise RuntimeError("SUPERSEDED")
+
+    # P5.0 — backfill skill ngay sau khi ghi lesson (idempotent). Lỗi ở bước này
+    # KHÔNG được làm job thất bại: lộ trình đã sinh xong, skill có thể backfill lại
+    # bằng reconciler sau.
+    if get_settings().p50_enabled:
+        from app.services import learner_profile_service
+
+        try:
+            await learner_profile_service.backfill_course_skills(db, course)
+        except Exception:  # pragma: no cover - phòng thủ, không chặn job
+            await db.rollback()
+            logger.exception("p50 skill backfill failed course=%s", course.id)
+
     await job_service.finish_ready(db, job.id, course.id)
 
 
