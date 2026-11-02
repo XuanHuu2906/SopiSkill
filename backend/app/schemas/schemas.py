@@ -856,6 +856,7 @@ class DueReviewOut(BaseModel):
     cardId: str
     lessonId: str
     lessonTitle: str
+    skillTitle: str | None = None
     # stability/difficulty cố tình KHÔNG trả ra: chỉ dùng nội bộ, tránh gây hiểu
     # nhầm là điểm số của người học.
     dueAt: str

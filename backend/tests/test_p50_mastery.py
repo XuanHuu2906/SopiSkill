@@ -12,6 +12,7 @@ from app.models import (
     Lesson,
     LessonAttempt,
     LessonSkill,
+    ReviewCard,
     Skill,
     SkillMastery,
     Unit,
@@ -145,8 +146,13 @@ async def test_version_bump_drops_mastery_to_zero_until_relearned():
         await db.commit()
 
         row = await lps.refresh_skill_mastery(db, user.id, skill.id, now=NOW)
-        # Không còn attempt nào đúng version hiện hành ⇒ không có row mới
-        assert row is None
+        await db.commit()
+        # Không còn attempt nào đúng version hiện hành ⇒ mastery phải về 0 (không
+        # tiếp tục gate next-lesson bằng điểm của nội dung cũ).
+        assert row is not None
+        assert row.mastery_score == 0.0
+        assert row.attempts == 0
+
         existing = (
             await db.execute(
                 select(SkillMastery).where(
@@ -154,13 +160,22 @@ async def test_version_bump_drops_mastery_to_zero_until_relearned():
                 )
             )
         ).scalar_one()
-        # Row cũ giữ nguyên (không reset dữ liệu), nhưng không còn attempt hợp lệ
-        assert existing.attempts == 1
+        assert existing.mastery_score == 0.0
+        # Attempt cũ vẫn còn trong bảng lịch sử (không xoá dữ liệu).
+        attempts = (
+            await db.execute(
+                select(LessonAttempt).where(LessonAttempt.user_id == user.id)
+            )
+        ).scalars().all()
+        assert len(attempts) == 1
 
 
 @pytest.mark.asyncio
-async def test_attempt_without_skill_does_not_fail(client):
-    """Lesson chưa backfill skill ⇒ attempt vẫn thành công, reviewCardCreated=False."""
+async def test_attempt_without_skill_does_not_fail(client, monkeypatch):
+    """Lesson không có `lesson_skills` (legacy/chưa backfill) ⇒ attempt vẫn OK."""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "p50_enabled", True)
 
     def csrf() -> dict:
         return {"X-CSRF-Token": client.cookies.get("csrf_token") or ""}
@@ -172,35 +187,52 @@ async def test_attempt_without_skill_does_not_fail(client):
     )
     assert reg.status_code == 201, reg.text
 
-    course = await client.post(
-        "/v1/courses",
-        json={"topic": "Python", "clientCourseId": uuid.uuid4().hex[:16]},
-        headers=csrf(),
-    )
-    assert course.status_code == 201, course.text
-    course_id = course.json()["id"]
-    for i in range(5):
-        await client.post(
-            f"/v1/courses/{course_id}/interview/answer",
-            json={"position": i, "answer": f"câu trả lời {i}"},
-            headers=csrf(),
+    # Seed trực tiếp course/unit/lesson KHÔNG có Skill/LessonSkill — không dùng
+    # generation (generation với flag on sẽ tự backfill skill).
+    async with SessionLocal() as db:
+        user = (
+            await db.execute(select(User).where(User.email == f"noskill-{suffix}@test.dev"))
+        ).scalars().first()
+        assert user is not None
+        course = Course(
+            user_id=user.id,
+            topic="Không skill",
+            status="ready",
+            client_course_id=f"c-{uuid.uuid4()}",
         )
-    await client.post(f"/v1/courses/{course_id}/approve", headers=csrf())
-    detail = await client.get(f"/v1/courses/{course_id}", headers=csrf())
-    lesson_id = next(
-        lesson["id"]
-        for unit in detail.json()["units"]
-        for lesson in unit["lessons"]
-    )
+        db.add(course)
+        await db.flush()
+        unit = Unit(course_id=course.id, order_index=0, title="U", blurb="")
+        db.add(unit)
+        await db.flush()
+        lesson = Lesson(
+            unit_id=unit.id,
+            course_id=course.id,
+            order_index=0,
+            title="Bài",
+            content=[
+                {"type": "mc", "question": "1+1?", "options": ["1", "2"], "answerIndex": 1}
+            ],
+            content_version=1,
+            status="ready",
+        )
+        db.add(lesson)
+        await db.commit()
+        lesson_id = f"lsn_{lesson.id}"
+        lesson_uuid = lesson.id
 
-    from tests.support import correct_answers
-
-    version, answers = await correct_answers(lesson_id)
     resp = await client.post(
         f"/v1/lessons/{lesson_id}/attempts",
         headers=csrf(),
-        json={"clientAttemptId": "att-noskill-1", "contentVersion": version, "answers": answers},
+        json={"clientAttemptId": "att-noskill-1", "contentVersion": 1,
+              "answers": [{"index": 0, "answer": 1}]},
     )
     assert resp.status_code == 201, resp.text
-    assert resp.json()["reviewCardCreated"] is False
+    # Flag bật + không có skill ⇒ card vẫn tạo nhưng không gắn skill, mastery bỏ qua.
+    assert resp.json()["reviewCardCreated"] is True
 
+    async with SessionLocal() as db:
+        card = (
+            await db.execute(select(ReviewCard).where(ReviewCard.lesson_id == lesson_uuid))
+        ).scalar_one()
+        assert card.skill_id is None

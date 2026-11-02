@@ -353,7 +353,9 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
         from app.services import learner_profile_service
 
         try:
-            await learner_profile_service.backfill_course_skills(db, course)
+            await learner_profile_service.backfill_course_skills(
+                db, course, proposal_version=job.proposal_version
+            )
         except Exception:  # pragma: no cover - phòng thủ, không chặn job
             await db.rollback()
             logger.exception("p50 skill backfill failed course=%s", course.id)

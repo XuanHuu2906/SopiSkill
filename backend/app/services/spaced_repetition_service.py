@@ -130,40 +130,44 @@ async def ensure_card_for_attempt(
         scheduler_version=FSRS_SCHEDULER_VERSION,
         created_from_attempt_id=attempt.id,
     )
-    db.add(row)
-    await db.flush()
-    db.add(
-        ReviewEvent(
-            card_id=row.id,
-            user_id=user_id,
-            rating=int(rating),
-            reviewed_at=reviewed_at,
-            elapsed_days=0,
-            scheduled_days=max(0, (_as_utc(card.due) - reviewed_at).days),
-            state_before=int(State.Learning),
-            state_after=int(card.state),
-            scheduler_version=FSRS_SCHEDULER_VERSION,
-            client_review_id=f"initial:{attempt.id}",
-        )
-    )
+    # SAVEPOINT: lỗi P5.0 (race unique user+lesson) KHÔNG được rollback transaction
+    # của caller — attempt/XP đã flush trong cùng session sẽ bị mất nếu rollback
+    # toàn bộ. `begin_nested` cho phép huỷ riêng phần card/event.
     try:
-        await db.flush()
+        async with db.begin_nested():
+            db.add(row)
+            await db.flush()
+            db.add(
+                ReviewEvent(
+                    card_id=row.id,
+                    user_id=user_id,
+                    rating=int(rating),
+                    reviewed_at=reviewed_at,
+                    elapsed_days=0,
+                    scheduled_days=max(0, (_as_utc(card.due) - reviewed_at).days),
+                    state_before=int(State.Learning),
+                    state_after=int(card.state),
+                    scheduler_version=FSRS_SCHEDULER_VERSION,
+                    client_review_id=f"initial:{attempt.id}",
+                )
+            )
+            await db.flush()
     except IntegrityError:
-        await db.rollback()
         return False
     return True
 
 
 async def _owned_card(
-    db: AsyncSession, card_id: uuid.UUID, user_id: uuid.UUID
+    db: AsyncSession, card_id: uuid.UUID, user_id: uuid.UUID, *, lock: bool = False
 ) -> ReviewCard:
-    card = (
-        await db.execute(
-            select(ReviewCard).where(
-                ReviewCard.id == card_id, ReviewCard.user_id == user_id
-            )
-        )
-    ).scalar_one_or_none()
+    query = select(ReviewCard).where(
+        ReviewCard.id == card_id, ReviewCard.user_id == user_id
+    )
+    if lock:
+        # PostgreSQL: chặn lost update khi hai lượt grade đồng thời khác
+        # clientReviewId cùng ghi đè stability/due. SQLite bỏ qua.
+        query = query.with_for_update()
+    card = (await db.execute(query)).scalar_one_or_none()
     if card is None:
         raise CardNotFoundError(str(card_id))
     return card
@@ -181,7 +185,7 @@ async def grade_card(
     if rating not in (1, 2, 3, 4):
         raise ValueError("rating phải trong khoảng 1..4")
 
-    card = await _owned_card(db, card_id, user_id)
+    card = await _owned_card(db, card_id, user_id, lock=True)
 
     existing_event = (
         await db.execute(
@@ -284,6 +288,34 @@ async def due_cards(
     query = query.order_by(ReviewCard.due_at).limit(limit)
 
     rows = (await db.execute(query)).all()
+
+    from sqlalchemy import func as _func
+
+    from app.models import Skill as _Skill
+
+    count_query = (
+        select(_func.count())
+        .select_from(ReviewCard)
+        .join(_Lesson, _Lesson.id == ReviewCard.lesson_id)
+        .where(ReviewCard.user_id == user_id, ReviewCard.due_at <= now)
+    )
+    if course_id is not None:
+        count_query = count_query.where(_Lesson.course_id == course_id)
+    total = int((await db.execute(count_query)).scalar_one())
+
+    skill_ids = {card.skill_id for card, _lesson in rows if card.skill_id}
+    skill_titles = (
+        {
+            skill_id: title
+            for skill_id, title in (
+                await db.execute(
+                    select(_Skill.id, _Skill.title).where(_Skill.id.in_(skill_ids))
+                )
+            ).all()
+        }
+        if skill_ids
+        else {}
+    )
     items = []
     for card, lesson in rows:
         items.append(
@@ -291,9 +323,10 @@ async def due_cards(
                 "cardId": f"rvc_{card.id}",
                 "lessonId": f"lsn_{lesson.id}",
                 "lessonTitle": lesson.title,
+                "skillTitle": skill_titles.get(card.skill_id) if card.skill_id else None,
                 "dueAt": _as_utc(card.due_at).isoformat(),
                 "state": card.state,
                 "overdueDays": max(0, (now - _as_utc(card.due_at)).days),
             }
         )
-    return {"items": items, "total": len(items)}
+    return {"items": items, "total": total}

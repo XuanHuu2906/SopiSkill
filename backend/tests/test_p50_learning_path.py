@@ -185,10 +185,8 @@ async def test_first_lesson_recommended_without_prerequisites():
         path = await learning_path_service.build_learning_path(db, course, user.id)
         assert path["nextLesson"]["reason"]["code"] == "NEXT_IN_SEQUENCE"
         # Bài 2 vẫn bị chặn vì s1 chưa có mastery — đó là hành vi đúng.
-        assert [b["lessonId"] for b in path["blockedBy"]] == [
-            b["lessonId"] for b in path["blockedBy"]
-        ]
         assert len(path["blockedBy"]) == 1
+        assert path["blockedBy"][0]["reason"]["code"] == "PREREQUISITE_NOT_MET"
 
 
 @pytest.mark.asyncio

@@ -47,37 +47,45 @@ def position_key(unit_index: int, lesson_index: int) -> tuple[int, int]:
     return (unit_index, lesson_index)
 
 
-async def _latest_proposal(db: AsyncSession, course_id: uuid.UUID) -> CourseProposal | None:
-    return (
-        await db.execute(
-            select(CourseProposal)
-            .where(CourseProposal.course_id == course_id)
-            .order_by(CourseProposal.version.desc())
-            .limit(1)
-        )
-    ).scalars().first()
+async def _proposal(
+    db: AsyncSession, course_id: uuid.UUID, version: int | None = None
+) -> CourseProposal | None:
+    query = select(CourseProposal).where(CourseProposal.course_id == course_id)
+    if version is not None:
+        query = query.where(CourseProposal.version == version)
+    query = query.order_by(CourseProposal.version.desc()).limit(1)
+    return (await db.execute(query)).scalars().first()
 
 
-def _dedupe_keys(payload: ProposalPayload) -> list[tuple[str, str]]:
-    """Trả [(skill_id, khoá duy nhất)] theo thứ tự proposal.
+def _dedupe_keys(payload: ProposalPayload) -> list[str]:
+    """Khoá duy nhất theo **vị trí** skill trong proposal.
 
     `_slug()` cắt 24 ký tự nên hai tiêu đề dài giống nhau có thể ra cùng khoá;
     thêm hậu tố `-2`, `-3`… deterministic theo thứ tự để UNIQUE không abort.
+    Danh sách trả về **song song** với `payload.skills` (cùng length/order) nên
+    không thể "mất" skill đầu tiên như khi gom theo dict[skill_id].
     """
     seen: dict[str, int] = {}
-    out: list[tuple[str, str]] = []
+    keys: list[str] = []
     for skill in payload.skills:
         base = skill.id
         count = seen.get(base, 0)
         seen[base] = count + 1
-        key = base if count == 0 else f"{base}-{count + 1}"
-        out.append((skill.id, key))
-    return out
+        keys.append(base if count == 0 else f"{base}-{count + 1}")
+    return keys
 
 
-async def backfill_course_skills(db: AsyncSession, course: Course) -> int:
-    """Idempotent. Trả số cặp `lesson_skills` hiện có sau khi chạy."""
-    proposal_row = await _latest_proposal(db, course.id)
+async def backfill_course_skills(
+    db: AsyncSession,
+    course: Course,
+    proposal_version: int | None = None,
+) -> int:
+    """Idempotent. Trả số cặp `lesson_skills` hiện có sau khi chạy.
+
+    `proposal_version`: khi worker đã pin đúng version cho job, truyền vào để
+    backfill không lấy nhầm proposal mới hơn (curriculum có thể khác thứ tự).
+    """
+    proposal_row = await _proposal(db, course.id, proposal_version)
     if proposal_row is None:
         return 0
 
@@ -88,13 +96,14 @@ async def backfill_course_skills(db: AsyncSession, course: Course) -> int:
         return 0
 
     payload = pedagogy.normalize_curriculum(payload)
-    key_by_skill_id = dict(_dedupe_keys(payload))
+    keys = _dedupe_keys(payload)
 
-    # Vị trí lesson theo proposal: (unit_index, lesson_index) → title
-    proposal_positions: dict[tuple[int, int], str] = {}
-    for u_idx, unit in enumerate(payload.units):
-        for l_idx, title in enumerate(unit.lessonTitles):
-            proposal_positions[position_key(u_idx, l_idx)] = title
+    # Vị trí lesson theo proposal, giữ thứ tự và **không gộp** title trùng nhau.
+    proposal_positions: list[tuple[tuple[int, int], str]] = [
+        (position_key(u_idx, l_idx), title)
+        for u_idx, unit in enumerate(payload.units)
+        for l_idx, title in enumerate(unit.lessonTitles)
+    ]
 
     # Vị trí lesson thật trong DB: tra theo (unit.order_index, lesson.order_index)
     rows = (
@@ -108,15 +117,15 @@ async def backfill_course_skills(db: AsyncSession, course: Course) -> int:
         position_key(u_idx, l_idx): lesson_id for u_idx, l_idx, lesson_id in rows
     }
 
-    # Upsert skills theo (course_id, key)
+    # Upsert skills theo (course_id, key). Upsert (không delete+insert) vì
+    # `skill_mastery.skill_id` là CASCADE.
     skill_by_key: dict[str, Skill] = {
         skill.key: skill
         for skill in (
             await db.execute(select(Skill).where(Skill.course_id == course.id))
         ).scalars().all()
     }
-    for order_index, skill in enumerate(payload.skills):
-        key = key_by_skill_id.get(skill.id, skill.id)
+    for order_index, (skill, key) in enumerate(zip(payload.skills, keys)):
         existing = skill_by_key.get(key)
         if existing is None:
             existing = Skill(
@@ -136,7 +145,9 @@ async def backfill_course_skills(db: AsyncSession, course: Course) -> int:
             existing.order_index = order_index
     await db.flush()
 
-    # Upsert lesson_skills theo vị trí
+    # Map skill → lesson theo **vị trí**: skill thứ i thuộc lesson thứ i của
+    # proposal (fill_skills/normalize_curriculum đảm bảo 1 skill/bài, đúng thứ
+    # tự). Không tra theo title vì title có thể trùng hoặc bị provider đổi.
     existing_links = {
         (link.lesson_id, link.skill_id)
         for link in (
@@ -147,21 +158,13 @@ async def backfill_course_skills(db: AsyncSession, course: Course) -> int:
             )
         ).scalars().all()
     }
-    for order_index, skill in enumerate(payload.skills):
-        key = key_by_skill_id.get(skill.id, skill.id)
-        skill_row = skill_by_key.get(key)
-        if skill_row is None:
-            continue
-        lesson_title = skill.lesson
-        # Tìm vị trí proposal của title này (giữ thứ tự xuất hiện đầu tiên).
-        position = next(
-            (pos for pos, title in proposal_positions.items() if title == lesson_title),
-            None,
-        )
-        if position is None:
-            continue
+    for index, (skill, key) in enumerate(zip(payload.skills, keys)):
+        if index >= len(proposal_positions):
+            break
+        position, _title = proposal_positions[index]
         lesson_id = lesson_by_position.get(position)
-        if lesson_id is None:
+        skill_row = skill_by_key.get(key)
+        if lesson_id is None or skill_row is None:
             continue
         if (lesson_id, skill_row.id) in existing_links:
             continue
@@ -247,17 +250,18 @@ async def refresh_skill_mastery(
             )
         )
     ).all()
-    if not rows:
-        return None
 
     samples = [
         (correct / total, created_at) for correct, total, created_at in rows if total
     ]
+    # Không còn attempt đúng version hiện hành (nội dung vừa đổi) ⇒ mastery phải về
+    # 0, KHÔNG giữ điểm của nội dung cũ để gate next-lesson. Attempt cũ vẫn còn
+    # trong `lesson_attempts` làm lịch sử; chỉ snapshot mastery là reset.
     score = compute_mastery(samples, now, settings.mastery_recency_half_life_days)
     attempts_count = len(samples)
     correct_sum = sum(correct for correct, _total, _created in rows)
     total_sum = sum(total for _correct, total, _created in rows)
-    last_at = max(_as_utc(created) for _c, _t, created in rows)
+    last_at = max((_as_utc(created) for _c, _t, created in rows), default=None)
 
     row = (
         await db.execute(

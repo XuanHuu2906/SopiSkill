@@ -28,6 +28,7 @@ function ReviewQueue() {
   const queryClient = useQueryClient();
 
   const dueKey = useSessionQueryKey("reviews-due", courseId ?? "all");
+  const sessionPrefix = useSessionQueryKey();
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [reviewedCount, setReviewedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +60,9 @@ function ReviewQueue() {
       delete reviewKeyRef.current[variables.cardId];
       setReviewedCount((n) => n + 1);
       setError(null);
+      // Invalidate cả nhóm session để course page cập nhật reviewDueCount /
+      // mastery / learning-path sau khi chấm thẻ.
+      queryClient.invalidateQueries({ queryKey: sessionPrefix });
       queryClient.invalidateQueries({ queryKey: dueKey });
     },
     onError: (err) => {

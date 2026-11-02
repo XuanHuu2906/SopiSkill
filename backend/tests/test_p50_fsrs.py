@@ -92,6 +92,92 @@ async def _seed(db, score_correct=1, score_total=3):
 
 
 @pytest.mark.asyncio
+async def test_card_creation_race_does_not_rollback_attempt():
+    """C1: ensure_card gặp IntegrityError không được rollback transaction của attempt."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services import spaced_repetition_service as srp_mod
+
+    async with SessionLocal() as db:
+        user, lesson, attempt = await _seed(db)
+        # Giả lập card đã tồn tại (race) TRƯỚC khi ensure chạy, và cho ensure đi
+        # vào nhánh insert để ném IntegrityError.
+        original = srp_mod._owned_card
+
+        async def boom(*args, **kwargs):
+            raise IntegrityError("stmt", {}, Exception("dup"))
+
+        # Chỉ chặn flush của event (mô phỏng race unique card/lesson).
+        real_flush = db.flush
+        calls = {"n": 0}
+
+        async def flaky_flush(*a, **kw):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise IntegrityError("stmt", {}, Exception("unique"))
+            return await real_flush(*a, **kw)
+
+        db.flush = flaky_flush  # type: ignore[method-assign]
+        created = await srp_mod.ensure_card_for_attempt(db, lesson, attempt, user.id)
+        db.flush = real_flush  # type: ignore[method-assign]
+        assert created is False
+        # Attempt row vẫn phải còn trong session/DB
+        still = (
+            await db.execute(select(LessonAttempt).where(LessonAttempt.id == attempt.id))
+        ).scalar_one_or_none()
+        assert still is not None, "attempt không được bị rollback bởi lỗi P5.0"
+
+
+@pytest.mark.asyncio
+async def test_due_cards_total_is_unbounded_by_limit():
+    """I2: total phải là tổng số thẻ đến hạn, không phải len(items)."""
+    async with SessionLocal() as db:
+        user, lesson, attempt = await _seed(db)
+        # tạo 3 card đến hạn cho cùng user (khác lesson)
+        from app.models import Course, Unit
+
+        course = (
+            await db.execute(select(Course).where(Course.id == lesson.course_id))
+        ).scalar_one()
+        unit = (await db.execute(select(Unit).where(Unit.id == lesson.unit_id))).scalar_one()
+        for i in range(2):
+            other = Lesson(
+                unit_id=unit.id,
+                course_id=course.id,
+                order_index=10 + i,
+                title=f"B{i}",
+                content=[],
+                content_version=1,
+                status="ready",
+            )
+            db.add(other)
+            await db.flush()
+            db.add(
+                ReviewCard(
+                    user_id=user.id,
+                    lesson_id=other.id,
+                    state=2,
+                    due_at=NOW - timedelta(days=1),
+                    scheduler_version=srp.FSRS_SCHEDULER_VERSION,
+                )
+            )
+        db.add(
+            ReviewCard(
+                user_id=user.id,
+                lesson_id=lesson.id,
+                state=2,
+                due_at=NOW - timedelta(days=1),
+                scheduler_version=srp.FSRS_SCHEDULER_VERSION,
+            )
+        )
+        await db.commit()
+
+        page = await srp.due_cards(db, user.id, limit=1, now=NOW)
+        assert len(page["items"]) == 1
+        assert page["total"] == 3
+
+
+@pytest.mark.asyncio
 async def test_ensure_card_creates_on_first_attempt_even_below_threshold():
     async with SessionLocal() as db:
         user, lesson, attempt = await _seed(db, score_correct=1, score_total=3)

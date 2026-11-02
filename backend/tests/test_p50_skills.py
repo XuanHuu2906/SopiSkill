@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
-from app.models import Course, CourseProposal, Lesson, Unit, User
+from app.models import Course, CourseProposal, Lesson, Skill, Unit, User
 from app.services import learner_profile_service
 
 pytestmark = pytest.mark.asyncio
@@ -130,6 +130,62 @@ async def test_duplicate_slugs_get_deterministic_suffixes():
         keys = [s.key for s in skills]
         assert len(keys) == len(set(keys))
         assert any(k.endswith("-2") for k in keys)
+
+
+async def test_colliding_slugs_keep_one_skill_per_lesson():
+    """C2: hai title trùng slug phải tạo 2 skill riêng, không mất skill đầu."""
+    payload = _payload(
+        units=[
+            {
+                "title": "U",
+                "blurb": "",
+                "lessonTitles": [
+                    "Cùng một tiêu đề rất dài giống nhau A",
+                    "Cùng một tiêu đề rất dài giống nhau B",
+                ],
+            },
+            {"title": "U2", "blurb": "", "lessonTitles": ["Bài khác"]},
+        ]
+    )
+    async with SessionLocal() as db:
+        user = await _new_user(db)
+        course, _ = await _seed_course(db, user, payload, "X")
+        # tạo thêm 2 lesson để map đủ 3 title
+        for order_index, title in enumerate(
+            ["Cùng một tiêu đề rất dài giống nhau A", "Cùng một tiêu đề rất dài giống nhau B"], start=1
+        ):
+            db.add(
+                Lesson(
+                    unit_id=(
+                        await db.execute(select(Unit.id).where(Unit.course_id == course.id))
+                    ).scalars().first(),
+                    course_id=course.id,
+                    order_index=order_index,
+                    title=title,
+                    content=[],
+                    content_version=1,
+                    status="ready",
+                )
+            )
+        await db.commit()
+
+        await learner_profile_service.backfill_course_skills(db, course)
+        skills = await learner_profile_service.skills_for_course(db, course.id)
+        assert len(skills) == 3
+        assert len({s.key for s in skills}) == 3
+
+        from app.models import LessonSkill
+
+        links = (
+            await db.execute(
+                select(LessonSkill).join(Skill, Skill.id == LessonSkill.skill_id).where(
+                    Skill.course_id == course.id
+                )
+            )
+        ).scalars().all()
+        assert len({link.lesson_id for link in links}) == len(links), (
+            "mỗi lesson phải map đúng 1 skill riêng"
+        )
 
 
 async def test_backfill_does_not_delete_existing_mastery_rows():

@@ -97,8 +97,23 @@
   - `review_cards` 1 card/lesson: không ôn theo từng block/câu sai.
   - Chưa có notify/push/email nhắc ôn; due date hiển thị theo giờ máy người dùng.
   - `fsrs` chạy in-process; chưa có job dọn card/event cũ.
+- Review toàn branch (fresh reviewer) đã tìm và sửa trong cùng phase (600 pytest):
+  - **C1** `ensure_card_for_attempt` rollback toàn session khi race ⇒ mất attempt: đổi sang
+    SAVEPOINT (`db.begin_nested()`), lỗi P5.0 không còn phá transaction attempt.
+  - **C2** slug trùng làm mất skill đầu + map sai lesson: `_dedupe_keys` trả list song song
+    theo vị trí, map skill↔lesson theo **index** (không tra title).
+  - **I1** đổi `contentVersion` không reset mastery: giờ khi không còn attempt đúng version
+    hiện hành, snapshot mastery được ghi `mastery_score=0, attempts=0` (attempt cũ giữ nguyên).
+  - **I2** `reviewDueCount` bị chặn bởi `limit`: thêm `COUNT(*)` không phụ thuộc page size.
+  - **I3** grade đồng thời mất review: `SELECT ... FOR UPDATE` trên `review_cards`.
+  - **I4** test race PostgreSQL P1.1 bị hỏng do `submit_attempt` đổi thành 3-tuple: đã sửa.
+  - **I5** test "lesson không skill" chưa thực sự bật cờ: đã bật cờ và assert card `skill_id=None`.
+  - **I6** thiếu `skillTitle` trong due reviews: đã thêm (schema + service).
+  - **I7** `fsrs>=6.3,<7` có thể lệch với `scheduler_version`: **pin `fsrs==6.3.2`**.
+  - **I8** backfill sau generation đọc proposal mới nhất thay vì version job đã pin: truyền
+    `proposal_version=job.proposal_version`.
 - PHASE GATE: **GATE-PARTIAL** — code + offline tests + migration PostgreSQL thật đầy đủ; E2E
-  Docker và race PostgreSQL còn NOT TESTED (ghi rõ, không tuyên bố PASS toàn phần).
+  Docker và race PostgreSQL (bao gồm race grade mới) còn NOT TESTED (ghi rõ, không tuyên bố PASS).
 - NEXT: chạy E2E Docker với `P50_ENABLED=true` (cần approve), hoặc P6 (production hardening)
   nếu ưu tiên release.
 

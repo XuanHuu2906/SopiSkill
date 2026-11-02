@@ -21,7 +21,9 @@ minio>=7.2
 defusedxml>=0.7
 
 # P5.0 — FSRS spaced repetition (pure Python; optimizer extras KHÔNG cài).
-fsrs>=6.3,<7
+# PIN chính xác: `scheduler_version` ghi vào card/event phải khớp thư viện thật,
+# nếu không lịch đã lưu sẽ không tái lập được sau khi nâng minor version.
+fsrs==6.3.2
 
 # P4.3 — OCR cho PDF scan KHÔNG nằm trong requirements mặc định: nó nặng
 # (onnxruntime + opencv-headless + model ~15MB) và mặc định TẮT. Cài riêng bằng
