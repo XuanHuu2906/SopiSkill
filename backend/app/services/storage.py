@@ -148,8 +148,8 @@ class S3Storage(Storage):
                 try:
                     response.close()
                     response.release_conn()
-                except Exception:  # noqa: BLE001 — đóng kết nối best-effort
-                    pass
+                except Exception:  # đóng kết nối best-effort; không che lỗi đọc ở trên
+                    pass  # nosec B110
 
     def delete(self, key: str) -> None:
         try:

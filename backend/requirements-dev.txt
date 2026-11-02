@@ -1,0 +1,9 @@
+# Dev/CI-only tooling — KHÔNG cần cho runtime production.
+# Cài: pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+
+# Static security scanning (P6.1). PIN chính xác để CI tái lập được và việc
+# thêm rule mới của công cụ không âm thầm đổi kết quả gate.
+bandit==1.9.4
+pip-audit==2.10.1
+PyYAML==6.0.3

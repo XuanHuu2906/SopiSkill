@@ -27,7 +27,9 @@ def _shuffled(items: list, lesson_id: uuid.UUID | str, content_version: int, blo
     """Shuffle ổn định và **không bao giờ** trả về đúng thứ tự gốc (khi len > 1)."""
     if len(items) < 2:
         return list(items)
-    rng = random.Random(_seed(lesson_id, content_version, block_index))
+    # PRNG tất định theo seed, KHÔNG dùng cho bảo mật: shuffle hiển thị, đáp án
+    # đúng nằm server-side và không suy ra được từ thứ tự.
+    rng = random.Random(_seed(lesson_id, content_version, block_index))  # nosec B311
     work = list(items)
     for _ in range(8):
         rng.shuffle(work)

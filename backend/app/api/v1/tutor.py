@@ -822,7 +822,10 @@ async def _stream_turn(
             )
             break
 
-        assert terminal is not None
+        # Mọi nhánh producer đều gán `terminal`; kiểm tra tường minh thay vì
+        # `assert` để hành vi không đổi khi chạy `python -O`.
+        if terminal is None:
+            raise RuntimeError("tutor stream kết thúc mà không có trạng thái cuối")
         # Đợi producer đóng generator để provider kịp ghi usage (`finally` của
         # adapter). Không có bước này thì frame `done` có thể báo thiếu usage dù
         # provider đã trả token.
