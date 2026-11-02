@@ -147,7 +147,7 @@ export default function SourcesPage() {
     mutationFn: async ({ sourceId, file }: { sourceId: string; file: File }) => {
       return uploadSourceDocument(sourceId, file);
     },
-    onSuccess: (document, variables) => {
+    onSuccess: (document) => {
       setStatus(
         document.status === "ready"
           ? document.textSource === "ocr"
@@ -177,7 +177,7 @@ export default function SourcesPage() {
   const removeDocument = useMutation({
     mutationFn: ({ sourceId, documentId }: { sourceId: string; documentId: string }) =>
       deleteSourceDocument(sourceId, documentId),
-    onSuccess: (_result, variables) => {
+    onSuccess: () => {
       setStatus("Đã xóa tài liệu.");
       invalidateSourceData();
     },

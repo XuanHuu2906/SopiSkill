@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { fetchCourses, type CourseList } from "@/lib/api";
+import { fetchCourses } from "@/lib/api";
 import { useAuth, useSessionQueryKey } from "./providers";
 
 export default function HomePage() {
