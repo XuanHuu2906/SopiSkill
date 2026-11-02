@@ -55,10 +55,14 @@ def _clamp(value: float) -> float:
 
 def validate(params: BktParams) -> None:
     """Kiểm tra tham số hợp lệ về mặt xác suất; raise `ValueError` nếu sai."""
-    for name in ("p_init", "p_learn", "p_guess", "p_slip"):
+    for name in ("p_init", "p_guess", "p_slip"):
         value = float(getattr(params, name))
         if not (0.0 < value < 1.0):
             raise ValueError(f"{name} phải nằm trong (0, 1), nhận {value}")
+    # p_learn = 0 là trường hợp suy biến hợp lệ ("không học thêm") dùng để kiểm
+    # chứng mô hình khớp/không khớp dữ liệu mô phỏng; chỉ loại p_learn >= 1.
+    if not (0.0 <= float(params.p_learn) < 1.0):
+        raise ValueError(f"p_learn phải nằm trong [0, 1), nhận {params.p_learn}")
     if params.p_guess + params.p_slip >= 1.0:
         raise ValueError(
             "p_guess + p_slip phải < 1 để mô hình còn nhận dạng được, "
