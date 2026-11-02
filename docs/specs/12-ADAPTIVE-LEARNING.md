@@ -16,7 +16,7 @@ Cá nhân hóa giai đoạn đầu dựa trên **5 câu interview, mục tiêu v
 | ADAPT-004 | FSRS dựa trên review events có rating/timezone | Deterministic schedule tests |
 | ADAPT-005 | User biết lý do được gợi ý và có thể skip | UX review |
 | ADAPT-006 | BKT chỉ khi có dataset đủ và vượt baseline (research-only 2026-11-02: hạ tầng đo xong, dữ liệu chưa đủ) | Held-out calibration |
-| ADAPT-007 | LSTM/DKT/contextual bandit chỉ nghiên cứu, rollout có kiểm soát | Proof of value + privacy |
+| ADAPT-007 | LSTM/DKT/contextual bandit chỉ nghiên cứu, rollout có kiểm soát (2026-11-02: readiness BLOCKED; exposure logging có flag TẮT, chưa OPE) | Proof of value + privacy |
 
 ## 3. Rule-based baseline (P5.0 proposed)
 
@@ -43,6 +43,13 @@ Cá nhân hóa giai đoạn đầu dựa trên **5 câu interview, mục tiêu v
     **0 chuỗi ≥5 event** ⇒ kết quả `INSUFFICIENT_DATA`; deploy **BLOCKED**.
     Chi tiết: `docs/specs/23-P51-BKT.md`.
 - **DKT/LSTM, bandit:** chỉ khi baseline/BKT không đủ và dataset đủ; reward/bias rõ, offline evaluation và rollback trước online experimentation.
+  - **Trạng thái 2026-11-02 — CHƯA HUẤN LUYỆN:** `backend/evals/p52_readiness.py` đo
+    và kết luận **BLOCKED** cho cả hai (`usersGe10=0 < 500`, `sequencesGe5=0 < 200`,
+    `exposures=0 < 5000`).
+  - **Exposure logging (flag TẮT):** bảng `recommendation_events` + `POST
+    /v1/courses/{id}/recommendation-events` với token HMAC server-phát. Do policy
+    deterministic nên `propensity=1.0` ⇒ **`opeSupported=false`**; đây là thu thập dữ
+    liệu, KHÔNG phải bandit đã chạy. Chi tiết: `docs/specs/24-P52-ADAPTIVE-READINESS.md`.
 - Không tự đưa K-Means, XGBoost, full RL vào kiến trúc chỉ vì phổ biến.
 
 ## 6. Acceptance

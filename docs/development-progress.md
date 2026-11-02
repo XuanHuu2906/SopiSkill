@@ -2,6 +2,83 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-02 — P5.2 Adaptive readiness + exposure logging (flag TẮT)
+
+- Base commit: `44a2bc9` (`feat/p5.1-bkt-research`); branch `feat/p5.2-adaptive-readiness` (chưa push)
+- Scope & decisions (người dùng đã chốt):
+  - **Tách P5.2a (readiness, research-only) và P5.2b (exposure logging, runtime flag TẮT).**
+    Plan §18 cũ ghi P5.2 "chỉ nghiên cứu"; phần runtime đã được duyệt riêng và ghi vào
+    §26 Decision log — lý do: không có exposure thì OPE vĩnh viễn không hợp lệ.
+  - **Không huấn luyện model nào** (không DKT/LSTM/bandit); không thêm dependency.
+  - **Reward suy offline** bằng JOIN, không có cột `reward_*`, không UPDATE bảng audit.
+  - **Propensity = 1.0** vì policy deterministic; công bố `opeSupported=false`.
+  - **Token HMAC server-phát** thay vì client tự tính hash (client không có khoá ⇒ không
+    bịa được arm/context). Server vẫn tính lại learning-path khi POST.
+  - **`arm_id NOT NULL`** để UNIQUE chặn trùng trên PostgreSQL (NULL != NULL sẽ lọt).
+- IMPLEMENTED:
+  - `backend/app/models/models.py` + `models/__init__.py`: `RecommendationEvent` +
+    `uq_recommendation_event_context` + 2 index composite.
+  - `backend/alembic/versions/0016_p52_exposure.py`: expand-only, guard `_has_table`,
+    downgrade chỉ drop bảng mới.
+  - `backend/app/services/recommendation_token_service.py`: `mint`/`verify` HMAC-SHA256,
+    TTL, `context_hash_from_path` (bỏ title/message để đổi wording không phá token).
+  - `backend/app/services/recommendation_log_service.py`: `derive_arm`,
+    `record_exposure` (idempotent + SAVEPOINT), `reward_for_events` (attempt đúng version
+    → review qua `review_cards` → None).
+  - `backend/app/api/v1/learner.py`: GET phát `recommendationToken` (null khi tắt);
+    `POST /v1/courses/{id}/recommendation-events` (503 trước khi chạm bảng, CSRF, rate
+    limit, ownership 404, verify + so context/version).
+  - `backend/app/schemas/schemas.py`: `recommendationToken` (additive),
+    `RecommendationEventRequest/Out`.
+  - `backend/app/core/config.py`: `p52_exposure_enabled=false`, `p52_token_ttl_seconds=900`.
+  - `backend/evals/p52_readiness.py`: metric SQL portable + verdict `READY/BLOCKED`.
+  - `.env.example`, `docker-compose.yml` (backend/worker/beat).
+  - Frontend: `recordRecommendation` + effect gọi 1 lần mỗi token (`useRef` chống
+    StrictMode), fire-and-forget, không đổi UI.
+  - Tests mới: `test_p52_migration_contract.py` (5), `test_p52_token.py` (9),
+    `test_p52_exposure_service.py` (10), `test_p52_api.py` (9), `test_p52_readiness.py` (5),
+    `test_p52_postgres_concurrency.py` (1, skip khi không có URL).
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **673 passed, 29 skipped** (trước 635/28).
+  - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK.
+  - `docker compose config` → exit 0.
+- TESTED (PostgreSQL throwaway, đã drop):
+  - `p52_migration_check`: `upgrade head` → `0016_p52_exposure` với
+    `uq_recommendation_event_context`, `ix_recommendation_events_course`,
+    `ix_recommendation_events_user`, 3 FK CASCADE; `downgrade -1` → `0015`, quan hệ biến
+    mất, `users` còn nguyên; `upgrade head` lại OK.
+  - `p52_race_check`: 6 `record_exposure` đồng thời cùng context ⇒ **đúng 1 row**,
+    không task nào ném exception (SAVEPOINT giữ transaction).
+- TESTED (readiness trên DB thật, chỉ SELECT):
+  - `python -m evals.p52_readiness --database-url postgresql+asyncpg://ailp:***@127.0.0.1:5433/ailp`
+    → `attempts=127 users=66 maxPerUser=3 usersGe10=0 sequencesGe5=0 coursesGe2Users=0`,
+    `exposures=0 policies=0 arms=0 propensitySpread=None`;
+    **DKT BLOCKED**, **BANDIT BLOCKED**, `opeSupported=False`. Khớp `psql`.
+- NOT TESTED:
+  - **Chất lượng bandit/OPE** — không thể: propensity=1.0, 0 exposure.
+  - **DKT/LSTM** — dữ liệu dưới ngưỡng.
+  - Browser E2E (Playwright) cho effect gọi record.
+  - Multi-replica rate limit (in-memory theo process) — thuộc P6.4.
+- BLOCKED: contextual bandit/deep tracing — cần `exposures ≥ 5000`, ≥2 policy, ≥3 arm,
+  **và propensity có spread** (quyết định exploration) + privacy review.
+- Database: `0016_p52_exposure` (expand-only). Backup trước trên DB thật:
+  `docker compose exec db pg_dump -U ailp ailp > backup_pre_p52_YYYYmmdd_HHMMSS.sql`.
+- Security: client không gửi được `userId`/`courseId`/`arm`/`propensity` (extra=forbid);
+  token HMAC khoá server-side, TTL 900s, sai/lệch ⇒ `recorded=false` không ghi row;
+  cross-user ⇒ 404; CSRF + rate limit; cờ TẮT ⇒ 503 **trước** khi chạm bảng; log chỉ
+  id/hash/reason code.
+- Regressions: 0 — 635 test cũ vẫn pass; `learning_path_service` logic không đổi; field
+  `recommendationToken` chỉ additive.
+- Known limitations:
+  - Không đếm impression (một exposure mỗi context+arm).
+  - Reward review dùng rating 1..4 làm proxy, chưa hiệu chuẩn với quiz score.
+  - Chưa có job tổng hợp reward; `reward_for_events` gọi thủ công.
+  - `P52` phụ thuộc `P50` (POST trả 503 nếu P50 tắt), không ngầm bật.
+- Review toàn branch: xem mục review bên dưới sau khi chạy fresh reviewer.
+- PHASE GATE: **GATE-PARTIAL** — P5.2a và P5.2b IMPLEMENTED + TESTED (offline + PG
+  migration/race); bandit/DKT **BLOCKED** theo điều kiện của plan, không phải lỗi code.
+- NEXT: P6 (production hardening) hoặc tích luỹ dữ liệu rồi chạy lại readiness.
+
 ## 2026-11-02 — P5.1 Bayesian Knowledge Tracing (research-only)
 
 - Base commit: `e4f9017` (branch `feat/p5.0-learner-profile`); branch `feat/p5.1-bkt-research` (chưa push)

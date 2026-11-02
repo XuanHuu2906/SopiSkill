@@ -260,7 +260,8 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P4.3 | **DONE 2026-11-01 (opt-in + engine thật)** | Medium | `0014_p43_ocr`; OCR pretrained `rapidocr` mặc định TẮT, provenance bbox/confidence/textSource; 533 pytest; CER EN 0.000 / VI 0.094 |
 | P5.0 | **DONE 2026-11-02 (offline + migration)** | Medium | `0015_p50_learner_profile`; skill backfill theo vị trí, mastery rule-based (half-life 30d, ngưỡng 0.7), FSRS `py-fsrs-6.3.2` (Again 1d/Hard 1d/Good 2d/Easy 8d), next-lesson chặn theo prereq + fallback ôn bài yếu; 597 pytest; E2E Docker + race PG NOT TESTED |
 | P5.1 (BKT) | **DONE (research-only) 2026-11-02** | Low | `app/services/bkt.py` + `evals/bkt_eval.py`; KHÔNG runtime/migration/route; DB thật 37 event/21 user ⇒ `INSUFFICIENT_DATA`; **deploy BLOCKED** (`docs/specs/23-P51-BKT.md`) |
-| P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
+| P5.2a (readiness) | **DONE (research-only) 2026-11-02** | Low | `evals/p52_readiness.py`; DKT/BANDIT đều **BLOCKED** (`opeSupported=false`) |
+| P5.2b (exposure log) | **DONE (flag TẮT) 2026-11-02** | Low | `0016_p52_exposure` + `POST .../recommendation-events`; propensity=1.0 ⇒ chưa OPE; **chưa huấn luyện model nào** |
 | P6 | TODO (hạng mục có thể làm song song sớm) | High trước public launch | Operational / privacy / security checks |
 | P7 | FUTURE | Low | Chỉ làm khi có quyết định sản phẩm |
 
@@ -647,13 +648,26 @@ Chi tiết: `docs/source-research-agent.md`.
 
 > Chi tiết quyết định, công thức, ngưỡng go/no-go và số liệu: `docs/specs/23-P51-BKT.md`.
 
-### P5.2 — LSTM/DKT và Contextual Bandit (chỉ nghiên cứu)
+### P5.2a — Readiness assessment (research-only)
 
-- [ ] LSTM/DKT chỉ khi dataset tuần tự đủ lớn và BKT không đạt mục tiêu; không huấn luyện mô hình đắt đỏ vì trào lưu.
-- [ ] Contextual bandit cho gợi ý độ khó/hoạt động nếu có reward rõ ràng và logging policy đúng; đánh giá offline, tránh gây hại cho người học bằng thí nghiệm không kiểm soát.
+- [x] Đo khoảng cách tới ngưỡng DKT/LSTM và contextual bandit bằng số, không cảm nhận — `evals/p52_readiness.py` (read-only, SQL portable). Kết quả thật 2026-11-02: `usersGe10=0`, `sequencesGe5=0`, `coursesGe2Users=0`, `exposures=0` ⇒ **cả hai BLOCKED**.
+- [x] Không huấn luyện mô hình đắt đỏ — không thêm dependency nào; `requirements.txt` không đổi.
+- [ ] LSTM/DKT chỉ khi dataset tuần tự đủ lớn và BKT không đạt mục tiêu. — **BLOCKED** (cần `usersGe10 ≥ 500`).
+
+### P5.2b — Exploration logging (runtime, flag TẮT)
+
+> Phần này **vượt wording "chỉ nghiên cứu"** của plan cũ; người dùng đã duyệt riêng ngày 2026-11-02 (xem §26) vì không có exposure thì OPE vĩnh viễn không hợp lệ.
+
+- [x] Bảng `recommendation_events` append-only (migration `0016_p52_exposure`), `arm_id NOT NULL`, `lesson_content_version` snapshot, UNIQUE theo `(user, course, context, arm)`.
+- [x] Endpoint `POST /v1/courses/{id}/recommendation-events` với token HMAC server-phát (TTL 900s), idempotent, CSRF + rate limit, ownership 404; cờ `P52_EXPOSURE_ENABLED` mặc định **false** ⇒ 503 và không chạm bảng.
+- [x] Reward suy **offline** (`reward_for_events`): attempt đúng `content_version` → review qua `review_cards` → `None`.
+- [x] **Trung thực về giới hạn:** policy deterministic ⇒ `propensity=1.0` ⇒ `opeSupported=false`. Đây chỉ là *thu thập dữ liệu*, KHÔNG phải bandit đã chạy.
+- [ ] Contextual bandit thật + đánh giá offline — **BLOCKED**: cần `exposures ≥ 5000`, ≥2 policy, ≥3 arm, **và propensity có spread** (tức phải có quyết định exploration).
 - [ ] K-Means/Random Forest/XGBoost chỉ mở backlog khi có câu hỏi nghiệp vụ cụ thể, nhãn/dữ liệu và tiêu chí hơn baseline.
 
-**Gate chung:** quality gains có số liệu held-out, privacy review, rollback; nếu chưa đủ dữ liệu → `NOT STARTED`, **không cố triển khai**. P5.1 đã dựng hạ tầng đo và kết luận `INSUFFICIENT_DATA`; P5.2 vẫn `NOT STARTED`.  
+> Chi tiết + số liệu: `docs/specs/24-P52-ADAPTIVE-READINESS.md`.
+
+**Gate chung:** quality gains có số liệu held-out, privacy review, rollback; nếu chưa đủ dữ liệu → `NOT STARTED`, **không cố triển khai**. P5.1 đã dựng hạ tầng đo và kết luận `INSUFFICIENT_DATA`; P5.2a kết luận `BLOCKED`; P5.2b mới chỉ *ghi nhận exposure* với flag TẮT — **chưa có bandit, chưa có OPE**.  
 **Không làm:** Full RL tự động trên người học, dùng dữ liệu cá nhân không có quyền/chính sách.
 
 ---
@@ -814,6 +828,7 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-11-02 | **P5.0**: review card tạo ở **attempt đầu tiên** (không chỉ ≥80%) để ôn bài yếu là luồng thật; mastery là heuristic half-life 30 ngày (ngưỡng 0.7) — **không** xác suất hiệu chuẩn; prereq thiếu ⇒ chặn + fallback ôn bài yếu | **CHỌN (trung thực + tránh dead-end)** | `spaced_repetition_service.py`, `learner_profile_service.py`, `docs/specs/22-P50-LEARNER-PROFILE.md` |
 | 2026-11-02 | **P5.0**: skill↔lesson map theo **vị trí** `(unit.order_index, lesson.order_index)` vì generation ghi đè `lesson.title`; `skills` upsert theo `(course_id,key)` để không cascade xoá mastery | **CHỌN (đúng dữ liệu)** | `learner_profile_service.backfill_course_skills`, `tests/test_p50_skills.py` |
 | 2026-11-02 | **P5.0**: dùng thư viện `fsrs` 6.3.2 (pure Python) thay vì tự viết; pin `scheduler_version`; tắt fuzzing + `learning_steps=()` để tái lập lịch | **CHỌN (tái lập được)** | `spaced_repetition_service.py`, `requirements.txt` |
+| 2026-11-02 | **P5.2**: tách P5.2a (readiness, research-only) và **P5.2b (exposure logging)** — người dùng **duyệt riêng** phần runtime dù plan cũ ghi P5.2 "chỉ nghiên cứu", vì thiếu exposure thì OPE vĩnh viễn không hợp lệ. Không huấn luyện model, không đổi thứ tự bài, `propensity=1.0` và công bố `opeSupported=false` | **CHỌN (có phê duyệt, trung thực)** | `evals/p52_readiness.py`, `0016_p52_exposure`, `docs/specs/24-P52-ADAPTIVE-READINESS.md` |
 
 ---
 
