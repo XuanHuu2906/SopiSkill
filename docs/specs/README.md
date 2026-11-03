@@ -42,7 +42,7 @@
 | `22-P50-LEARNER-PROFILE.md` | Mastery, FSRS, learning path | P5.0 IMPLEMENTED |
 | `23-P51-BKT.md` | BKT research-only | P5.1 RESEARCH |
 | `24-P52-ADAPTIVE-READINESS.md` | Exposure logging, OPE readiness | P5.2b IMPLEMENTED (flag off) |
-| `25-P61-CI-PIPELINE.md` | CI gates, static/dependency scanning | P6.1 IMPLEMENTED (local); runner NOT TESTED |
+| `25-P61-CI-PIPELINE.md` | CI gates, static/dependency scanning | P6.1 IMPLEMENTED + TESTED (Actions run 41583115455: 5/5 job xanh) |
 | `examples/` | JSON/SSE ví dụ mới | **PROPOSED**, không phải API hiện tại |
 
 ## Quy ước bắt buộc

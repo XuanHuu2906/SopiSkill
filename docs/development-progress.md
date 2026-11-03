@@ -136,13 +136,31 @@
     (answer key không lộ, stale version 409, progress từ attempts, cross-user 404,
     CSRF 403, token giả 401, PDF provenance, RAG/Tutor/Research flag tắt trả mã rõ).
 - TESTED (Windows, sau fix): `pytest -q` → **699 passed, 29 skipped**.
+- TESTED (GitHub Actions runner thật — **lần đầu tiên**):
+  - Branch `feat/p6.0-ci-pipeline` push lên `origin`; run
+    https://github.com/XuanHuu2906/SopiSkill/actions/runs/41583115455
+    `head_sha=5658b31`, attempt 1, **conclusion = success** (~1m43s).
+  - Cả 5 job xanh, kiểm qua API: `Backend tests (Python 3.13)`,
+    `Alembic migrations on empty PostgreSQL`, `PostgreSQL concurrency tests`,
+    `Frontend lint, typecheck, build`, `Static security and dependency audit`.
+  - Các bước quan trọng đều `success`: `Run pytest`; `Upgrade head on empty database`
+    → `Downgrade one revision then upgrade again` → `Walk the full revision chain down to
+    base and back up` → `Verify the revision graph is linear and single-headed`; `Guard
+    against a vacuous (all-skipped) race run` (guard chạy trước) → `Run
+    race/idempotency tests against PostgreSQL`; `Lint`/`Typecheck`/`Build`; `Bandit`/
+    `pip-audit`/`npm audit`.
+  - Giới hạn bằng chứng: log chi tiết của job cần auth (`GET .../jobs/{id}/logs` → 403
+    với request ẩn danh), nên số test cụ thể trên runner **không** đọc trực tiếp được ở
+    đây. Kết luận dựa trên: step `Run pytest` success (pytest exit ≠ 0 khi collection
+    rỗng/lỗi) + guard chống skip chạy trước bước race. Không suy ra con số 697.
 - NOT TESTED (vẫn còn):
-  - **GitHub Actions runner thật** — cần người có quyền push (chưa có run URL/log).
-    Linux container chỉ *thu hẹp* khoảng cách, không thay lượt chạy Actions thật.
   - Image scan (Trivy/Grype), xoay khoá shuffle khi có attempt mở, multi-replica cùng
     khoá shuffle.
-- PHASE GATE: **GATE-PARTIAL** — P6.1 IMPLEMENTED + TESTED local (Windows **và** Linux
-  sau khi sửa L1); **GitHub Actions runner thật NOT TESTED** (chưa push).
+  - `minimatch` (moderate, dev-only) vẫn còn; gate `--omit=dev --audit-level=high` nên
+    không chặn.
+- PHASE GATE: **GATE-PASS cho phần CI** — P6.1 IMPLEMENTED + TESTED local (Windows **và**
+  Linux) **và** GitHub Actions runner thật xanh (5/5 job, run 41583115455). Các mục
+  NOT TESTED ở trên là ngoài phạm vi P6.1 (thuộc P6.5/P6.9 image scan, vận hành khoá).
 - NEXT: P6.2 API security review (JWT/CSRF/issuer/audience/secret rotation, login abuse
   limit, scope checks, uploads/SSRF, redacted logs, session cache isolation).
 

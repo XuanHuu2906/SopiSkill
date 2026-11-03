@@ -1,9 +1,9 @@
 # 25 — P6.1 CI Pipeline & Automated Gates
 
-**Trạng thái:** IMPLEMENTED + TESTED (local Windows **và** Linux container tương đương
-runner). **GitHub Actions run thật vẫn chưa được quan sát** — không có push/PR nào trong
-phiên này, nên xem là NOT TESTED trên runner. Xem mục 8b cho lỗi thật đã phát hiện khi
-chạy trên Linux (thiếu `pillow` trong dev requirements làm job đỏ).
+**Trạng thái:** IMPLEMENTED + TESTED (local Windows, Linux container tương đương runner,
+**và GitHub Actions runner thật** — run `41583115455` success, 5/5 job). Xem mục 8b cho lỗi
+thật đã phát hiện khi chạy trên Linux (thiếu `pillow` trong dev requirements làm job đỏ)
+và mục 9 cho giới hạn bằng chứng (log chi tiết cần auth).
 
 ## 1. Mục tiêu
 
@@ -294,12 +294,19 @@ RAG/Tutor/Research flag tắt trả mã lỗi rõ (không giả kết quả).
 
 ## 9. NOT TESTED / giới hạn
 
-- **GitHub Actions runner chưa chạy** (chưa push). Không được báo "CI green" khi chưa có
-  run URL/log. Đây là việc của người có quyền push. Đã thu hẹp khoảng cách bằng cách
-  chạy lại toàn bộ gate trong container Linux sạch (mục 8b) — nhưng đó **không** thay
-  thế một lượt chạy thật của Actions.
+- **GitHub Actions runner thật: ĐÃ CHẠY.** Branch `feat/p6.0-ci-pipeline` push lên
+  `origin`, run
+  [41583115455](https://github.com/XuanHuu2906/SopiSkill/actions/runs/41583115455)
+  (`head_sha=5658b31`, attempt 1) → **conclusion = success**, cả **5/5 job xanh**:
+  `Backend tests`, `Alembic migrations on empty PostgreSQL`, `PostgreSQL concurrency
+  tests`, `Frontend lint/typecheck/build`, `Static security and dependency audit`.
+  Bước `Guard against a vacuous (all-skipped) race run` chạy **trước** bước race nên
+  không thể xanh giả.
+  Hạn chế bằng chứng: log chi tiết từng job yêu cầu auth (`GET /actions/jobs/{id}/logs`
+  → 403 khi ẩn danh), nên **số test cụ thể trên runner không đọc trực tiếp được** từ
+  môi trường này. Kết luận chỉ dựa trên trạng thái các step, không suy ra con số.
 - **Docker build** backend/frontend: **đã chạy** `docker compose build backend worker
-  frontend` → OK (mục 8b). Chưa chạy image scan (Trivy/Grype).
+  frontend` → OK (mục 8b). Chưa chạy image scan (Trivy/Grype) — thuộc P6.9.
 - **Xoay khoá shuffle khi đang có attempt mở**: hệ quả đã biết (attempt đang mở bị chấm
   sai) nhưng chưa diễn tập trên dữ liệu thật — chưa có quy trình rotate được duyệt.
 - **Nhiều replica đọc cùng khoá shuffle**: chưa chạy nhiều container để xác nhận.
