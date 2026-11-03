@@ -1,7 +1,9 @@
 # 25 — P6.1 CI Pipeline & Automated Gates
 
-**Trạng thái:** IMPLEMENTED + TESTED (local simulation). **GitHub Actions run thật chưa
-được quan sát** — không có push/PR nào trong phiên này, nên xem là NOT TESTED trên runner.
+**Trạng thái:** IMPLEMENTED + TESTED (local Windows **và** Linux container tương đương
+runner). **GitHub Actions run thật vẫn chưa được quan sát** — không có push/PR nào trong
+phiên này, nên xem là NOT TESTED trên runner. Xem mục 8b cho lỗi thật đã phát hiện khi
+chạy trên Linux (thiếu `pillow` trong dev requirements làm job đỏ).
 
 ## 1. Mục tiêu
 
@@ -157,7 +159,7 @@ Kết quả: **0 Low / 0 Medium / 0 High**, 5 chỗ `# nosec` đều có comment
 
 ## 7. Test bảo vệ chính CI
 
-`backend/tests/test_p61_ci_contract.py` (**15 test**) đọc `ci.yml` + `package.json` và
+`backend/tests/test_p61_ci_contract.py` (**16 test**) đọc `ci.yml` + `package.json` và
 khẳng định: job bắt buộc tồn tại, trigger PR vào `main`, `permissions.contents == read`,
 không dùng `secrets.*`, migration job có `downgrade -1` **và** `downgrade base` cộng
 kiểm tra graph một head, race job trỏ **cả** `POSTGRES_TEST_URL` lẫn `DATABASE_URL` sang
@@ -165,7 +167,9 @@ PostgreSQL và có bước guard chống skip-im-lặng, mọi step cấm `|| tr
 `continue-on-error: true`, frontend chạy đủ 4 lệnh, security job phủ cả Python lẫn Node
 và quét cả `requirements-dev.txt`, script lint không quay lại `next lint` và có
 `--max-warnings=0`, `next` pin khớp `eslint-config-next` và `>=15.5.28`,
-`@eslint/eslintrc` được khai báo tường minh.
+`@eslint/eslintrc` được khai báo tường minh, và **mọi thư viện bên thứ ba mà test import
+đều có trong `requirements*.txt`** (bài học từ mục 8b/L1 — chống tái diễn "máy dev có
+sẵn nên tưởng CI xanh").
 
 Đã kiểm chứng test này **thật sự bắt lỗi** (không tautological):
 
@@ -179,7 +183,8 @@ và quét cả `requirements-dev.txt`, script lint không quay lại `next lint`
 
 ```bash
 cd backend && python -m pytest -q
-# 698 passed, 29 skipped, 17 warnings in 70.50s
+# 698 passed, 29 skipped, 17 warnings in 70.50s   ← trước fix Linux (mục 8b)
+# 699 passed, 29 skipped, 17 warnings             ← sau khi thêm pillow vào dev req
 
 cd backend && python -m bandit -r app
 # Total issues: Low 0 / Medium 0 / High 0
@@ -213,12 +218,88 @@ POSTGRES_TEST_URL=.../p60_race_alone python -m pytest\
 # 4 passed
 ```
 
+## 8b. Chạy lại trên đúng hệ điều hành của runner (Linux) — phát hiện + sửa
+
+Trước đây mọi con số "TESTED" của P6.1 đều đo trên **Windows**. Runner của GitHub
+Actions là `ubuntu-latest`, nên đã dựng lại cả 5 job trong container Linux sạch
+(`python:3.13-slim`, `node:22-slim`) **không cài gì có sẵn từ máy dev**.
+
+### L1 — Job `backend-tests` sẽ ĐỎ ngay lần push đầu (Critical)
+
+`tests/scan_fixtures.py` import `PIL` (Pillow) để render trang ảnh giả lập PDF scan.
+Pillow có trong `requirements-ocr.txt` (optional, CI cố ý **không** cài vì kéo
+`onnxruntime` ~200MB), nhưng **không** có trong `requirements-dev.txt`. Máy dev
+Windows có sẵn Pillow từ lúc thử OCR ⇒ 11 test P4.3 xanh; Linux sạch:
+
+```
+ModuleNotFoundError: No module named 'PIL'   tests/scan_fixtures.py:37
+# 11 failed, 685 passed, 31 skipped
+```
+
+Đây là lỗi thật của P6.1: gate được tuyên bố "local TESTED" nhưng môi trường đo khác
+môi trường chạy. Sửa: thêm `pillow>=10.0` vào `requirements-dev.txt` (vẫn KHÔNG cài
+engine OCR — các test fail-fast `OCR_NOT_CONFIGURED` vẫn kiểm chứng đúng hành vi).
+
+Thêm test contract `test_test_only_third_party_imports_are_declared_in_requirements`
+quét AST các file trong `backend/tests/` và đối chiếu với `requirements*.txt`; đã
+kiểm chứng **RED thật** bằng cách gỡ `pillow` khỏi file (1 failed, 15 passed), rồi
+khôi phục (16 passed).
+
+### Kết quả sau fix trên Linux (giống runner)
+
+```bash
+# backend-tests — python:3.13-slim, chỉ pip install -r requirements-dev.txt
+python -m pytest -q
+# 697 passed, 31 skipped, 15 warnings
+
+# frontend — node:22-slim, npm ci từ package-lock
+npm run lint; npm run typecheck; npm run build
+# LINT=0 TSC=0 BUILD=0
+
+# security
+python -m bandit -r app -q                     # 0 issue
+python -m pip_audit -r requirements.txt        # No known vulnerabilities found
+python -m pip_audit -r requirements-dev.txt    # No known vulnerabilities found
+npm audit --omit=dev --audit-level=high        # found 0 vulnerabilities
+
+# postgres-race — cả POSTGRES_TEST_URL và DATABASE_URL trỏ PostgreSQL
+python -m pytest tests -q -k postgres_concurrency
+# 29 passed, 698 deselected
+```
+
+### Migration walk trên PostgreSQL 16 (throwaway, không chạm DB chính)
+
+Project compose riêng `p61verify` + volume mới `p61verify_pgdata`:
+
+```bash
+alembic upgrade head    # 0016_p52_exposure (head)
+alembic downgrade -1    # exit 0 -> 0015_p50_learner_profile
+alembic upgrade head    # exit 0
+alembic downgrade base  # exit 0 -> schema rỗng
+alembic upgrade head    # exit 0
+alembic heads | wc -l   # 1
+```
+
+### E2E thật trên stack Docker (mock provider)
+
+```bash
+docker compose -p p61verify up -d db redis minio backend worker
+E2E_BASE=http://127.0.0.1:8001 python backend/e2e_acceptance.py
+# ===== KET QUA: 61/61 PASS =====
+```
+
+Bao gồm: quiz không lộ answer key, stale `contentVersion` → 409, progress từ attempts,
+cross-user 404 ở mọi endpoint, CSRF 403, token giả 401, PDF ingest + provenance,
+RAG/Tutor/Research flag tắt trả mã lỗi rõ (không giả kết quả).
+
 ## 9. NOT TESTED / giới hạn
 
 - **GitHub Actions runner chưa chạy** (chưa push). Không được báo "CI green" khi chưa có
-  run URL/log. Đây là việc của người có quyền push.
-- **Docker build** backend/frontend với version mới: NOT TESTED (image build nặng, không
-  cần cho gate P6.1; `npm run build` đã chạy).
+  run URL/log. Đây là việc của người có quyền push. Đã thu hẹp khoảng cách bằng cách
+  chạy lại toàn bộ gate trong container Linux sạch (mục 8b) — nhưng đó **không** thay
+  thế một lượt chạy thật của Actions.
+- **Docker build** backend/frontend: **đã chạy** `docker compose build backend worker
+  frontend` → OK (mục 8b). Chưa chạy image scan (Trivy/Grype).
 - **Xoay khoá shuffle khi đang có attempt mở**: hệ quả đã biết (attempt đang mở bị chấm
   sai) nhưng chưa diễn tập trên dữ liệu thật — chưa có quy trình rotate được duyệt.
 - **Nhiều replica đọc cùng khoá shuffle**: chưa chạy nhiều container để xác nhận.
@@ -243,7 +324,7 @@ $env:POSTGRES_TEST_URL="postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p
 $env:DATABASE_URL=$env:POSTGRES_TEST_URL
 python -m pytest tests -q -k postgres_concurrency --no-header -rs
 
-cd ..rontend
+cd ../frontend
 npm ci
 npm run lint; npm run typecheck; npm run build
 npm audit --omit=dev --audit-level=high

@@ -90,7 +90,12 @@ CI (`.github/workflows/ci.yml`, P6.1) chạy đúng các lệnh trên, cộng th
 `upgrade head → downgrade -1 → upgrade head` trên PostgreSQL rỗng và race test
 `-k postgres_concurrency` trên PostgreSQL thật. Chi tiết: `docs/specs/25-P61-CI-PIPELINE.md`.
 
-Kết quả mới nhất (2026-11-02): **691 unit+integration tests pass (+29 PostgreSQL race tests riêng khi có `POSTGRES_TEST_URL`)**. Mock provider vẫn là mặc định. Adapter LLM thật (OpenAI-compatible) có mocked tests và đã smoke test thật 3 request qua Deploy.com/DeepSeek (xem `docs/llm-provider.md`); real-provider trong CI vẫn **BLOCKED** (tốn phí). Chi tiết: `docs/development-progress.md`, `docs/llm-provider.md`, `docs/source-first-architecture.md`.
+Kết quả mới nhất (2026-11-03): **699 unit+integration tests pass trên Windows / 697 trên
+Linux sạch (+31 skip, gồm 29 PostgreSQL race tests riêng khi có `POSTGRES_TEST_URL`)**.
+Mock provider vẫn là mặc định. Adapter LLM thật (OpenAI-compatible) có mocked tests và đã
+smoke test thật 3 request qua Deploy.com/DeepSeek (xem `docs/llm-provider.md`);
+real-provider trong CI vẫn **BLOCKED** (tốn phí). Chi tiết: `docs/development-progress.md`,
+`docs/llm-provider.md`, `docs/source-first-architecture.md`.
 
 ## Alembic migration
 

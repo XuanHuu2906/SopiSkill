@@ -105,8 +105,44 @@
     `pip-audit` sạch cho cả hai file requirements; race `-k postgres_concurrency` với
     cả hai biến PostgreSQL → **29 passed**; `alembic downgrade base → upgrade head` OK,
     `heads` = 1; frontend lint/typecheck/build exit 0.
-- PHASE GATE: **GATE-PARTIAL** — P6.1 IMPLEMENTED + TESTED local (kể cả fix pass C1/I1–I5);
-  **GitHub Actions runner thật NOT TESTED** (chưa push) — đúng định nghĩa TESTED của plan.
+- **Pass 2 (2026-11-03) — chạy lại trên Linux, đúng OS của runner:**
+  - **L1 (Critical) — job `backend-tests` sẽ ĐỎ ngay lần push đầu.** Mọi số trước đó đo
+    trên Windows. Chạy lại trong `python:3.13-slim` chỉ cài `requirements-dev.txt`:
+    `11 failed, 685 passed` với `ModuleNotFoundError: No module named 'PIL'`
+    (`tests/scan_fixtures.py:37`). Nguyên nhân: `scan_fixtures` cần Pillow để render PDF
+    scan giả; Pillow chỉ nằm trong `requirements-ocr.txt` (optional, CI cố ý không cài),
+    còn máy dev Windows có sẵn từ lúc thử OCR nên 11 test P4.3 xanh giả.
+    Sửa: khai báo `pillow>=10.0` trong `requirements-dev.txt` (vẫn KHÔNG cài engine OCR;
+    các test fail-fast `OCR_NOT_CONFIGURED` giữ nguyên ý nghĩa).
+  - Thêm 1 test contract (**16 test**) `test_test_only_third_party_imports_are_declared_in_requirements`
+    quét AST `backend/tests/*.py` đối chiếu `requirements*.txt`; kiểm chứng **RED thật**
+    (gỡ `pillow` ⇒ 1 failed/15 passed; khôi phục ⇒ 16 passed).
+  - Sửa lỗi tài liệu trong `docs/specs/25-P61-CI-PIPELINE.md`: ký tự form-feed làm hỏng
+    dòng `cd ../frontend` (thành `cd ..\x0crontend`) — copy lệnh trong doc sẽ fail.
+- TESTED (Linux container = OS runner, không cài gì từ máy dev):
+  - `python:3.13-slim` + `pip install -r requirements-dev.txt` → `pytest -q` =
+    **697 passed, 31 skipped** (sau fix; trước fix 11 failed/685 passed).
+  - `node:22-slim` + `npm ci` → `lint=0`, `typecheck=0`, `build=0`,
+    `npm audit --omit=dev --audit-level=high` = **0 vulnerabilities**.
+  - `bandit -r app` = 0 issue; `pip_audit` cả `requirements.txt` và `requirements-dev.txt`
+    = No known vulnerabilities.
+  - `pytest -k postgres_concurrency` với **cả** `POSTGRES_TEST_URL` + `DATABASE_URL` trỏ
+    PostgreSQL 16 trong container Linux → **29 passed, 698 deselected**.
+  - Migration walk trên PostgreSQL 16 throwaway (project `p61verify`, volume riêng):
+    `upgrade head` → `0016_p52_exposure`; `downgrade -1` → `0015`; `upgrade head`;
+    `downgrade base`; `upgrade head`; `heads` = **1**.
+  - Docker images: `docker compose build backend worker frontend` → OK.
+  - E2E Docker thật (mock provider): `backend/e2e_acceptance.py` → **61/61 PASS**
+    (answer key không lộ, stale version 409, progress từ attempts, cross-user 404,
+    CSRF 403, token giả 401, PDF provenance, RAG/Tutor/Research flag tắt trả mã rõ).
+- TESTED (Windows, sau fix): `pytest -q` → **699 passed, 29 skipped**.
+- NOT TESTED (vẫn còn):
+  - **GitHub Actions runner thật** — cần người có quyền push (chưa có run URL/log).
+    Linux container chỉ *thu hẹp* khoảng cách, không thay lượt chạy Actions thật.
+  - Image scan (Trivy/Grype), xoay khoá shuffle khi có attempt mở, multi-replica cùng
+    khoá shuffle.
+- PHASE GATE: **GATE-PARTIAL** — P6.1 IMPLEMENTED + TESTED local (Windows **và** Linux
+  sau khi sửa L1); **GitHub Actions runner thật NOT TESTED** (chưa push).
 - NEXT: P6.2 API security review (JWT/CSRF/issuer/audience/secret rotation, login abuse
   limit, scope checks, uploads/SSRF, redacted logs, session cache isolation).
 
