@@ -10,3 +10,12 @@ pip-audit==2.10.1
 # Test CI contract (test_p61_ci_contract.py) parse ci.yml. Uvicorn kéo PyYAML
 # theo qua extra `standard`, nhưng không dựa vào quan hệ bắc cầu đó trong gate.
 PyYAML==6.0.3
+
+# Test P4.3 sinh PDF "scan" giả (`tests/scan_fixtures.py`) cần Pillow để render
+# trang ảnh. Pillow nằm trong requirements-ocr.txt (optional) — CI cố ý KHÔNG
+# cài file đó (OCR mặc định TẮT, kéo onnxruntime ~200MB). Trước đây chỉ máy dev
+# có sẵn Pillow nên 11 test OCR xanh ở Windows; chạy trên runner Linux sạch thì
+# `ModuleNotFoundError: No module named 'PIL'` ⇒ CI đỏ ngay lần push đầu.
+# Khai báo tường minh ở đây, KHÔNG bật OCR: engine vẫn thiếu và test fail-fast
+# vẫn kiểm chứng đúng hành vi `OCR_NOT_CONFIGURED`.
+pillow>=10.0

@@ -7,6 +7,7 @@ Không chạy CI runner ở đây — chỉ đọc cấu hình.
 """
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -174,3 +175,76 @@ def test_next_is_pinned_to_a_patched_15x_release():
     major, minor, patch = (int(p) for p in pinned.split(".")[:3])
     assert major == 15
     assert (minor, patch) >= (5, 28), f"next {pinned} vẫn dính advisory đã biết"
+
+
+# ---------------------------------------------------------------------------
+# Test-only dependencies phải khai báo tường minh
+# ---------------------------------------------------------------------------
+
+# Tên module import ≠ tên distribution trên PyPI. Chỉ khai báo các cặp lệch
+# tên thật sự; còn lại normalize `_`/`.` → `-` là đủ.
+_TEST_IMPORT_DISTRIBUTIONS = {
+    "PIL": "pillow",
+    "yaml": "PyYAML",
+    "jwt": "PyJWT",
+}
+
+
+def _distribution_names_from_requirements() -> set[str]:
+    """Tên distribution đã khai báo trong requirements.txt + requirements-dev.txt."""
+    names: set[str] = set()
+    for filename in ("requirements.txt", "requirements-dev.txt"):
+        text = (REPO_ROOT / "backend" / filename).read_text(encoding="utf-8")
+        for raw in text.splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            # bỏ extras + specifier: `sqlalchemy[asyncio]>=2.0` → `sqlalchemy`
+            name = line.split(";", 1)[0]
+            for sep in ("[", "==", ">=", "<=", "~=", "!=", ">", "<", "=", " "):
+                name = name.split(sep, 1)[0]
+            normalized = name.strip().lower().replace("_", "-").replace(".", "-")
+            if normalized:
+                names.add(normalized)
+    return names
+
+
+def test_test_only_third_party_imports_are_declared_in_requirements():
+    """Test import module mà requirements không khai báo ⇒ đỏ trên runner sạch.
+
+    Đây là lỗi thật đã xảy ra: `tests/scan_fixtures.py` import `PIL` (Pillow), nhưng
+    Pillow chỉ nằm trong `requirements-ocr.txt` (optional, CI cố ý không cài). Máy dev
+    Windows có sẵn Pillow nên 11 test OCR xanh; runner Linux sạch ném
+    `ModuleNotFoundError: No module named 'PIL'` ⇒ toàn bộ job `backend-tests` đỏ.
+    Gate ở đây để dependency ngầm không quay lại.
+
+    Lưu ý: kiểm tra **khai báo**, không kiểm tra cài đặt — chính việc "máy dev đã cài
+    sẵn nhưng repo không khai báo" là lỗi cần chặn.
+    """
+    import ast
+
+    stdlib = set(sys.stdlib_module_names)
+    local_roots = {"app", "tests", "evals"}
+    declared = _distribution_names_from_requirements()
+
+    missing: list[str] = []
+    for path in sorted((REPO_ROOT / "backend" / "tests").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                modules = [node.module]
+            for full in modules:
+                top = full.split(".")[0]
+                if top in stdlib or top in local_roots:
+                    continue
+                distribution = _TEST_IMPORT_DISTRIBUTIONS.get(top, top)
+                normalized = distribution.lower().replace("_", "-").replace(".", "-")
+                if normalized not in declared:
+                    missing.append(f"{path.name}: import {full!r} → cần {distribution!r}")
+    assert not missing, (
+        "test import thư viện chưa khai báo trong requirements: "
+        + "; ".join(sorted(set(missing)))
+    )
