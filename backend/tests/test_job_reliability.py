@@ -234,6 +234,153 @@ async def test_reconciler_ignores_fresh_jobs():
     assert job_id not in recovered
 
 
+# ---------- GATE RELIABILITY-CELERY-01: broker-acked but never claimed ----------
+#
+# Trạng thái không lọt vào nhánh nào trước đây: `queued` + `dispatched_at IS NOT NULL`.
+# Nghĩa là "đã gửi broker thành công nhưng chưa worker nào claim" — job kẹt vĩnh viễn.
+# Đây là trạng thái của ce9d5596-8d62-4bed-9253-37b02fec255e.
+
+
+async def _mark_broker_acked(job_id: uuid.UUID, *, age_seconds: int) -> None:
+    """Mô phỏng đúng trạng thái orphan: broker đã nhận, chưa ai claim."""
+    async with SessionLocal() as db:
+        job = (
+            await db.execute(select(GenerationJob).where(GenerationJob.id == job_id))
+        ).scalar_one()
+        job.status = JobStatus.queued
+        job.dispatched_at = datetime.now(UTC) - timedelta(seconds=age_seconds)
+        job.dispatch_attempts = 1
+        job.attempts_count = 0
+        job.lease_expires_at = None
+        job.heartbeat_at = None
+        await db.commit()
+
+
+async def test_reconciler_recovers_queued_job_dispatched_past_deadline():
+    """RELIABILITY-CELERY-01: queued + dispatched_at cũ phải được đưa lại vào đường chạy."""
+    _, course_id = await _make_course()
+    job_id = await _queue_job(course_id)
+    await _mark_broker_acked(job_id, age_seconds=600)
+
+    async with SessionLocal() as db:
+        recovered = await job_service.recover_stuck_jobs(db)
+
+    assert job_id in recovered, "job broker-acked quá hạn phải được reconcile, không kẹt vĩnh viễn"
+    job = await _job(job_id)
+    assert job.status != JobStatus.queued or job.dispatched_at is not None
+
+
+async def test_reconciler_leaves_recently_dispatched_job_alone():
+    """Chớm dispatched: có thể worker đang nhận ⇒ không được giành giật."""
+    _, course_id = await _make_course()
+    job_id = await _queue_job(course_id)
+    await _mark_broker_acked(job_id, age_seconds=0)
+
+    async with SessionLocal() as db:
+        recovered = await job_service.recover_stuck_jobs(db)
+
+    assert job_id not in recovered
+    job = await _job(job_id)
+    assert job.dispatch_attempts == 1, "không được tăng dispatch_attempts cho job còn mới"
+
+
+async def test_reconciler_does_not_touch_queued_job_with_live_lease():
+    """queued nhưng vẫn còn lease sống (worker đang cầm) ⇒ reconcile mù."""
+    _, course_id = await _make_course()
+    job_id = await _queue_job(course_id)
+    await _mark_broker_acked(job_id, age_seconds=600)
+    async with SessionLocal() as db:
+        job = (
+            await db.execute(select(GenerationJob).where(GenerationJob.id == job_id))
+        ).scalar_one()
+        job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=10)
+        await db.commit()
+
+    async with SessionLocal() as db:
+        recovered = await job_service.recover_stuck_jobs(db)
+
+    assert job_id not in recovered
+
+
+async def test_reconciler_fails_stale_dispatch_after_budget_exhausted():
+    """Cạn lượt dispatch ⇒ trạng thái kết thúc rõ ràng, không quay vòng vô hạn."""
+    _, course_id = await _make_course()
+    job_id = await _queue_job(course_id)
+    await _mark_broker_acked(job_id, age_seconds=600)
+    async with SessionLocal() as db:
+        job = (
+            await db.execute(select(GenerationJob).where(GenerationJob.id == job_id))
+        ).scalar_one()
+        job.dispatch_attempts = 99
+        await db.commit()
+
+    async with SessionLocal() as db:
+        await job_service.recover_stuck_jobs(db)
+
+    job = await _job(job_id)
+    assert job.status == JobStatus.failed
+    assert job.last_error_code == "DISPATCH_EXHAUSTED"
+    assert (await _course(course_id)).status == CourseStatus.failed
+
+
+async def test_two_reconcilers_do_not_double_dispatch_stale_job():
+    """Hai reconciler chạy song song: mỗi job chỉ được dispatch một lần."""
+    _, course_id = await _make_course()
+    job_id = await _queue_job(course_id)
+    await _mark_broker_acked(job_id, age_seconds=600)
+
+    sent: list[str] = []
+
+    class RecordingApp:
+        def send_task(self, name, args=None, countdown=0, **kwargs):
+            sent.append(str(args[0]))
+
+    original = generation._celery_app
+    generation._celery_app = RecordingApp()
+    try:
+        async with SessionLocal() as db1, SessionLocal() as db2:
+            first = await job_service.recover_stuck_jobs(db1)
+            second = await job_service.recover_stuck_jobs(db2)
+    finally:
+        generation._celery_app = original
+
+    assert sent.count(str(job_id)) == 1, f"job bị dispatch {sent.count(str(job_id))} lần"
+    assert job_id in first
+    assert job_id not in second, "reconciler thứ hai phải thấy job đã được chuyển đi"
+
+
+async def test_stale_recovery_then_generation_completes_without_duplicate_lessons(
+    monkeypatch,
+):
+    """Sau khi cứu hộ, worker claim được và sinh bài đúng một lần."""
+    _, course_id = await _make_course()
+    job_id = await _queue_job(course_id)
+    await _mark_broker_acked(job_id, age_seconds=600)
+
+    # Dispatch thật đi qua broker giả; sau đó worker "nhận" task như bình thường.
+    class NullApp:
+        def send_task(self, *args, **kwargs):
+            return None
+
+    original = generation._celery_app
+    generation._celery_app = NullApp()
+    try:
+        async with SessionLocal() as db:
+            await job_service.recover_stuck_jobs(db)
+    finally:
+        generation._celery_app = original
+
+    await generation._run_generation_async(str(job_id))
+    await generation._run_generation_async(str(job_id))  # redelivery
+
+    async with SessionLocal() as db:
+        lessons = (
+            await db.execute(select(Lesson).where(Lesson.course_id == course_id))
+        ).scalars().all()
+    assert len(lessons) == 4, "cứu hộ + redelivery không được nhân đôi lesson"
+    assert (await _job(job_id)).status == JobStatus.ready
+
+
 # ---------- error classification / retry ----------
 
 
@@ -347,6 +494,52 @@ class _FailProvider:
 
     async def generate_lesson(self, *args, **kwargs):
         raise self.exc
+
+
+class _BadBlankProvider:
+    """Provider trả bài có blank 2 chỗ trống / 1 đáp án — nội dung không thể trả lời."""
+
+    name = "bad-blank"
+
+    async def generate_interview_questions(self, topic):  # pragma: no cover
+        return [f"q{i}" for i in range(5)]
+
+    async def generate_proposal(self, *args, **kwargs):  # pragma: no cover
+        raise AssertionError("not used")
+
+    async def generate_lesson(self, topic, proposal, unit_title, lesson_title, _prev, _src=None):
+        from app.schemas.schemas import LessonContent
+
+        return LessonContent.model_validate({
+            "title": lesson_title,
+            "blocks": [
+                {"type": "teach", "title": lesson_title,
+                 "paragraphs": ["Đoạn giảng có nội dung đủ dài để không bị coi là rỗng."]},
+                {"type": "blank",
+                 "sentence": "Ta dùng ____, ví dụ: ____ tong < 10.",
+                 "answer": "while"},
+            ],
+        })
+
+
+async def test_invalid_blank_content_is_never_saved_ready(monkeypatch):
+    """P1-QUIZ-BLANK: nội dung sai schema không được ghi thành lesson `ready`."""
+    _, course_id = await _make_course()
+    job_id = await _queue_job(course_id)
+    monkeypatch.setattr(generation, "get_provider", lambda: _BadBlankProvider())
+
+    await generation._run_generation_async(str(job_id))
+
+    job = await _job(job_id)
+    assert job.status == JobStatus.failed
+    assert job.last_error_code == "PROVIDER_SCHEMA_INVALID"
+
+    async with SessionLocal() as db:
+        lessons = (
+            await db.execute(select(Lesson).where(Lesson.course_id == course_id))
+        ).scalars().all()
+    assert lessons == []
+    assert not any(l.status == LessonStatus.ready for l in lessons)
 
 
 async def test_provider_timeout_is_retryable_and_job_requeued(monkeypatch):

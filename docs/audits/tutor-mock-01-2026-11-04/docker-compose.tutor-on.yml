@@ -1,0 +1,11 @@
+# Ephemeral override — GATE TUTOR-MOCK-01 (non-prod, mock provider only).
+# Not merged into .env: pass it explicitly for the duration of the probe.
+#   docker compose -f docker-compose.yml -f docs/audits/tutor-mock-01-2026-11-04/docker-compose.tutor-on.yml up -d --no-deps backend
+# Revert by recreating backend without this file.
+services:
+  backend:
+    environment:
+      TUTOR_ENABLED: "true"
+      LLM_PROVIDER: "mock"
+      TUTOR_TOOLS_ENABLED: "false"
+      RAG_ENABLED: "false"

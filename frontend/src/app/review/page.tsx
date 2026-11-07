@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useRef, useState } from "react";
 import {
@@ -13,6 +12,10 @@ import {
   type DueReview,
 } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../providers";
+import { Button, ButtonLink } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 const RATINGS: { value: number; label: string; hint: string }[] = [
   { value: 1, label: "Quên", hint: "Không nhớ được nội dung" },
@@ -87,95 +90,149 @@ function ReviewQueue() {
   const items = useMemo<DueReview[]>(() => due.data?.items ?? [], [due.data]);
 
   if (authLoading) {
-    return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;
+    return (
+      <div className="container">
+        <div style={{ display: "grid", gap: 16 }}>
+          <Skeleton height={28} width="40%" />
+          <Skeleton height={96} />
+          <Skeleton height={96} />
+        </div>
+      </div>
+    );
   }
   if (!isAuthenticated) {
     return <div className="container">Đang chuyển tới trang đăng nhập…</div>;
   }
 
+  const remaining = items.length;
+
   return (
     <div className="container">
-      <div className="topbar">
-        <h1>Ôn tập</h1>
-        <Link className="link" href="/">
+      <header
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 16,
+          flexWrap: "wrap",
+          marginBottom: 20,
+        }}
+      >
+        <div>
+          <span className="eyebrow">Ôn tập giãn cách</span>
+          <h1 className="page-title" style={{ margin: "4px 0 0" }}>
+            Ôn tập
+          </h1>
+        </div>
+        <ButtonLink href="/" variant="ghost" size="sm">
           ← Trang chủ
-        </Link>
-      </div>
+        </ButtonLink>
+      </header>
 
       {disabled && (
-        <div className="card">
-          Tính năng ôn tập chưa được bật trên hệ thống này.
+        <Card variant="tint">
+          <p className="muted" style={{ margin: 0 }}>
+            Tính năng ôn tập chưa được bật trên hệ thống này.
+          </p>
+        </Card>
+      )}
+
+      {!disabled && due.isLoading && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <Skeleton height={96} />
+          <Skeleton height={96} />
         </div>
       )}
 
-      {!disabled && due.isLoading && <div className="card">Đang tải thẻ ôn tập…</div>}
-
       {!disabled && due.isError && !(due.error instanceof ApiError && due.error.status === 503) && (
-        <div className="error-box">
+        <div className="error-box" role="alert">
           Không tải được thẻ ôn tập: {due.error.message}
-          <br />
-          <button style={{ marginTop: 8 }} onClick={() => due.refetch()}>
-            Thử lại
-          </button>
+          <div style={{ marginTop: 8 }}>
+            <Button variant="secondary" size="sm" onClick={() => due.refetch()}>
+              Thử lại
+            </Button>
+          </div>
         </div>
       )}
 
       {!disabled && due.data && items.length === 0 && (
-        <div className="card">
-          {reviewedCount > 0
-            ? `Đã ôn ${reviewedCount} thẻ. Hiện không còn thẻ nào đến hạn.`
-            : "Hôm nay không có thẻ nào đến hạn. Hãy học thêm bài để tạo lịch ôn."}
+        <Card variant="tint">
+          <p className="muted" style={{ margin: 0 }}>
+            {reviewedCount > 0
+              ? `Đã ôn ${reviewedCount} thẻ. Hiện không còn thẻ nào đến hạn.`
+              : "Hôm nay không có thẻ nào đến hạn. Hãy học thêm bài để tạo lịch ôn."}
+          </p>
+        </Card>
+      )}
+
+      {!disabled && remaining > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <Badge tone="accent">{remaining} thẻ đến hạn</Badge>
+          {reviewedCount > 0 && <Badge tone="success">đã ôn {reviewedCount}</Badge>}
         </div>
       )}
 
-      {!disabled && items.length > 0 && (
-        <p className="muted">
-          Còn {items.length} thẻ đến hạn
-          {reviewedCount > 0 ? ` · đã ôn ${reviewedCount}` : ""}
-        </p>
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
+        </div>
       )}
-
-      {error && <div className="error-box">{error}</div>}
 
       {!disabled &&
         items.map((card) => (
-          <div className="card" key={card.cardId}>
-            <h2>{card.lessonTitle}</h2>
-            <p className="muted">
+          <Card key={card.cardId}>
+            <h2 className="section-title" style={{ margin: 0 }}>
+              {card.lessonTitle}
+            </h2>
+            <p className="caption" style={{ margin: "4px 0 14px" }}>
               {reviewStateLabel(card.state)}
               {card.overdueDays > 0 ? ` · trễ ${card.overdueDays} ngày` : ""}
             </p>
 
             {!revealed[card.cardId] ? (
-              <button
+              <Button
+                variant="secondary"
+                size="md"
                 onClick={() =>
                   setRevealed((prev) => ({ ...prev, [card.cardId]: true }))
                 }
               >
                 Hiện đáp án
-              </button>
+              </Button>
             ) : (
               <>
-                <p>
+                <p className="muted" style={{ marginTop: 0 }}>
                   Hãy tự nhớ lại nội dung chính của bài trên trước khi tự đánh giá mức
                   độ nhớ.
                 </p>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {RATINGS.map((rating) => (
-                    <button
+                    <Button
                       key={rating.value}
+                      variant={
+                        rating.value <= 2 ? "danger" : rating.value === 3 ? "secondary" : "success"
+                      }
+                      size="sm"
                       onClick={() => startGrade(card.cardId, rating.value)}
                       disabled={grade.isPending}
                       aria-label={`${rating.label}: ${rating.hint}`}
                       title={rating.hint}
                     >
                       {rating.label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </>
             )}
-          </div>
+          </Card>
         ))}
     </div>
   );

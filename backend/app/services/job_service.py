@@ -309,13 +309,26 @@ async def _run_inline(job_id: uuid.UUID) -> None:
 
 
 async def recover_stuck_jobs(db: AsyncSession, limit: int = 20) -> list[uuid.UUID]:
-    """Reconciler: dispatch lại job committed-nhưng-chưa-gửi + job có lease hết hạn.
+    """Reconciler: dispatch lại job chưa tới worker + job có lease hết hạn.
 
     Trả danh sách job đã xử lý. Chỉ chạm đúng các trạng thái an toàn.
+
+    Ba nhánh — bỏ sót bất kỳ nhánh nào cũng tạo ra trạng thái kẹt vĩnh viễn:
+
+    1. `queued` + `dispatched_at IS NULL`: outbox, commit xong nhưng chưa gửi broker.
+    2. `running` + lease hết hạn: worker chết giữa chừng.
+    3. `queued` + `dispatched_at IS NOT NULL` + đã cũ: broker ĐÃ nhận nhưng chưa
+       worker nào claim (message thất lạc, hoặc consumer nhận rồi chết trước khi
+       claim). Trước GATE RELIABILITY-CELERY-01 nhánh này không tồn tại nên job
+       kẹt `queued` mãi mãi.
+
+    Dispatch lại là an toàn kể cả khi message gốc vẫn còn trong broker: `claim_job`
+    là UPDATE nguyên tử nên chỉ một task thắng, các bản sao còn lại no-op.
     """
     settings = get_settings()
     now = _now()
     grace = timedelta(seconds=settings.generation_dispatch_grace_seconds)
+    stale = timedelta(seconds=settings.generation_stale_dispatch_seconds)
 
     rows = await db.execute(
         select(GenerationJob)
@@ -332,10 +345,24 @@ async def recover_stuck_jobs(db: AsyncSession, limit: int = 20) -> list[uuid.UUI
                     GenerationJob.lease_expires_at.is_(None),
                     GenerationJob.lease_expires_at < now,
                 ),
+                # Broker đã ack nhưng chưa ai claim quá lâu. Cửa sổ rộng hơn hẳn
+                # grace để không giành với worker vừa nhận message đang kết nối DB.
+                # Vẫn kiểm tra lease: nếu có ai đang giữ thì để yên.
+                (GenerationJob.status == JobStatus.queued)
+                & GenerationJob.dispatched_at.is_not(None)
+                & (GenerationJob.dispatched_at < now - stale)
+                & or_(
+                    GenerationJob.lease_expires_at.is_(None),
+                    GenerationJob.lease_expires_at < now,
+                ),
             )
         )
         .order_by(GenerationJob.created_at)
         .limit(limit)
+        # Hai reconciler chạy đồng thời không được cùng một job: PG khoá hàng,
+        # `skip_locked` để reconciler kia bỏ qua thay vì chờ. SQLite bỏ qua mệnh
+        # đề này; ở đó `claim_job` vẫn là chốt chặn chống sinh bài trùng.
+        .with_for_update(skip_locked=True)
     )
     jobs = list(rows.scalars().all())
 
