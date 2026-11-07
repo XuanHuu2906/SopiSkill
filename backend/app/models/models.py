@@ -411,6 +411,14 @@ class SourceDocument(Base):
     original_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Object key NGẪU NHIÊN trong private storage; không phải path do client gửi.
     storage_key: Mapped[str] = mapped_column(Text)
+    # P4.3 — text của tài liệu này đến từ đâu. `native` = text layer của PDF;
+    # `ocr` = toàn bộ trang đọc bằng engine; `mixed` = có cả hai. NULL = document
+    # cũ trước P4.3 (không suy đoán ngược). Đây KHÔNG phải độ tin cậy nội dung.
+    text_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Số trang đã OCR + engine/version đã dùng ⇒ truy vết "text do máy đọc".
+    ocr_pages: Mapped[int] = mapped_column(Integer, default=0)
+    ocr_engine: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ocr_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     # P1.2-style lease để retry bounded và không có hai worker cùng ghi.
     attempts_count: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
@@ -470,6 +478,14 @@ class SourceChunk(Base):
     section_anchor: Mapped[str | None] = mapped_column(Text, nullable=True)
     text: Mapped[str] = mapped_column(Text)
     text_hash: Mapped[str] = mapped_column(Text)
+    # P4.3 — provenance của text: `native` (text layer PDF) hay `ocr` (máy đọc ảnh).
+    # Document cũ trước P4.3 có NULL ⇒ coi như `native` ở tầng đọc (không backfill
+    # bịa dữ liệu). `ocr_confidence`/`ocr_bbox` NULL với chunk native — không có
+    # nghĩa "tin cậy 100%".
+    text_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ocr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # bbox chuẩn hoá theo trang: [x0, y0, x1, y1] trong [0,1].
+    ocr_bbox: Mapped[list | None] = mapped_column(JSONVariant, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -847,6 +863,209 @@ class XpEvent(Base):
     amount: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
     content_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Skill(Base):
+    """Skill ổn định trong MỘT course, backfill từ `CurriculumSkill` của proposal.
+
+    `key` = `CurriculumSkill.id` (ổn định trong phạm vi course, KHÔNG phải UUID
+    toàn cục). Upsert theo `(course_id, key)` — không delete+insert, vì
+    `skill_mastery.skill_id` là CASCADE.
+    """
+
+    __tablename__ = "skills"
+    __table_args__ = (UniqueConstraint("course_id", "key", name="uq_skill_course_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE"), index=True
+    )
+    key: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    bloom_level: Mapped[str] = mapped_column(Text, default="understand")
+    outcome: Mapped[str] = mapped_column(Text, default="")
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class LessonSkill(Base):
+    """Liên kết lesson ↔ skill. Mỗi lesson hiện có đúng 1 skill (P2.1)."""
+
+    __tablename__ = "lesson_skills"
+    __table_args__ = (Index("ix_lesson_skills_skill", "skill_id"),)
+
+    lesson_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lessons.id", ondelete="CASCADE"), primary_key=True
+    )
+    skill_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("skills.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SkillMastery(Base):
+    """Snapshot mastery theo (user, skill).
+
+    `mastery_score` là heuristic accuracy có trọng số thời gian — **KHÔNG** phải
+    xác suất đã hiệu chuẩn. Chỉ có row khi user đã có attempt thật.
+    """
+
+    __tablename__ = "skill_mastery"
+    __table_args__ = (Index("ix_skill_mastery_skill", "skill_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    skill_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("skills.id", ondelete="CASCADE"), primary_key=True
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    correct: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    mastery_score: Mapped[float] = mapped_column(Float, default=0.0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReviewCard(Base):
+    """Snapshot FSRS hiện tại cho (user, lesson) — 1 card / cặp.
+
+    `scheduler_version` pin thuật toán đã tạo ra lịch để tái lập về sau.
+    """
+
+    __tablename__ = "review_cards"
+    __table_args__ = (
+        UniqueConstraint("user_id", "lesson_id", name="uq_review_card_user_lesson"),
+        Index("ix_review_cards_user_due", "user_id", "due_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    lesson_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lessons.id", ondelete="CASCADE")
+    )
+    skill_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("skills.id", ondelete="SET NULL"), nullable=True
+    )
+    state: Mapped[int] = mapped_column(Integer, default=2)
+    step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    difficulty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_review_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    scheduler_version: Mapped[str] = mapped_column(Text)
+    created_from_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("lesson_attempts.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReviewEvent(Base):
+    """Audit append-only của mỗi lần review. Không sửa/xoá lịch sử."""
+
+    __tablename__ = "review_events"
+    __table_args__ = (
+        UniqueConstraint("card_id", "client_review_id", name="uq_review_event_client_id"),
+        Index("ix_review_events_card_reviewed", "card_id", "reviewed_at"),
+        Index("ix_review_events_user_reviewed", "user_id", "reviewed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    card_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("review_cards.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    rating: Mapped[int] = mapped_column(Integer)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    elapsed_days: Mapped[int] = mapped_column(Integer, default=0)
+    scheduled_days: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    state_before: Mapped[int] = mapped_column(Integer, default=0)
+    state_after: Mapped[int] = mapped_column(Integer, default=0)
+    scheduler_version: Mapped[str] = mapped_column(Text)
+    client_review_id: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class RecommendationEvent(Base):
+    """Audit append-only của MỘT lần gợi ý đã hiển thị (P5.2b).
+
+    Không có cột `reward_*`: reward suy ra **offline** bằng JOIN với `lesson_attempts`
+    (theo `arm_id` + `lesson_content_version`) và `review_events` (đi qua
+    `review_cards` vì `review_events` không có `lesson_id`). Nhờ vậy bảng này
+    append-only thật: service không UPDATE, không xoá (chỉ CASCADE khi user/course
+    bị xoá theo yêu cầu privacy).
+
+    UNIQUE = "một exposure cho mỗi (user, course, context, arm)", **KHÔNG** phải đếm
+    impression. Nếu sau này bandit cần impression count thì phải thêm bảng riêng —
+    không được ngầm đổi nghĩa ràng buộc này.
+
+    `arm_id` NOT NULL có chủ đích: arm luôn là một lesson cụ thể, tránh phụ thuộc
+    NULL-semantics của PostgreSQL (NULL != NULL sẽ làm UNIQUE không chặn được trùng).
+
+    `propensity = 1.0` phản ánh policy deterministic hiện tại ⇒ **OPE chưa hợp lệ**;
+    module eval ghi `opeSupported=false`.
+    """
+
+    __tablename__ = "recommendation_events"
+    __table_args__ = (
+        # `lesson_content_version` PHẢI nằm trong UNIQUE: sau khi lesson regenerate,
+        # cùng context+arm vẫn là một **exposure mới** (arm là nội dung khác). Thiếu nó
+        # thì POST sau regenerate bị dedupe vào row cũ và reward của attempt version mới
+        # không bao giờ khớp (JOIN đòi bằng content_version).
+        UniqueConstraint(
+            "user_id",
+            "course_id",
+            "context_hash",
+            "arm_kind",
+            "arm_id",
+            "lesson_content_version",
+            name="uq_recommendation_event_context",
+        ),
+        Index("ix_recommendation_events_course", "course_id", "exposed_at"),
+        Index("ix_recommendation_events_user", "user_id", "exposed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE")
+    )
+    context_hash: Mapped[str] = mapped_column(Text)
+    policy_version: Mapped[str] = mapped_column(Text)
+    arm_kind: Mapped[str] = mapped_column(Text)
+    arm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"))
+    lesson_content_version: Mapped[int] = mapped_column(Integer)
+    propensity: Mapped[float] = mapped_column(Float)
+    reason_code: Mapped[str] = mapped_column(Text)
+    exposed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

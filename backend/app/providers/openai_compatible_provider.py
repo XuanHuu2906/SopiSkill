@@ -468,7 +468,10 @@ class OpenAICompatibleProvider(LLMProvider):
                     attempt + 1,
                     type(exc).__name__,
                 )
-        assert last_error is not None
+        # `last_error` luôn có giá trị ở đây (vòng lặp chỉ thoát khi đã bắt lỗi);
+        # dùng raise tường minh để không phụ thuộc `assert` (bị bỏ khi `-O`).
+        if last_error is None:  # pragma: no cover - bất biến của vòng lặp
+            raise SchemaInvalidError("LLM không trả về kết quả hợp lệ")
         raise last_error
 
     # ---------- HTTP core ----------
@@ -535,14 +538,17 @@ class OpenAICompatibleProvider(LLMProvider):
             except (ProviderAuthError, SchemaInvalidError, ProviderConfigError):
                 raise
 
-        assert last_error is not None
+        # Mọi nhánh transient/rate-limit đều gán `last_error` trước khi `break`.
+        if last_error is None:  # pragma: no cover - bất biến của vòng lặp
+            raise ProviderTransientError("provider không trả về kết quả")
         raise last_error
 
     def _backoff(self, attempt: int, retry_after: float | None) -> float:
         if retry_after is not None:
             return min(float(retry_after), 30.0)
         base = min(30.0, 0.5 * (2**attempt))
-        return base + random.uniform(0, base * 0.25)
+        # Jitter chống đồng bộ retry, không phải giá trị bảo mật.
+        return base + random.uniform(0, base * 0.25)  # nosec B311
 
     async def _post(self, payload: dict[str, Any], max_tokens: int, *, kind: str = "other") -> str:
         url = f"{self.base_url}/chat/completions"

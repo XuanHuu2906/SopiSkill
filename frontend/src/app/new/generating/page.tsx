@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
+import { Button, ButtonLink } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
 
 interface GenerationOut {
   jobId: string;
@@ -23,13 +25,12 @@ interface GenerationOut {
   costKnown: boolean;
 }
 
-const STAGE_LABELS: Record<string, string> = {
-  reading_answers: "Đọc câu trả lời của bạn",
-  background: "Bổ sung kiến thức nền còn thiếu",
-  outline: "Phác thảo lộ trình",
-  lessons: "Soạn bài học",
-  done: "Hoàn tất",
-};
+const STAGES: { key: string; label: string }[] = [
+  { key: "reading_answers", label: "Đọc câu trả lời của bạn" },
+  { key: "background", label: "Bổ sung kiến thức nền còn thiếu" },
+  { key: "outline", label: "Phác thảo lộ trình" },
+  { key: "lessons", label: "Soạn bài học" },
+];
 
 const STATUS_LABELS: Record<string, string> = {
   queued: "Trong hàng đợi",
@@ -37,6 +38,22 @@ const STATUS_LABELS: Record<string, string> = {
   ready: "Hoàn tất",
   failed: "Thất bại",
 };
+
+function stageState(
+  stageKey: string,
+  currentStage: string | null | undefined,
+  status: string | undefined
+): "done" | "active" | "pending" {
+  if (status === "ready") return "done";
+  if (!currentStage) return "pending";
+  const order = STAGES.map((s) => s.key);
+  const currentIndex = order.indexOf(currentStage);
+  const index = order.indexOf(stageKey);
+  if (currentIndex < 0) return "pending";
+  if (index < currentIndex) return "done";
+  if (index === currentIndex) return "active";
+  return "pending";
+}
 
 function GeneratingInner() {
   const router = useRouter();
@@ -50,7 +67,6 @@ function GeneratingInner() {
     queryFn: () => api<GenerationOut>(`/v1/courses/${courseId}/generation`),
     enabled: !!courseId && isAuthenticated,
     retry: 2,
-    // Dừng polling ở mọi trạng thái terminal; lỗi mạng tạm thời vẫn poll lại.
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       if (status === "ready" || status === "failed") return false;
@@ -69,76 +85,106 @@ function GeneratingInner() {
     }
   }, [gen.data?.status, courseId, router]);
 
-  if (!courseId) return <div className="container">Thiếu courseId.</div>;
-  if (authLoading) return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;
-  if (!isAuthenticated) return <div className="container">Đang chuyển tới trang đăng nhập…</div>;
+  if (!courseId) return <p className="muted">Thiếu courseId.</p>;
+  if (authLoading) return <p className="muted">Đang kiểm tra phiên đăng nhập…</p>;
+  if (!isAuthenticated) return <p className="muted">Đang chuyển tới trang đăng nhập…</p>;
+
+  const status = gen.data?.status;
+  const ready = status === "ready";
+  const title = ready ? "Khóa học đã sẵn sàng" : "Đang soạn khóa học";
 
   return (
-    <div className="container">
-      <h1>Đang sinh khóa học...</h1>
-      <div className="card">
-        <p>
-          Trạng thái:{" "}
-          <strong>
-            {(gen.data?.status && STATUS_LABELS[gen.data.status]) ?? "đang tải"}
-          </strong>
+    <div style={{ maxWidth: 560, margin: "0 auto", textAlign: "center", paddingTop: 40 }}>
+      <span className="eyebrow">{title}</span>
+      <h1 className="page-title" style={{ margin: "8px 0 32px" }}>
+        {ready ? "Xong rồi." : STATUS_LABELS[status ?? ""] ?? "Đang tải"}
+      </h1>
+
+      <ul className="stage-list" style={{ textAlign: "left" }}>
+        {STAGES.map((stage) => {
+          const state = stageState(stage.key, gen.data?.stage, status);
+          return (
+            <li key={stage.key} className={`stage-item is-${state}`}>
+              <span className="stage-dot" aria-hidden="true" />
+              <span>{stage.label}</span>
+              {stage.key === "lessons" && gen.data?.lessonsTotal != null && (
+                <span className="caption" style={{ marginLeft: "auto" }}>
+                  {gen.data.lessonsDone}/{gen.data.lessonsTotal}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {status === "queued" && !gen.data?.dispatched && (
+        <p className="muted">Đang chờ worker nhận việc… (hệ thống tự thử lại)</p>
+      )}
+
+      {gen.data && gen.data.llmCalls > 0 && !ready && (
+        <p className="caption">
+          Đã gọi AI {gen.data.llmCalls} lần · {gen.data.promptTokens ?? 0} token vào /{" "}
+          {gen.data.completionTokens ?? 0} token ra
+          {gen.data.costKnown && gen.data.costEstimateUsd != null
+            ? ` · ~$${gen.data.costEstimateUsd.toFixed(4)}`
+            : ""}
         </p>
-        {gen.data?.stage && <p>{STAGE_LABELS[gen.data.stage] ?? gen.data.stage}</p>}
-        {gen.data?.lessonsTotal != null && (
-          <p>
-            Tiến độ: {gen.data.lessonsDone}/{gen.data.lessonsTotal} bài học
-          </p>
-        )}
-        {gen.data?.status === "queued" && !gen.data.dispatched && (
-          <p>
-            Đang chờ worker nhận việc… (hệ thống sẽ tự thử lại, không cần thao tác)
-          </p>
-        )}
+      )}
 
-        {gen.data && gen.data.llmCalls > 0 && (
-          <p className="muted">
-            Đã gọi AI {gen.data.llmCalls} lần · {gen.data.promptTokens ?? 0} token vào /{" "}
-            {gen.data.completionTokens ?? 0} token ra
-            {gen.data.costKnown && gen.data.costEstimateUsd != null
-              ? ` · ~$${gen.data.costEstimateUsd.toFixed(4)}`
-              : " · chưa cấu hình giá model"}
-          </p>
-        )}
-
-        {gen.data?.error && (
-          <div className="error-box">
-            Lỗi ({gen.data.error.code}): {gen.data.error.message}
-            {gen.data.error.retryable && (
-              <p>Lỗi tạm thời — hệ thống đang tự thử lại (lần {gen.data.attempts}).</p>
-            )}
-            <button
-              style={{ marginTop: 8 }}
-              type="button"
+      {gen.data?.error && (
+        <div className="error-box" role="alert" style={{ textAlign: "left" }}>
+          Lỗi ({gen.data.error.code}): {gen.data.error.message}
+          {gen.data.error.retryable && (
+            <p style={{ marginTop: 6 }}>
+              Lỗi tạm thời — hệ thống đang tự thử lại (lần {gen.data.attempts}).
+            </p>
+          )}
+          <div style={{ marginTop: 10 }}>
+            <Button
+              variant="secondary"
+              size="md"
               onClick={() => retry.mutate()}
               disabled={retry.isPending}
             >
               {retry.isPending ? "Đang gửi..." : "Thử lại"}
-            </button>
-            {retry.isError && <p>{retry.error.message}</p>}
+            </Button>
           </div>
-        )}
+          {retry.isError && <p className="error-text" style={{ marginTop: 8 }}>{retry.error.message}</p>}
+        </div>
+      )}
 
-        {gen.isError && (
-          <div className="error-box">
-            Không lấy được trạng thái: {gen.error.message}
-            <button style={{ marginTop: 8 }} onClick={() => gen.refetch()}>
+      {gen.isError && (
+        <div className="error-box" role="alert" style={{ textAlign: "left" }}>
+          Không lấy được trạng thái: {gen.error.message}
+          <div style={{ marginTop: 10 }}>
+            <Button variant="secondary" size="md" onClick={() => gen.refetch()}>
               Thử lại
-            </button>
+            </Button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {ready && (
+        <ButtonLink href={`/course/${courseId}`} size="lg" block>
+          Mở lộ trình
+        </ButtonLink>
+      )}
+
+      {!ready && !gen.isError && (
+        <Card variant="tint" style={{ marginTop: 24, textAlign: "left" }}>
+          <p className="muted" style={{ margin: 0 }}>
+            Bạn có thể rời trang này — quá trình soạn bài tiếp tục ở máy chủ và kết quả
+            sẽ xuất hiện trong danh sách khóa học.
+          </p>
+        </Card>
+      )}
     </div>
   );
 }
 
 export default function GeneratingPage() {
   return (
-    <Suspense fallback={<div className="container">Đang tải...</div>}>
+    <Suspense fallback={<p className="muted">Đang tải...</p>}>
       <GeneratingInner />
     </Suspense>
   );

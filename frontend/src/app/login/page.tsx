@@ -4,6 +4,8 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { ApiError, loginRequest, registerRequest } from "@/lib/api";
 import { useRedirectAfterLogin, useSessionRefresh } from "../providers";
+import { Button } from "@/components/ui/Button";
+import { TextInput } from "@/components/ui/Field";
 
 function LoginInner() {
   const params = useSearchParams();
@@ -44,82 +46,104 @@ function LoginInner() {
     }
   }
 
+  const isLogin = mode === "login";
+
   return (
-    <div className="container">
-      <div className="card" style={{ maxWidth: 420, margin: "0 auto" }}>
-        {nextPath !== "/" && (
-          <p className="badge">Bạn cần đăng nhập để tiếp tục.</p>
-        )}
-        <h2>{mode === "login" ? "Đăng nhập" : "Tạo tài khoản"}</h2>
-        <form onSubmit={submit} className="auth-form">
-          <label htmlFor="login-email">
-            Email
-            <input
-              id="login-email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="ban@email.com"
-              autoComplete="email"
-            />
-          </label>
-          <label htmlFor="login-password">
-            Mật khẩu
-            <input
-              id="login-password"
-              type="password"
-              required
-              minLength={8}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Tối thiểu 8 ký tự"
-              autoComplete={mode === "login" ? "current-password" : "new-password"}
-            />
-          </label>
-          {mode === "register" && (
-            <label htmlFor="login-password-confirm">
-              Nhập lại mật khẩu
-              <input
-                id="login-password-confirm"
-                type="password"
-                required
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                autoComplete="new-password"
-              />
-            </label>
-          )}
-          {error && (
-            <p className="error-text" role="alert">
-              {error}
-            </p>
-          )}
-          <button type="submit" disabled={busy}>
-            {busy ? "Đang xử lý..." : mode === "login" ? "Đăng nhập" : "Đăng ký"}
-          </button>
-        </form>
-        <p>
-          {mode === "login" ? "Chưa có tài khoản? " : "Đã có tài khoản? "}
-          <button
-            type="button"
-            className="link-btn"
-            onClick={() => {
-              setMode(mode === "login" ? "register" : "login");
-              setError("");
-            }}
-          >
-            {mode === "login" ? "Đăng ký" : "Đăng nhập"}
-          </button>
+    <div style={{ width: "100%" }}>
+      <span className="eyebrow" style={{ display: "block", textAlign: "center" }}>
+        SopiSkill
+      </span>
+      <h1 className="hero-title" style={{ textAlign: "center", margin: "8px 0 12px" }}>
+        Học bất cứ điều gì.
+      </h1>
+      <p
+        className="lede"
+        style={{ textAlign: "center", maxWidth: 360, margin: "0 auto 28px" }}
+      >
+        Nói cho hệ thống biết bạn tò mò điều gì, nhận về một khóa học ngắn gọn, có bài
+        giảng và quiz — rồi quay lại bất cứ lúc nào.
+      </p>
+
+      {nextPath !== "/" && (
+        <p className="notice-box" style={{ marginTop: 0 }}>
+          Bạn cần đăng nhập để tiếp tục.
         </p>
-      </div>
+      )}
+
+      <form onSubmit={submit} className="auth-form" noValidate>
+        <TextInput
+          id="login-email"
+          label="Email"
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="ban@email.com"
+          autoComplete="email"
+        />
+        <TextInput
+          id="login-password"
+          label="Mật khẩu"
+          type="password"
+          required
+          minLength={8}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Tối thiểu 8 ký tự"
+          autoComplete={isLogin ? "current-password" : "new-password"}
+        />
+        {mode === "register" && (
+          <TextInput
+            id="login-password-confirm"
+            label="Nhập lại mật khẩu"
+            type="password"
+            required
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            autoComplete="new-password"
+          />
+        )}
+        {error && (
+          <p className="error-text" role="alert">
+            {error}
+          </p>
+        )}
+        <Button type="submit" size="lg" block disabled={busy}>
+          {busy ? "Đang xử lý..." : isLogin ? "Đăng nhập" : "Tạo tài khoản"}
+        </Button>
+      </form>
+
+      <p style={{ textAlign: "center", marginTop: 16 }} className="muted">
+        {isLogin ? "Chưa có tài khoản? " : "Đã có tài khoản? "}
+        <button
+          type="button"
+          className="link-btn"
+          onClick={() => {
+            setMode(isLogin ? "register" : "login");
+            setError("");
+          }}
+        >
+          {isLogin ? "Đăng ký" : "Đăng nhập"}
+        </button>
+      </p>
+
+      <p className="caption" style={{ textAlign: "center", marginTop: 28 }}>
+        Nội dung bạn nhập được xử lý trên máy chủ của SopiSkill và chỉ dùng để tạo khóa
+        học cho chính bạn.
+      </p>
     </div>
   );
 }
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="container">Đang tải...</div>}>
+    <Suspense
+      fallback={
+        <div style={{ padding: 24, textAlign: "center" }} className="muted">
+          Đang tải...
+        </div>
+      }
+    >
       <LoginInner />
     </Suspense>
   );

@@ -28,7 +28,13 @@ from app.services.lesson_content import COMPLETION_THRESHOLD_PERCENT
 
 INTERVIEW_QUESTIONS_COUNT = 5
 
-ID_PREFIXES = ("crs_", "lsn_", "unt_", "job_", "att_", "src_", "tth_", "tmsg_")
+ID_PREFIXES = (
+    "crs_", "lsn_", "unt_", "job_", "att_", "src_", "tth_", "tmsg_",
+    # P5.0 reviews
+    "rvc_", "rve_",
+    # P5.2 exposure
+    "rce_",
+)
 
 
 def parse_prefixed_uuid(raw: str) -> uuid.UUID | None:

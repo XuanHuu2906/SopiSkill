@@ -257,10 +257,13 @@ P7    Gamification/Billing/Analytics nâng cao [FUTURE, approval required]
 | P4.0 | **DONE 2026-10-31** | High | `0011_p40_source_ingest`; PDF text → provenance, 385 pytest, 59/59 E2E |
 | P4.1 | **DONE 2026-10-31 (offline baseline)** | High | `0012_p41_rag`; lexical+vector+RRF, citation validator, 426 pytest, 72/72 E2E (RAG on) |
 | P4.2 | **DONE 2026-11-01 (offline + guard + mạng thật)** | Medium | `0013_p42_web_ingest`; 511 pytest + race PostgreSQL + E2E mạng thật 33/33 |
-| P4.3 | OPTIONAL | Medium | Chỉ khi có corpus PDF scan thật |
-| P5.0 | TODO sau RAG | Medium | Mastery/FSRS có data model và QA |
-| P5.1–P5.2 | CONDITIONAL | Low | Phải hơn baseline trên held-out evaluation |
-| P6 | TODO (hạng mục có thể làm song song sớm) | High trước public launch | Operational / privacy / security checks |
+| P4.3 | **DONE 2026-11-01 (opt-in + engine thật)** | Medium | `0014_p43_ocr`; OCR pretrained `rapidocr` mặc định TẮT, provenance bbox/confidence/textSource; 533 pytest; CER EN 0.000 / VI 0.094 |
+| P5.0 | **DONE 2026-11-02 (offline + migration)** | Medium | `0015_p50_learner_profile`; skill backfill theo vị trí, mastery rule-based (half-life 30d, ngưỡng 0.7), FSRS `py-fsrs-6.3.2` (Again 1d/Hard 1d/Good 2d/Easy 8d), next-lesson chặn theo prereq + fallback ôn bài yếu; 597 pytest; E2E Docker + race PG NOT TESTED |
+| P5.1 (BKT) | **DONE (research-only) 2026-11-02** | Low | `app/services/bkt.py` + `evals/bkt_eval.py`; KHÔNG runtime/migration/route; DB thật 37 event/21 user ⇒ `INSUFFICIENT_DATA`; **deploy BLOCKED** (`docs/specs/23-P51-BKT.md`) |
+| P5.2a (readiness) | **DONE (research-only) 2026-11-02** | Low | `evals/p52_readiness.py`; DKT/BANDIT đều **BLOCKED** (`opeSupported=false`) |
+| P5.2b (exposure log) | **DONE (flag TẮT) 2026-11-02** | Low | `0016_p52_exposure` + `POST .../recommendation-events`; propensity=1.0 ⇒ chưa OPE; **chưa huấn luyện model nào** |
+| P6.1 (CI pipeline) | **DONE (local) 2026-11-02** | High | `.github/workflows/ci.yml`; 698 pytest, migration PG rỗng + `downgrade base`→`upgrade head`, 29 race test PG, lint/typecheck/build, bandit 0, pip-audit sạch, audit runtime 0; shuffle quiz dùng HMAC khoá server; **GitHub Actions run NOT TESTED** |
+| P6 (phần còn lại P6.2–P6.9) | TODO | High trước public launch | Operational / privacy / security checks |
 | P7 | FUTURE | Low | Chỉ làm khi có quyết định sản phẩm |
 
 ---
@@ -604,32 +607,32 @@ Chi tiết: `docs/source-research-agent.md`.
 
 ---
 
-## 16. PHASE P4.3 — Scanned PDF OCR (CNN/ViT) [CONDITIONAL]
+## 16. PHASE P4.3 — Scanned PDF OCR (CNN/ViT) — **DONE 2026-11-01 (opt-in)**
 
 **Điều kiện khởi động:** Có corpus PDF scan thật, text extraction không đủ và chi phí OCR chấp nhận được.
 
-- [ ] P4.3.1 So sánh OCR pretrained CNN-based/ViT-based + layout-aware parser trên sample PDF scan có phép; không train mô hình từ đầu.
-- [ ] P4.3.2 Phân biệt text OCR và text native, giữ page bbox/confidence, bảng/công thức theo bản nguồn.
-- [ ] P4.3.3 Đánh giá CER/WER, bảng/công thức, page provenance, latency/cost; công bố limitation.
-- [ ] P4.3.4 Chỉ bật OCR nếu chất lượng vượt text-only baseline trên corpus; có fallback rõ.
+- [x] P4.3.1 Adapter pretrained `rapidocr` (ONNX PP-OCR: CNN detector + CNN recognizer, chạy cục bộ). Không train/fine-tune; so sánh v6-small/v6-medium (giống nhau) và PP-OCRv4/v5 (không hỗ trợ `vi`). Layout-aware parser **chưa** có.
+- [x] P4.3.2 Phân biệt `textSource=native|ocr|mixed` ở document + chunk; giữ `ocrConfidence` (điểm engine, **không** phải xác suất đúng) và `ocrBbox` chuẩn hoá [0,1]; trang native không bị OCR lại. Bảng/công thức **chưa** dựng lại cấu trúc — chỉ là dòng text.
+- [x] P4.3.3 `evals/ocr_eval.py` đo CER/WER/confidence/latency trên corpus synthetic (EN+VI). Số thật: **CER EN 0.000, CER VI 0.094** (model **rơi dấu tiếng Việt**), WER VI 0.414, ~2.8 s/trang @200 DPI, mean confidence 0.991. Limitation công bố trong `docs/specs/21-P43-OCR.md`.
+- [x] P4.3.4 Mặc định **TẮT** (`OCR_ENABLED=false`); bật nhầm khi thiếu engine ⇒ fail-fast `OCR_NOT_CONFIGURED`, không âm thầm `no_text`/`ready`. Fallback rõ: `OCR_PAGE_LIMIT`/`OCR_TIMEOUT`/`OCR_FAILED` → `failed`, OCR không đọc được chữ → `no_text`+`OCR_NO_TEXT`.
 
-**Gate:** OCR không làm citation sai trang; metric được ghi lại.  
+**Gate:** PASS (opt-in) — citation không sai trang (`pageNumber` giữ nguyên qua OCR, test O13); metric được ghi lại; engine thật chạy trong test O15. **Giới hạn:** corpus synthetic, chưa có scan thật/mờ/nghiêng; tiếng Việt mất dấu ⇒ **chỉ nên bật khi người dùng chấp nhận rà lại**.
 **Không làm:** Bật OCR cho mọi file khi chưa có nhu cầu, giới thiệu CNN như thành phần đã có trong MVP.
 
 ---
 
-## 17. PHASE P5.0 — Learner Profile, Mastery Baseline & FSRS
+## 17. PHASE P5.0 — Learner Profile, Mastery Baseline & FSRS — **DONE 2026-11-02 (offline + migration)**
 
 **Mục tiêu:** Cá nhân hóa dựa trên **lịch sử học thực**, không chỉ 5 câu interview.
 
 **Modules:** `models` (skills, lesson-skill links, review events), `services/progress_service.py`, `services/recommendation_service.py`, FSRS scheduler adapter, frontend profile/review queue.
 
-- [ ] P5.0.1 Gắn stable skill IDs, prerequisite graph, learning objectives cho lesson; migration mới, backfill có chiến lược không giả dữ liệu.
-- [ ] P5.0.2 Mastery baseline **rule-based** từ các attempts tagged theo skill, difficulty/time; không gọi thang điểm heuristic là xác suất ML hiệu chuẩn.
-- [ ] P5.0.3 Next lesson policy: chỉ đề xuất bài mà prerequisites đã đạt; không vượt quyền/course entitlement.
-- [ ] P5.0.4 FSRS spaced repetition dựa trên review event có rating/response; lưu schedule, due dates theo timezone được chọn; thuật toán/library versioned để tái lập.
-- [ ] P5.0.5 UI “học tiếp/ôn tập”, mô tả vì sao được đề xuất, cho user bỏ qua hoặc điều chỉnh.
-- [ ] P5.0.6 Tests deterministic progression, timezone, missed reviews, content version update, missing skill tags, cross-user data.
+- [x] P5.0.1 `skills`/`lesson_skills` + backfill từ `course_proposals.payload` theo **vị trí** (không theo title); migration `0015_p50_learner_profile` expand-only.
+- [x] P5.0.2 Mastery **rule-based**: accuracy có trọng số thời gian (half-life 30 ngày, ngưỡng 0.7); API ghi `method="rule_based"`, không gọi là xác suất.
+- [x] P5.0.3 Next-lesson chỉ khi prereq đã đạt; thiếu prereq ⇒ **chặn** + `blockedBy` + fallback `reviewLessonId` (bài yếu nhất). Ownership ở SQL.
+- [x] P5.0.4 FSRS thật qua `fsrs` 6.3.2, `scheduler_version` pin trong card/event; `learning_steps=()` ⇒ lịch theo ngày; due lưu UTC.
+- [x] P5.0.5 UI: khối "Học tiếp"/"Ôn tập (N)"/"Mức nắm kỹ năng" ở course, trang `/review` với 4 mức rating + reveal; hiển thị lý do đề xuất.
+- [x] P5.0.6 Tests deterministic (pin `now`): FSRS interval, UTC coercion, idempotent `clientReviewId`, mastery không farm, version bump, thiếu skill không crash, cross-user 404.
 
 **Gate:** mọi gợi ý có lý do có thể kiểm tra; dữ liệu progress không xung đột P1.1; không có dự đoán bí ẩn thiếu dataset.  
 **Không làm:** Tự tuyên bố có RL/Deep Learning adaptive khi chỉ dùng rules.
@@ -640,17 +643,32 @@ Chi tiết: `docs/source-research-agent.md`.
 
 ### P5.1 — Bayesian Knowledge Tracing (BKT)
 
-- [ ] Chuẩn bị dataset chuỗi attempt theo `(user, skill, timestamp, correct)` có đủ độ dài, split train/test theo user/time tránh leakage.
-- [ ] So sánh BKT với heuristic baseline, kiểm tra calibration, Brier/log loss, drift, fairness; không deploy nếu không vượt baseline đáng kể.
-- [ ] Khi deploy, feature flag và shadow evaluation trước; có rollback và fallback rule-based.
+- [x] Chuẩn bị dataset chuỗi attempt theo `(user, skill, timestamp, correct)` có đủ độ dài, split train/test theo user/time tránh leakage. — `evals/mastery_dataset.py` (read-only, fallback schema `0012`), split theo user + time, kiểm `leakage`. Mục tiêu dùng **điểm mềm** `score_correct/score_total`.
+- [x] So sánh BKT với heuristic baseline, kiểm tra calibration, Brier/log loss, drift, fairness; không deploy nếu không vượt baseline đáng kể. — `evals/bkt_eval.py`: Brier/log loss/AUC/ECE/drift/leakage; baseline **as-of** chống leakage. Chạy thật: 37 event/21 user ⇒ `INSUFFICIENT_DATA`.
+- [ ] Khi deploy, feature flag và shadow evaluation trước; có rollback và fallback rule-based. — **BLOCKED**: dataset dưới ngưỡng (0 chuỗi ≥5 event). Không có thay đổi runtime ở phase này.
 
-### P5.2 — LSTM/DKT và Contextual Bandit (chỉ nghiên cứu)
+> Chi tiết quyết định, công thức, ngưỡng go/no-go và số liệu: `docs/specs/23-P51-BKT.md`.
 
-- [ ] LSTM/DKT chỉ khi dataset tuần tự đủ lớn và BKT không đạt mục tiêu; không huấn luyện mô hình đắt đỏ vì trào lưu.
-- [ ] Contextual bandit cho gợi ý độ khó/hoạt động nếu có reward rõ ràng và logging policy đúng; đánh giá offline, tránh gây hại cho người học bằng thí nghiệm không kiểm soát.
+### P5.2a — Readiness assessment (research-only)
+
+- [x] Đo khoảng cách tới ngưỡng DKT/LSTM và contextual bandit bằng số, không cảm nhận — `evals/p52_readiness.py` (read-only, SQL portable). Kết quả thật 2026-11-02: `usersGe10=0`, `sequencesGe5=0`, `coursesGe2Users=0`, `exposures=0` ⇒ **cả hai BLOCKED**.
+- [x] Không huấn luyện mô hình đắt đỏ — không thêm dependency nào; `requirements.txt` không đổi.
+- [ ] LSTM/DKT chỉ khi dataset tuần tự đủ lớn và BKT không đạt mục tiêu. — **BLOCKED** (cần `usersGe10 ≥ 500`).
+
+### P5.2b — Exploration logging (runtime, flag TẮT)
+
+> Phần này **vượt wording "chỉ nghiên cứu"** của plan cũ; người dùng đã duyệt riêng ngày 2026-11-02 (xem §26) vì không có exposure thì OPE vĩnh viễn không hợp lệ.
+
+- [x] Bảng `recommendation_events` append-only (migration `0016_p52_exposure`), `arm_id NOT NULL`, `lesson_content_version` snapshot, UNIQUE theo `(user, course, context, arm)`.
+- [x] Endpoint `POST /v1/courses/{id}/recommendation-events` với token HMAC server-phát (TTL 900s), idempotent, CSRF + rate limit, ownership 404; cờ `P52_EXPOSURE_ENABLED` mặc định **false** ⇒ 503 và không chạm bảng.
+- [x] Reward suy **offline** (`reward_for_events`): attempt đúng `content_version` → review qua `review_cards` → `None`.
+- [x] **Trung thực về giới hạn:** policy deterministic ⇒ `propensity=1.0` ⇒ `opeSupported=false`. Đây chỉ là *thu thập dữ liệu*, KHÔNG phải bandit đã chạy.
+- [ ] Contextual bandit thật + đánh giá offline — **BLOCKED**: cần `exposures ≥ 5000`, ≥2 policy, ≥3 arm, **và propensity có spread** (tức phải có quyết định exploration).
 - [ ] K-Means/Random Forest/XGBoost chỉ mở backlog khi có câu hỏi nghiệp vụ cụ thể, nhãn/dữ liệu và tiêu chí hơn baseline.
 
-**Gate chung:** quality gains có số liệu held-out, privacy review, rollback; nếu chưa đủ dữ liệu → `NOT STARTED`, **không cố triển khai**.  
+> Chi tiết + số liệu: `docs/specs/24-P52-ADAPTIVE-READINESS.md`.
+
+**Gate chung:** quality gains có số liệu held-out, privacy review, rollback; nếu chưa đủ dữ liệu → `NOT STARTED`, **không cố triển khai**. P5.1 đã dựng hạ tầng đo và kết luận `INSUFFICIENT_DATA`; P5.2a kết luận `BLOCKED`; P5.2b mới chỉ *ghi nhận exposure* với flag TẮT — **chưa có bandit, chưa có OPE**.  
 **Không làm:** Full RL tự động trên người học, dùng dữ liệu cá nhân không có quyền/chính sách.
 
 ---
@@ -661,7 +679,7 @@ Chi tiết: `docs/source-research-agent.md`.
 
 **Modules:** `.github/workflows/`, Dockerfiles, Compose/prod config, migration/runbooks, `core/config.py`, `core/limits.py`, security headers, logging, monitoring, tests.
 
-- [ ] P6.1 CI pipeline: Python tests, frontend build/lint/typecheck, migration upgrade on empty PostgreSQL, static security scanning & dependency checks (có baseline, avoid noisy auto-fix).
+- [x] P6.1 CI pipeline: Python tests, frontend build/lint/typecheck, migration upgrade on empty PostgreSQL, static security scanning & dependency checks (có baseline, avoid noisy auto-fix). — **DONE 2026-11-02/03** `docs/specs/25-P61-CI-PIPELINE.md`; `.github/workflows/ci.yml`, 699 pytest (+16 contract test), bandit 0, pip-audit sạch (cả dev req), `npm audit --omit=dev` 0. Fix pass sau review: khoá HMAC cho shuffle `order`/`match` (đáp án không còn suy ra từ public data), race test tự tạo schema + job race trỏ cả `DATABASE_URL`, chống gate xanh-giả (guard skip + `downgrade base`/`heads`=1). **runner thật TESTED**: run 41583115455 (`5658b31`) → **5/5 job xanh**, action=success. 2026-11-03: chạy lại toàn bộ gate trong container Linux sạch = đúng OS runner ⇒ phát hiện job `backend-tests` sẽ đỏ vì `Pillow` thiếu trong `requirements-dev.txt` (11 test P4.3); đã sửa + thêm test contract chống tái diễn; sau fix 697 pytest trên Linux, 699 trên Windows, 29 race PG, E2E 61/61.
 - [ ] P6.2 API security review: JWT/cookie/CSRF/issuer/audience/secret rotation, login abuse limits, scope checks, uploads/SSRF, redacted logs, session cache isolation.
 - [ ] P6.3 HTTPS/TLS, `COOKIE_SECURE=true`, trusted proxy, CSP, HSTS/cookie domain policy phù hợp deployment, CORS chính xác. Không bật `SameSite=None` bừa bãi.
 - [ ] P6.4 Redis distributed rate limiting và quotas nếu nhiều replicas; network/proxy IP trust; không coi in-memory limiter là production protection.
@@ -806,6 +824,14 @@ Agent lưu nhật ký vào `docs/development-progress.md` theo format sau sau **
 | 2026-11-01 | **P4.2 web/arXiv**: outbound mặc định TẮT + allowlist rỗng; IP phải global-unicast ở cả validate và connect (chống DNS rebinding); redirect validate lại từng hop; robots 5xx ⇒ deny | **CHỌN (an toàn, fail-closed)** | `services/url_fetcher.py`, `tests/test_p42_web_ingest.py` |
 | 2026-11-01 | Quyền sử dụng nguồn do **người dùng xác nhận** (`userConfirmedRights` bắt buộc, 422 nếu thiếu) và lưu audit `rights_confirmed_at`; fetch thành công **không** nâng `verification_status` | **CHỌN (trung thực + pháp lý)** | `services/web_ingest.py`, `api/v1/sources.py` |
 | 2026-11-01 | arXiv chỉ nhận **ID**, host lấy từ config **và** phải nằm trong allowlist; metadata parse bằng `defusedxml` | **CHỌN (chống SSRF/XXE)** | `services/arxiv_service.py` |
+| 2026-11-01 | **P4.3 OCR**: engine pretrained `rapidocr` (ONNX, cục bộ), **opt-in** (mặc định TẮT) + `OCR_MODEL_VERSION` bắt buộc; chỉ OCR trang THIẾU text; chunk mang `textSource`/`ocrConfidence`/`ocrBbox`; bật OCR đổi `pipelineVersion` ⇒ document mới, citation cũ không bị ghi đè | **CHỌN (trung thực + an toàn)** | `services/ocr.py`, `tests/test_p43_ocr.py`, `docs/specs/21-P43-OCR.md` |
+| 2026-11-01 | OCR đo thật: CER EN 0.000 / **VI 0.094 do model rơi dấu**; confidence engine 0.991 **không** dùng làm ngưỡng đúng; corpus synthetic nên **không suy rộng** | **CHỌN (công bố giới hạn)** | `evals/ocr_eval.py` |
+| 2026-11-02 | **P5.0**: review card tạo ở **attempt đầu tiên** (không chỉ ≥80%) để ôn bài yếu là luồng thật; mastery là heuristic half-life 30 ngày (ngưỡng 0.7) — **không** xác suất hiệu chuẩn; prereq thiếu ⇒ chặn + fallback ôn bài yếu | **CHỌN (trung thực + tránh dead-end)** | `spaced_repetition_service.py`, `learner_profile_service.py`, `docs/specs/22-P50-LEARNER-PROFILE.md` |
+| 2026-11-02 | **P5.0**: skill↔lesson map theo **vị trí** `(unit.order_index, lesson.order_index)` vì generation ghi đè `lesson.title`; `skills` upsert theo `(course_id,key)` để không cascade xoá mastery | **CHỌN (đúng dữ liệu)** | `learner_profile_service.backfill_course_skills`, `tests/test_p50_skills.py` |
+| 2026-11-02 | **P5.0**: dùng thư viện `fsrs` 6.3.2 (pure Python) thay vì tự viết; pin `scheduler_version`; tắt fuzzing + `learning_steps=()` để tái lập lịch | **CHỌN (tái lập được)** | `spaced_repetition_service.py`, `requirements.txt` |
+| 2026-11-02 | **P5.2**: tách P5.2a (readiness, research-only) và **P5.2b (exposure logging)** — người dùng **duyệt riêng** phần runtime dù plan cũ ghi P5.2 "chỉ nghiên cứu", vì thiếu exposure thì OPE vĩnh viễn không hợp lệ. Không huấn luyện model, không đổi thứ tự bài, `propensity=1.0` và công bố `opeSupported=false` | **CHỌN (có phê duyệt, trung thực)** | `evals/p52_readiness.py`, `0016_p52_exposure`, `docs/specs/24-P52-ADAPTIVE-READINESS.md` |
+| 2026-11-02 | **P6.1 CI gates**: không dùng `next lint` (wizard tương tác) mà flat config + `--max-warnings=0`; nâng Next 15.1.6→15.5.28 (advisory critical/high) + `overrides.postcss`; bandit sửa `assert` thật, 5 `# nosec` có lý do | **CHỌN (an toàn, tái lập)** | `.github/workflows/ci.yml`, `docs/specs/25-P61-CI-PIPELINE.md` |
+| 2026-11-02 | **P6.1 C1 (Critical)**: seed shuffle `order`/`match` đổi từ `sha256(lessonId:version:blockIndex)` — suy ra được từ dữ liệu public — sang `HMAC-SHA256` với `LESSON_SHUFFLE_SECRET` (fallback `JWT_SECRET`); production thiếu khoá ⇒ lỗi rõ ràng. Xoay khoá làm attempt đang mở chấm sai ⇒ phải rotate cùng `contentVersion` | **CHỌN (chống lộ đáp án)** | `services/lesson_content.py`, `tests/test_grading.py`, `docker-compose.yml` |
 
 ---
 

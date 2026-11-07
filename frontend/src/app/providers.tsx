@@ -9,6 +9,7 @@ import {
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { fetchMe, logoutRequest, type AuthUser } from "@/lib/api";
+import { ThemeProvider } from "@/components/layout/ThemeProvider";
 
 /**
  * Session-aware query cache.
@@ -119,22 +120,6 @@ export function useRequireAuth() {
   return { user, isLoading, isAuthenticated: !!user };
 }
 
-function AuthBar() {
-  const { data: user, isLoading } = useAuth();
-  const logout = useLogout();
-
-  if (isLoading) return <span className="badge">...</span>;
-  if (!user) return null;
-  return (
-    <span className="badge">
-      {user.displayName} · {user.xp} XP{" "}
-      <button className="link-btn" onClick={logout}>
-        Đăng xuất
-      </button>
-    </span>
-  );
-}
-
 function SessionProvider({ children }: { children: React.ReactNode }) {
   const [epoch, setEpoch] = useState(0);
   const resetSession = () => setEpoch((value) => value + 1);
@@ -166,12 +151,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   );
   return (
     <QueryClientProvider client={queryClient}>
-      <SessionProvider>
-        <div className="topbar-auth">
-          <AuthBar />
-        </div>
-        {children}
-      </SessionProvider>
+      <ThemeProvider>
+        <SessionProvider>{children}</SessionProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

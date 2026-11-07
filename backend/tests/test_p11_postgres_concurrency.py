@@ -108,7 +108,9 @@ async def _submit_many(sessionmaker, user_id, lesson_id, attempt_id_fn, count=20
             request = AttemptRequest(
                 clientAttemptId=attempt_id_fn(), contentVersion=1, answers=payload
             )
-            attempt, _dup = await lesson_service.submit_attempt(db, lesson, user, request)
+            attempt, _dup, _created = await lesson_service.submit_attempt(
+                db, lesson, user, request
+            )
             return attempt.id
 
     return await asyncio.gather(*[one(i) for i in range(count)], return_exceptions=True)

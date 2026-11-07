@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
 import { useState } from "react";
 import {
   ApiError,
@@ -18,6 +17,11 @@ import {
   type SourceDocument,
 } from "@/lib/api";
 import { useAuth, useRequireAuth, useSession, useSessionQueryKey } from "../providers";
+import { Button, ButtonLink } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
+import { TextInput } from "@/components/ui/Field";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -36,14 +40,18 @@ function DocRow({
 }) {
   // Chỉ `ready` mới là trạng thái đã có nội dung dùng được; còn lại hiển thị mờ
   // để người dùng không nhầm "đang chờ"/"không có text" là đã xong.
-  const tone = document.status === "ready" ? "" : "badge-muted";
+  const tone = document.status === "ready" ? "success" : "muted";
   const originLabel =
     document.origin === "web" ? "Từ URL" : document.origin === "arxiv" ? "arXiv" : null;
   return (
     <li>
       <strong>{document.originalFilename ?? "tài liệu"}</strong>{" "}
-      <span className={`badge ${tone}`}>{documentStatusLabel(document.status)}</span>
-      {originLabel && <span className="badge badge-muted"> {originLabel}</span>}{" "}
+      <Badge tone={tone}>{documentStatusLabel(document.status)}</Badge>
+      {originLabel && <Badge tone="muted">{originLabel}</Badge>}
+      {document.textSource === "ocr" && (
+        <Badge tone="muted">OCR {document.ocrPages ?? 0} trang</Badge>
+      )}
+      {document.textSource === "mixed" && <Badge tone="muted">text gốc + OCR</Badge>}
       {document.originUrl && (
         <a
           className="link"
@@ -58,6 +66,7 @@ function DocRow({
         {formatBytes(document.byteSize)}
         {document.pageCount != null && ` · ${document.pageCount} trang`}
         {document.status === "ready" && ` · ${document.chunkCount} đoạn text`}
+        {document.status === "ready" && document.textSource === "ocr" && " · do máy đọc"}
         {document.rightsConfirmed && " · đã xác nhận quyền sử dụng"}
         {document.status === "ready" && document.preview && (
           <>
@@ -67,19 +76,14 @@ function DocRow({
         )}
       </div>
       {document.error?.message && (
-        <div className="muted" style={{ color: "#b91c1c" }}>
+        <div className="error-text">
           {document.error.message}
           {document.attempts > 1 && ` (đã thử ${document.attempts} lần)`}
         </div>
       )}
-      <button
-        type="button"
-        className="link-btn"
-        disabled={busy}
-        onClick={onDelete}
-      >
+      <Button variant="text" size="sm" disabled={busy} onClick={onDelete}>
         Xóa tài liệu
-      </button>
+      </Button>
     </li>
   );
 }
@@ -140,12 +144,18 @@ export default function SourcesPage() {
     mutationFn: async ({ sourceId, file }: { sourceId: string; file: File }) => {
       return uploadSourceDocument(sourceId, file);
     },
-    onSuccess: (document, variables) => {
+    onSuccess: (document) => {
       setStatus(
         document.status === "ready"
-          ? "Đã trích xuất xong nội dung PDF."
+          ? document.textSource === "ocr"
+            ? "Đã đọc PDF scan bằng OCR — hãy kiểm tra lại nội dung trước khi dùng."
+            : document.textSource === "mixed"
+              ? "Đã trích xuất text gốc và OCR các trang scan."
+              : "Đã trích xuất xong nội dung PDF."
           : document.status === "no_text"
-            ? "PDF không có lớp text (có thể là bản scan); OCR chưa được bật."
+            ? document.error?.code === "OCR_NO_TEXT"
+              ? "OCR chạy xong nhưng không đọc được chữ nào trên tài liệu."
+              : "PDF không có lớp text (có thể là bản scan); OCR chưa được bật."
             : "Đang xử lý tài liệu…"
       );
       setError("");
@@ -164,7 +174,7 @@ export default function SourcesPage() {
   const removeDocument = useMutation({
     mutationFn: ({ sourceId, documentId }: { sourceId: string; documentId: string }) =>
       deleteSourceDocument(sourceId, documentId),
-    onSuccess: (_result, variables) => {
+    onSuccess: () => {
       setStatus("Đã xóa tài liệu.");
       invalidateSourceData();
     },
@@ -184,7 +194,16 @@ export default function SourcesPage() {
     },
   });
 
-  if (authLoading) return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;
+  if (authLoading) {
+    return (
+      <div className="container">
+        <div style={{ display: "grid", gap: 16 }}>
+          <Skeleton height={28} width="40%" />
+          <Skeleton height={180} />
+        </div>
+      </div>
+    );
+  }
   if (!isAuthenticated)
     return <div className="container">Đang chuyển tới trang đăng nhập…</div>;
 
@@ -192,15 +211,31 @@ export default function SourcesPage() {
 
   return (
     <div className="container">
-      <div className="topbar">
-        <h1>Tài liệu của tôi</h1>
-        <Link href="/" className="link">
+      <header
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 16,
+          flexWrap: "wrap",
+          marginBottom: 20,
+        }}
+      >
+        <div>
+          <span className="eyebrow">Nguồn học liệu</span>
+          <h1 className="page-title" style={{ margin: "4px 0 0" }}>
+            Tài liệu của tôi
+          </h1>
+        </div>
+        <ButtonLink href="/" variant="ghost" size="sm">
           ← Trang chủ
-        </Link>
-      </div>
+        </ButtonLink>
+      </header>
 
-      <div className="card">
-        <h2>Tải lên PDF</h2>
+      <Card>
+        <h2 className="section-title" style={{ marginTop: 0 }}>
+          Tải lên PDF
+        </h2>
         <p className="muted">
           Chỉ tải tài liệu bạn có quyền sử dụng. File được lưu private và chỉ dùng để trích
           xuất text phục vụ học tập.
@@ -226,48 +261,90 @@ export default function SourcesPage() {
             {config.data.maxPdfPages} trang mỗi file.
           </p>
         )}
+        {config.data && !config.data.ocrConfigured && (
+          <div className="notice-box">
+            OCR cho PDF scan đang <strong>tắt</strong>. Tài liệu scan (ảnh, không có lớp
+            text) sẽ ở trạng thái «không có lớp text» — hệ thống không tự đoán nội dung.
+          </div>
+        )}
+        {config.data && config.data.ocrConfigured && (
+          <p className="muted">
+            OCR đang bật: engine <code>{config.data.ocrEngine}</code> /{" "}
+            <code>{config.data.ocrVersion}</code>, tối đa {config.data.ocrMaxPages} trang
+            OCR mỗi tài liệu, render {config.data.ocrDpi} DPI. Text do máy đọc được ghi
+            nhãn <strong>OCR</strong> và có thể sai (đặc biệt dấu tiếng Việt) — xem lại
+            trước khi dùng làm căn cứ.
+          </p>
+        )}
         {config.data && !uploadReady && (
           <div className="notice-box">
             Kho lưu trữ hoặc tính năng ingest chưa được cấu hình trên server. Bạn vẫn có
             thể tạo nguồn, nhưng chưa tải được file.
           </div>
         )}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <input
-            type="text"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Tên tài liệu (ví dụ: Giáo trình Python)"
-            maxLength={300}
-            style={{ flex: "1 1 260px" }}
-          />
-          <input
-            type="text"
-            value={language}
-            onChange={(event) => setLanguage(event.target.value)}
-            placeholder="Ngôn ngữ"
-            maxLength={20}
-            style={{ flex: "0 0 120px" }}
-          />
-          <button
-            type="button"
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "flex-end",
+            marginTop: 12,
+          }}
+        >
+          <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+            <TextInput
+              id="source-title"
+              type="text"
+              label="Tên tài liệu"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Ví dụ: Giáo trình Python"
+              maxLength={300}
+            />
+          </div>
+          <div style={{ flex: "0 0 120px" }}>
+            <TextInput
+              id="source-language"
+              type="text"
+              label="Ngôn ngữ"
+              value={language}
+              onChange={(event) => setLanguage(event.target.value)}
+              placeholder="vi"
+              maxLength={20}
+            />
+          </div>
+          <Button
+            variant="primary"
+            size="md"
             disabled={createSource.isPending}
             onClick={() => createSource.mutate()}
+            className="source-create-btn"
           >
-            Tạo nguồn
-          </button>
+            {createSource.isPending ? "Đang tạo…" : "Tạo nguồn"}
+          </Button>
         </div>
-        {error && <div className="error-box">{error}</div>}
+        {error && (
+          <div className="error-box" role="alert">
+            {error}
+          </div>
+        )}
         {status && <div className="notice-box">{status}</div>}
-      </div>
+      </Card>
 
       {config.data?.ragEnabled && <RagSearchCard sourceCount={sources.data?.total ?? 0} />}
 
-      <div className="card">
-        <h2>Nguồn đã đăng ký ({sources.data?.total ?? 0})</h2>
-        {sources.isLoading && <p>Đang tải…</p>}
+      <Card>
+        <h2 className="section-title" style={{ marginTop: 0 }}>
+          Nguồn đã đăng ký ({sources.data?.total ?? 0})
+        </h2>
+        {sources.isLoading && (
+          <div style={{ display: "grid", gap: 12 }}>
+            <Skeleton height={64} />
+            <Skeleton height={64} />
+          </div>
+        )}
         {sources.isError && (
-          <div className="error-box">
+          <div className="error-box" role="alert">
             Không tải được danh sách nguồn: {sources.error.message}
           </div>
         )}
@@ -302,7 +379,7 @@ export default function SourcesPage() {
             deleteBusy={removeSource.isPending && removeSource.variables === source.id}
           />
         ))}
-      </div>
+      </Card>
     </div>
   );
 }
@@ -313,8 +390,10 @@ export default function SourcesPage() {
  */
 function RagSearchCard({ sourceCount }: { sourceCount: number }) {
   return (
-    <div className="card">
-      <h2>Tìm kiếm tài liệu</h2>
+    <Card variant="tint">
+      <h2 className="section-title" style={{ marginTop: 0 }}>
+        Tìm kiếm tài liệu
+      </h2>
       <p className="muted">
         Tìm kiếm chạy trong phạm vi một khóa học đã liên kết nguồn — không phải toàn bộ
         tài khoản. Mở khóa học và dùng trợ giảng ở bài học để nhận câu trả lời kèm trích
@@ -324,7 +403,7 @@ function RagSearchCard({ sourceCount }: { sourceCount: number }) {
         Bạn có {sourceCount} nguồn. Trích dẫn chỉ hiển thị khi đoạn nguồn thực sự được
         truy xuất và khớp với chunk đã lưu.
       </p>
-    </div>
+    </Card>
   );
 }
 
@@ -401,19 +480,21 @@ function SourceCard({
   }
 
   return (
-    <div className="source-card" style={{ borderTop: "1px solid #e3e6ee", paddingTop: 12 }}>
-      <strong>{title}</strong>{" "}
-      <span className={`badge ${contentHash ? "" : "badge-muted"}`}>
-        {verificationLabel(verificationStatus)}
-      </span>
-      {language && <span className="muted"> · {language}</span>}
-      <div className="muted">
+    <div className="source-item">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <strong>{title}</strong>
+        <Badge tone={contentHash ? "accent" : "muted"}>
+          {verificationLabel(verificationStatus)}
+        </Badge>
+        {language && <span className="caption">{language}</span>}
+      </div>
+      <p className="caption">
         {contentHash
           ? `Nội dung đã trích xuất (hash ${contentHash.slice(0, 12)}…)`
           : "Chưa có nội dung được trích xuất."}
-      </div>
+      </p>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0", alignItems: "center" }}>
         <input
           type="file"
           accept="application/pdf,.pdf"
@@ -421,9 +502,13 @@ function SourceCard({
           disabled={!uploadReady || uploadBusy}
           aria-label={`Chọn PDF cho ${title}`}
         />
-        {uploadBusy && <span className="muted">Đang tải lên…</span>}
+        {uploadBusy && <span className="caption">Đang tải lên…</span>}
       </div>
-      {localError && <div className="error-box">{localError}</div>}
+      {localError && (
+        <div className="error-box" role="alert">
+          {localError}
+        </div>
+      )}
 
       {webEnabled && (
         <WebIngestForm
@@ -436,15 +521,22 @@ function SourceCard({
         />
       )}
 
-      {documents.isLoading && <p className="muted">Đang tải tài liệu…</p>}
+      {documents.isLoading && (
+        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+          <Skeleton height={20} width="60%" />
+          <Skeleton height={20} width="45%" />
+        </div>
+      )}
       {documents.isError && (
-        <div className="error-box">Không tải được tài liệu: {documents.error.message}</div>
+        <div className="error-box" role="alert">
+          Không tải được tài liệu: {documents.error.message}
+        </div>
       )}
       {documents.data && documents.data.items.length === 0 && (
-        <p className="muted">Chưa có file nào cho nguồn này.</p>
+        <p className="caption">Chưa có file nào cho nguồn này.</p>
       )}
       {documents.data && documents.data.notice && (
-        <p className="muted">{documents.data.notice}</p>
+        <p className="caption">{documents.data.notice}</p>
       )}
       {documents.data && documents.data.items.length > 0 && (
         <ul className="source-list">
@@ -459,14 +551,9 @@ function SourceCard({
         </ul>
       )}
 
-      <button
-        type="button"
-        className="link-btn"
-        disabled={deleteBusy}
-        onClick={onDeleteSource}
-      >
+      <Button variant="text" size="sm" disabled={deleteBusy} onClick={onDeleteSource}>
         Xóa nguồn
-      </button>
+      </Button>
     </div>
   );
 }
@@ -527,14 +614,22 @@ function WebIngestForm({
   });
 
   return (
-    <div style={{ margin: "12px 0", paddingTop: 8, borderTop: "1px dashed #e3e6ee" }}>
-      <div className="muted" style={{ marginBottom: 6 }}>
+    <div className="web-ingest">
+      <p className="caption" style={{ marginBottom: 8 }}>
         Hoặc ingest từ nguồn web{arxivEnabled ? "/arXiv" : ""} — chỉ dùng nội dung bạn có
         quyền sử dụng.
         {webRespectRobots && " Server sẽ tôn trọng robots.txt của trang nguồn."}
         {maxBytes > 0 && ` Giới hạn ${formatBytes(maxBytes)} mỗi lần tải.`}
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+      </p>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          flexWrap: "wrap",
+          marginBottom: 8,
+          alignItems: "center",
+        }}
+      >
         <select
           value={mode}
           onChange={(event) => setMode(event.target.value as "url" | "arxiv")}
@@ -552,15 +647,16 @@ function WebIngestForm({
           maxLength={2048}
           style={{ flex: "1 1 300px" }}
         />
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           disabled={ingest.isPending || !rights || !value.trim()}
           onClick={() => ingest.mutate()}
         >
           {ingest.isPending ? "Đang tải…" : "Ingest"}
-        </button>
+        </Button>
       </div>
-      <label className="muted" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <label className="caption" style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <input
           type="checkbox"
           checked={rights}
@@ -568,7 +664,11 @@ function WebIngestForm({
         />
         Tôi xác nhận có quyền sử dụng và ingest nội dung này cho mục đích học tập.
       </label>
-      {localError && <div className="error-box">{localError}</div>}
+      {localError && (
+        <div className="error-box" role="alert">
+          {localError}
+        </div>
+      )}
       {localStatus && <div className="notice-box">{localStatus}</div>}
     </div>
   );

@@ -1,0 +1,34 @@
+# P4.3 — OCR tiếng Việt chất lượng cao (engine `vietocr`), TÙY CHỌN, KHÔNG cài mặc định.
+#
+# Vì sao có file này: model ONNX của rapidocr (PP-OCRv6) có charset 37.415 ký tự
+# nhưng THIẾU nguyên âm tiếng Việt có dấu thanh (ấ/ố/ệ/…). Đã kiểm chứng bằng
+# metadata `character` của file ONNX. Hệ quả đo được: CER tiếng Việt ≈ 9,4%,
+# "Cấu trúc" → "Cu trúc". Đổi DPI/model-size/PP-OCRv4-v5 đều KHÔNG cải thiện.
+#
+# VietOCR = recognizer Transformer (VGG-Transformer) pretrained tiếng Việt, ghép với
+# detector của rapidocr. Đo trên cùng corpus (`python -m evals.ocr_eval --compare`):
+#   rapidocr  CER 0.0470 / WER 0.2068 / ~3.0 s/trang
+#   vietocr   CER 0.0043 / WER 0.0208 / ~4.6 s/trang
+#
+# Cài đặt (thứ tự quan trọng trên Windows):
+#   1. pip install -r requirements-ocr.txt          # detector + renderer
+#   2. pip install -r requirements-ocr-vietocr.txt  # recognizer tiếng Việt
+#
+# Lưu ý:
+#   - `vietocr` 0.3.13 trên PyPI có setup.py lỗi khi build (KeyError/UnicodeDecodeError:
+#     đọc README bằng cp1258 trên Windows). Cài trực tiếp từ GitHub:
+#       git clone --depth 1 https://github.com/pbcquoc/vietocr.git
+#       # sửa setup.py: open("README.md", "r", encoding="utf-8")
+#       pip install -e vietocr --no-deps
+#   - `torch` + `torchvision` phải cùng phiên bản (ví dụ torch 2.7.1 ↔ torchvision 0.22.1).
+#   - Weight `vgg_transformer.pth` (~100MB) phải có sẵn; ingest KHÔNG tự tải từ mạng.
+#     Đặt đường dẫn tuyệt đối qua `OCR_VIETOCR_WEIGHTS`.
+#   - Env: OCR_ENGINE=vietocr, OCR_MODEL_VERSION=vgg_transformer (bắt buộc), OCR_LANG=vi.
+torch>=2.2
+torchvision>=0.17
+einops>=0.8
+albumentations>=1.4
+lmdb>=1.0
+scikit-image>=0.21
+pillow>=10.2
+gdown>=4.4

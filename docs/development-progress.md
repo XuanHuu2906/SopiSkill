@@ -2,6 +2,1175 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-04 — P1-QUIZ-BLANK — một blank block chỉ được có đúng một chỗ trống, một đáp án
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Không commit, không push.
+- Git status trước/sau: 15 file modified + 8 path untracked **không bị chạm**. Phase này chỉ thêm
+  2 file test/scaratch và sửa 2 file backend (xem dưới). `frontend/**` modified là từ phase trước,
+  không thay đổi trong phase này.
+- **Vấn đề:** 7/333 blank block trong 338 bài đã lưu có **2 chỗ trống nhưng chỉ 1 đáp án** ⇒ câu
+  không thể trả lời trọn vẹn. Nguyên nhân: `_validate_block` không đếm số chỗ trống, và
+  `_mask_answer_in_sentence` có thể tạo **chỗ trống thứ hai** khi câu đã có marker mà đáp án còn
+  xuất hiện trong phần chữ.
+- **Vì sao chọn "reject" thay vì hỗ trợ multi-blank:** hợp đồng hiện tại chỉ hỗ trợ một chỗ trống ở
+  4 tầng độc lập — `BlankBlock.answer: str` (không có `blanks[]`), `grade_blank` so nguyên chuỗi,
+  frontend render đúng **một** `<input>` và gửi một chuỗi, `public_block` chỉ gửi `sentence`.
+  Hỗ trợ 2+ chỗ trống là thay đổi hợp đồng cỡ M, ngoài phạm vi phase này.
+- Files changed (production):
+  - `backend/app/providers/validation.py` — thêm `BLANK_SLOT_COUNT = 1` + `_count_blank_slots()`
+    (đếm marker rõ `_{3,}` / `[...]` trước, chỉ đoán `…`/`...` khi không có marker rõ — vì `...`
+    trong dữ liệu thật là cú pháp code); `_mask_answer_in_sentence` **không tạo thêm chỗ trống**
+    khi câu đã có marker; blank branch yêu cầu đúng 1 chỗ trống.
+  - `backend/app/worker/generation.py` — gọi `validate_lesson(content)` trước khi ghi lesson, buộc
+    "nội dung sai schema không được lưu `ready`" ở ranh giới hệ thống (trước đây chỉ provider
+    OpenAI tự validate; MockProvider và provider giả lập không).
+- Files added (test): `backend/tests/test_quiz_blank.py` (14 test offline), thêm
+  `test_invalid_blank_content_is_never_saved_ready` vào `backend/tests/test_job_reliability.py`.
+- **Tái hiện trước khi sửa:** 14 test mới → 4 fail (`2 gap/1 answer` được chấp nhận, `[...]` ×2
+  được chấp nhận, repair tạo `'____ là gì? Điền: ____'` 2 chỗ trống, 0-gap với đáp án ngoài câu
+  được chấp nhận). Sau sửa: 14/14 pass.
+- **Chống test rỗng:** tạm tắt `validate_lesson(content)` trong worker ⇒ test worker fail; bật lại
+  ⇒ pass.
+- **Lint dữ liệu thật (read-only, không sửa nội dung):** 346 bài, 341 blank / 7 sai số chỗ trống,
+  335 short / **0** thiếu `acceptedAnswers`. 8 bài mới sinh sau fix (từ E2E trên container mới)
+  **không** thêm blank sai nào ⇒ cùng 7 hàng cũ. 7 hàng này **không bị rewrite** (không đổi nghĩa
+  câu hỏi).
+- **Lint offline 12 topic eval:** 12 case → 48 bài → 48 blank, 0 sai, `validate_lesson` pass hết.
+- Kiểm chứng chạy thật: `pytest` → **714 passed, 29 skipped** (baseline 699 + 15 test mới, 0
+  regression); `npx tsc --noEmit` → 0 lỗi; `npm run build` → 11/11 route; `e2e_acceptance.py`
+  trên container rebuild (mock, `TUTOR_ENABLED=false`) → **61/61 PASS**, gồm quiz 5/5 (`xpEarned=70`),
+  replay `xpEarned=0`, progress 25 %, stale `contentVersion` → 409, tutor 503 `TUTOR_DISABLED`.
+- NOT TESTED: browser UI (không có harness); provider thật; benchmark pass-rate sau khi siết
+  validator trên nội dung **mới** (chỉ mock + dataset offline).
+- BLOCKED: không có gì chặn phase này. Vấn đề Celery worker host cũ vẫn mở — ghi ở báo cáo riêng,
+  **không kill process, không xóa dữ liệu**.
+- Ghi chú lệch chuẩn: audit `07-gap-backlog.md` đề xuất severity `warning` trước rồi mới `error`;
+  phase này làm `error` ngay theo chỉ đạo trực tiếp của người dùng. Nội dung cũ không bị ảnh hưởng
+  (validator chỉ chạy khi sinh mới/regenerate).
+- Báo cáo chi tiết: `docs/audits/p1-quiz-blank-2026-11-04/P1-QUIZ-BLANK-RESULT.md`.
+
+## 2026-11-04 — FRONTEND FR-5 — Tutor dock cạnh bài học thay vì phủ lên (sửa một FACT sai)
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Không tạo
+  commit (theo chỉ đạo của người dùng).
+- Git status: `M frontend/src/app/globals.css`, `M frontend/src/app/lesson/[lessonId]/page.tsx`,
+  `M frontend/src/app/lesson/[lessonId]/TutorPanel.tsx`, `M frontend/src/components/ui/useModalPanel.ts`,
+  `A frontend/src/components/ui/useMediaQuery.ts`; docs: `visual-comparison.md`, `decisions.md`,
+  `interaction-map.md`, `accessibility-review.md`, file này. Screenshot mới:
+  `local-tutor-docked-{1440x900, dark-1440x900}.png`, `local-tutor-{768x1024, 390x844}.png`.
+- Reference observed: `tutor-open-1440x900.png` (reference, 1440×900, light, cùng lesson h1
+  "Python cho người mới là gì?"). Quét từng hàng pixel bằng `pngscan.mjs`/`rowscan.mjs`.
+- NOT OBSERVED: trạng thái tutor-open của reference ở 768 và 390 — chỉ có ảnh 1440 nên
+  reference hành xử thế nào ở hai bề rộng đó là **UNKNOWN**.
+- Mục tiêu và phạm vi: hai tài liệu cũ của chính dự án ghi sai về tutor. `decisions.md` D-08
+  viết "sheet rộng ~360–380 px, chấp nhận sai lệch nhỏ"; `visual-comparison.md` ghi delta là
+  "chiều rộng". Đo lại thì cả hai đều sai: reference **dock** rail 400 px chứ không overlay,
+  và đó là khác biệt mô hình tương tác, không phải khác biệt kích thước. Phase này sửa code
+  theo đúng evidence đã đo.
+- Files changed:
+  - `globals.css` — thêm token `--dock-width: 400px`; khối `@media (min-width: 1024px)`:
+    `.app-content` đệm phải 400 px khi `.lesson-page.is-docked`, `.lesson-bar` đặt
+    `right: var(--dock-width)`, `.tutor-sheet.is-docked` rộng 400 px, `.tutor-backdrop.is-docked`
+    `display: none`. **Giữ nguyên `--shadow-rail`** — đo lại thì bóng ngược sang trái khớp
+    reference từng pixel, nên override `box-shadow: none` ban đầu là sai và đã bỏ.
+  - `components/ui/useMediaQuery.ts` — **mới**. `useSyncExternalStore` + `matchMedia`,
+    trả `false` khi SSR để markup và hydration khớp nhau.
+  - `components/ui/useModalPanel.ts` — thêm tham số `modal = true`. Khi `false`: không bẫy
+    Tab, không quét `inert`; vẫn giữ Escape và trả focus. Không fork hook.
+  - `lesson/[lessonId]/TutorPanel.tsx` — prop `docked?: boolean` → `modal: !docked`,
+    class `is-docked` cho backdrop và sheet, `aria-modal={docked ? undefined : "true"}`;
+    `<aside role="dialog">` → `<div role="dialog">` (xem mục sửa lỗi a11y bên dưới),
+    `sheetRef` đổi kiểu sang `HTMLDivElement`.
+  - `lesson/[lessonId]/page.tsx` — `useMediaQuery("(min-width: 1024px)")` → `tutorDocked`
+    → class `is-docked` trên `.lesson-page` và prop `docked` cho `TutorPanel`;
+    `OutlineSheet` cũng đổi `<aside>` → `<div>`, `sheetRef` sang `HTMLDivElement`.
+- IMPLEMENTED:
+  - Dock ở ≥1024 px: trang giữ nền paper, không scrim, vẫn tương tác được; cột đọc 720 px
+    dời sang trái và tái căn giữa vào 1040 px còn lại.
+  - Overlay giữ nguyên ở <1024 px (không đủ chỗ cho cả cột 720 px lẫn rail 400 px).
+  - Hai mô hình bàn phím: overlay modal (bẫy Tab + `inert` + `aria-modal`), dock phi modal
+    (Escape + trả focus, không bẫy).
+- TESTED (production build `next start` port 3001, `NEXT_PUBLIC_API_URL=http://localhost:8001`,
+  Chrome CDP 1440×900, `npx tsc --noEmit` exit 0):
+  - `docked: true`, `sheetDocked: true`, `aria-modal` **null**, `role: "dialog"`,
+    backdrop `display: none`, `appPadR: "400px"`, `pageBg: rgb(241,236,253)`.
+  - Hình học đóng → mở: cột `x 360 → 160`, track `x 345 → 145` (w 708 không đổi),
+    CTA `x 860 → 660`, bar `0..1440 → 0..1040`, sheet `x 1040 w 400`.
+  - Quét pixel `local-tutor-docked-1440x900.png` y=450: paper `241,236,253` đến x=1039,
+    hairline `230,222,250` tại x=1040, rail `252,250,255` từ x=1041.
+  - **Bóng rail khớp reference từng byte**: dải gradient từ x=993 (`240,235,252`) tới
+    x=1039 (`223,215,241`) trùng khít ảnh reference, kể cả hàng đáy y=884.
+  - Dark 1440×900: paper `18,14,32` → hairline `48,39,72` → rail `25,20,48`, bóng
+    `17,14,31 → 13,10,24`; hình học y hệt light.
+  - Overlay 768×1024: `docked: false`, `aria-modal: "true"`, backdrop phủ kín `768×1024`
+    màu `rgba(36,28,59,0.42)`, sheet x=388 w=380.
+  - Overlay 390×844: `docked: false`, `aria-modal: "true"`, sheet phủ kín x=0 w=390,
+    `scrollWidth = innerWidth = 390` (không tràn ngang).
+  - **Bàn phím (CDP `Input.dispatchKeyEvent`, không phải sự kiện tổng hợp):** từ
+    `#tutor-input`, `Tab` → `BODY` → `btn btn-icon` ×2 → `lesson-bar-secondary`, mọi bước đều
+    `inSheet: false`. Rail dock **không** bẫy Tab — đúng thiết kế phi modal.
+  - **Mặt ngược lại, overlay 768×1024 vẫn bẫy:** 8 lần Tab liên tiếp từ `#tutor-input` luân
+    phiên `#tutor-input ↔ .btn.btn-icon` (nút đóng), `inSheet: true` ở **cả 8** bước. Hai
+    hợp đồng bàn phím bổ sung nhau và cùng được đo sau khi đổi `<aside>` → `<div>`.
+  - **axe-core chạy lại sau khi đổi layout, 5 bề mặt** (`axe.run(document, {resultTypes:
+    ['violations']})`, bản production):
+
+    | Bề mặt | `tag` | `role` | `aria-modal` | violations |
+    |---|---|---|---|---|
+    | Rail dock 1440×900 light | `DIV` | `dialog` | null | `[]` |
+    | Rail dock 1440×900 dark | `DIV` | `dialog` | null | `[]` |
+    | Overlay 768×1024 | `DIV` | `dialog` | `true` | `[]` |
+    | Overlay 390×844 | `DIV` | `dialog` | `true` | `[]` |
+    | Outline sheet 1440×900 | `DIV` | `dialog` | `true` | `[]` |
+
+  - Sau khi đổi `<aside>` → `<div>`, đo lại hình học dock: cột `x 160 w 720`, track
+    `x 145 w 708`, CTA `x 660 w 220`, bar `0..1040`, sheet `x 1040 w 400`,
+    `appPadR "400px"`, `pageBg rgb(241,236,253)`, focus `tutor-input` — **không đổi số nào**.
+    Dark cũng vậy (paper `18,14,32`, hairline `48,39,72`, rail `25,20,48`).
+  - Hàng đáy y=884 của ảnh reference và ảnh local trùng khít từng byte cho tới rail:
+    `... 1038-1039 (2) 247,244,252 · 1040 (1) 230,222,250 · 1041-1439 rail`.
+- Lỗi a11y phát hiện và đã sửa trong entry này:
+  - `aria-allowed-role` — `"ARIA role dialog is not allowed for given element"` trên
+    `<aside class="tutor-sheet …" role="dialog">`. `<aside>` mang role ngầm `complementary`,
+    ARIA cấm ghi đè bằng `dialog`. Xuất hiện ở **cả 4** bề mặt (dock, 768, 390, outline).
+  - Điều này **bác bỏ** tuyên bố "0 violations" trong entry FR-4b. Đã thêm đính chính ở entry
+    đó và viết lại mục tương ứng trong `accessibility-review.md`.
+  - Sửa: cả hai sheet dùng `<div>` — kiểu phần tử giữ nguyên qua breakpoint nên resize không
+    remount panel; không có CSS nào bám vào tên thẻ `aside` (đã grep toàn `src/` và
+    `globals.css`, không match).
+- NOT TESTED: NVDA/VoiceOver chưa chạy; Playwright/E2E chưa có (mọi phép đo vẫn lái tay qua
+  CDP).
+- BLOCKED: không. Port 3000 bị container Docker `reverseengineer-frontend-1` giữ (proxy
+  Docker nên `netstat` trên Windows không thấy LISTENING) — đó là lý do mọi lần
+  `next start -p 3000` trả `EADDRINUSE` dù cổng "trông trống". Đo trên 3001 thay thế.
+- API contract / security review: không đổi `lib/api.ts`, query key, cookie/CSRF, polling,
+  `clientAttemptId`, hay chấm điểm phía server. Toàn bộ thay đổi nằm trong layout và hook UI.
+- Visual comparison: **MATCHED** ở 1440×900 (light + dark) cho mô hình tương tác và hình học.
+  <1024 px vẫn là overlay — lựa chọn có chủ đích, đã ghi trong `decisions.md` D-08.
+- Regression results: `tsc --noEmit` sạch; route lesson/quiz không đổi hành vi; outline sheet
+  vẫn modal (không truyền `docked`) và vẫn `aria-modal="true"` sau khi đổi thẻ; build
+  production exit 0.
+- Known limitations: reference chỉ có ảnh tutor-open ở 1440 nên ngưỡng 1024 px là **PROPOSAL**
+  của SopiSkill, không phải số đo. Shadow khớp trên ảnh PNG nhưng độ phân giải màu 8-bit
+  không chứng minh khớp tuyệt đối trên mọi điểm ảnh.
+- Rollback: revert diff frontend là đủ; không có migration, không đụng backend.
+- PHASE GATE: **PASS** cho phạm vi FR-5 kèm đính chính — code, hình học dock, 2 theme,
+  3 viewport, Tab rời rail, và axe-core trên 5 bề mặt đều đã đo. Không còn khoảng trống
+  nào trong phạm vi phase này. (Lỗi `aria-allowed-role` được phát hiện chính nhờ lần chạy
+  axe bổ sung — đây là lý do gate trước đó để PARTIAL.)
+- NEXT: (1) Playwright E2E phủ tạo → proposal → generating → lesson → quiz, kèm assertion
+  Tab rời rail ở ≥1024 px và Tab bị giữ trong overlay ở <1024 px; (2) smoke test NVDA thật
+  cho luồng lesson + quiz.
+
+## 2026-11-04 — FRONTEND FR-4b — Hợp đồng modal cho hai sheet của lesson
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Không tạo
+  commit (theo chỉ đạo của người dùng).
+- Git status: thêm `frontend/src/components/ui/useModalPanel.ts` (mới) và sửa
+  `lesson/[lessonId]/page.tsx`, `lesson/[lessonId]/TutorPanel.tsx`.
+- Reference observed: không khảo sát mới. Đây là lỗi a11y nội tại của bản dựng hiện tại,
+  không phải khoảng cách so với PolySkill.
+- Mục tiêu: đóng khoảng trống "focus trap chưa đo" mà entry FR-4 để lại, cho **cả hai**
+  overlay của lesson (tutor sheet và outline sheet) chứ không riêng tutor.
+- Files changed:
+  - `frontend/src/components/ui/useModalPanel.ts` — **mới**. Hook dùng chung: `Escape` đóng,
+    Tab/Shift+Tab quấn trong panel, focus ban đầu theo selector, quét `inert` ngược chuỗi
+    ancestor, trả focus về phần tử đã mở. `onClose` giữ trong ref để prop arrow inline không
+    làm effect chạy lại mỗi lần cha render.
+  - `lesson/[lessonId]/TutorPanel.tsx` — bỏ effect Escape-only; `<aside>` thành
+    `role="dialog" aria-modal="true" aria-labelledby="tutor-heading"`; focus ban đầu vào
+    `#tutor-input`; backdrop `tabIndex={-1}`.
+  - `lesson/[lessonId]/page.tsx` — cùng thay đổi cho `OutlineSheet`; focus ban đầu vào
+    `.outline-item.is-active` để người dùng bàn phím tiếp tục từ bước đang xem.
+  - Docs: `accessibility-review.md` (hàng bảng + mục mới "Overlay sheet modal contract"),
+    `component-mapping.md` (thêm hook vào inventory), file này.
+- IMPLEMENTED:
+  - `role="dialog"` + `aria-modal="true"` + `aria-labelledby` trên cả hai sheet.
+  - Tab và Shift+Tab quấn trong tập focusable của panel (lọc theo phần tử đang render).
+  - Quét `inert` dọc chuỗi ancestor của panel, bỏ qua `.tutor-backdrop` vì nó là target
+    click-để-đóng; gỡ sạch khi đóng.
+  - Trả focus về đúng phần tử đã mở sheet.
+- TESTED (production build, `next start` port 3001, Chrome CDP):
+  - Tutor sheet: `role=dialog`, `aria-modal=true`, `aria-labelledby=tutor-heading`, focus ban
+    đầu `TEXTAREA#tutor-input`, Tab chỉ chạy giữa composer và nút đóng, `Escape` trả focus về
+    `BUTTON|Hỏi trợ giảng`.
+  - Outline sheet: focus ban đầu `.outline-item.is-active` với `aria-current="step"`; vòng Tab
+    **7 phần tử** (bước 1→2→3→4→5→6→đóng→quấn về bước 1), `insideSheet: true` ở mọi bước,
+    không thoát ra trang.
+  - `inert` khi mở outline: 15 phần tử ngoài sheet, **14** có ancestor `inert`; phần tử còn
+    lại là nút đóng của chính sheet. `document.querySelectorAll('[inert]').length = 11`.
+  - Focus lập trình vào nút nền `Đóng bài học` khi sheet mở: **bị chặn**, `activeElement`
+    vẫn ở `.outline-item.is-active`.
+  - Sau `Escape`: `sheetPresent=false`, `inertLeft=0`, `restoredTo="Mục lục bài học"`,
+    `isOutlineTrigger=true`; sau đó nút nền focus được trở lại.
+  - axe-core (wcag2a/2aa/2.1a/2.1aa) ở ba trạng thái — trang nền, tutor mở, outline mở —
+    **0 vi phạm** ở cả ba. **[ĐÍNH CHÍNH 2026-11-04: kết quả này SAI.]** Chạy lại sau khi
+    dock (entry FR-5) phát hiện `aria-allowed-role` trên `<aside role="dialog">` ở **cả**
+    hai sheet và cả ba viewport — tức là vi phạm đã tồn tại ngay từ entry này. Lần chạy cũ
+    gần như chắc chắn không thực thi `axe.run` (script inject lỗi, kết quả rỗng bị đọc thành
+    "0 vi phạm"); đó là suy đoán, vì lần chạy đó không ghi lại danh tính phần tử được quét.
+    Đã sửa: cả hai sheet chuyển sang `<div role="dialog">`. Chi tiết ở entry FR-5.
+  - `npx tsc --noEmit` → không lỗi; `npm run lint` → không vấn đề; build production xanh
+    (route lesson 11.5 kB).
+  - Ảnh nốt các khoảng trống còn lại của lưới chụp (cùng ngày, cùng phiên test): dark cho
+    `/login`, `/new/interview`, `/new/proposal`, `/new/generating`; 390×844 cho
+    `/new/interview` và `/new/proposal`; và trạng thái **đang sinh** thật của
+    `/new/generating` (dark 1440 + light 390) trên khoá mới mint. Mỗi ảnh đã mở lại và xác
+    nhận đúng màn. `/new/generating` chỉ chụp được trạng thái chưa kết thúc — route tự
+    redirect sang `/course/{id}` ngay khi sinh xong.
+- Nguyên nhân gốc đã tìm và sửa:
+  1. **Escape-only, không trap.** Cả hai sheet đăng ký một handler `keydown` chỉ xử lý
+     `Escape`. `Tab` đi thẳng ra thanh điều hướng phía sau, nên người dùng bàn phím rời khỏi
+     sheet mà không hay.
+  2. **`aria-modal` chưa từng được đặt.** Không có `role="dialog"`, nên trình đọc màn hình
+     coi hai sheet là một khối `aside` trong luồng nội dung bình thường.
+  3. **`aria-modal` một mình là không đủ.** Nó chỉ là gợi ý cho AT; DOM vẫn để nền truy cập
+     được bằng focus lập trình. Phải thêm `inert` thật.
+  4. **Bẫy `onClose` trong deps.** Mọi call site truyền arrow inline, nên đưa `onClose` vào
+     dep array sẽ chạy lại effect mỗi lần cha render — với focus trap thì đó là kéo focus về
+     giữa lúc đang gõ. Giải bằng `onCloseRef`.
+- NOT TESTED:
+  - Screen-reader thật (NVDA/VoiceOver) — **NOT MEASURED**. Đã đo ở mức DOM, chưa đo thứ tự
+    announcement.
+  - Playwright/E2E; mọi bước trên vẫn lái tay qua CDP.
+  - Không thử sheet lồng nhau (hiện tại không có luồng nào mở hai sheet cùng lúc).
+- BLOCKED / API GAP: không thêm. Register giữ **15** mục; thay đổi này thuần client, không
+  chạm endpoint nào.
+- API contract / security review: không đổi `lib/api.ts`, không đổi payload, không đổi
+  query key. Network log trong phiên verify chỉ có call đọc lesson như trước.
+- Visual comparison: **không đổi**. Không có thay đổi CSS; `inert` và `role` là thuộc tính
+  hành vi, không ảnh hưởng hình học. Số đo 1440/768/390 của FR-4 vẫn đúng.
+- Known limitations:
+  - `inert` là thuộc tính HTML chuẩn nhưng Chrome/Safari hiện đại mới hỗ trợ đầy đủ; trên
+    trình duyệt cũ hơn focus trap Tab vẫn hoạt động nhưng nền có thể vẫn được AT đọc.
+  - Bộ chọn focusable là danh sách tĩnh; nếu sau này thêm `contenteditable` hoặc
+    `details/summary` tương tác vào sheet thì phải bổ sung selector.
+- Privacy: không có capture mới; phiên dùng tài khoản test `rea.verify@test.dev`.
+- Rollback: thuần Git. Xoá hook và khôi phục hai effect Escape-only là trạng thái trước
+  phase. Không migration, không đổi dữ liệu.
+- PHASE GATE: **PASS** cho mục tiêu của phase — hợp đồng modal đã đo được đầy đủ trên cả hai
+  sheet. Toàn dự án vẫn **PARTIAL** vì E2E tự động và screen-reader thật vẫn chưa có.
+- NEXT: (1) Playwright E2E cho creation → proposal → generating → lesson → quiz, có assertion;
+  (2) smoke test screen-reader trên luồng lesson + quiz. *(Hai mục ảnh dark `/login` `/new/*`
+  và 390 cho `/new/interview` `/new/proposal` đã đóng trong entry này — xem TESTED.)*
+- Báo cáo đầy đủ: `docs/frontend-reference/phase-reports/2026-11-04-overlay-modal-contract.md`.
+
+## 2026-11-04 — FRONTEND FR-4 — Lesson player dạng bước + đóng build production
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Vẫn không
+  tạo commit nào.
+- Git status: bắt đầu 15 file modified + untracked (`docs/`, `frontend/src/components/`);
+  kết thúc thêm `frontend/src/app/fonts.css` và `frontend/public/`.
+- Reference observed: không khảo sát mới; dùng lại bằng chứng FR-1 (S08, S08 stepping).
+- Mục tiêu: (1) lesson player chuyển sang **một block mỗi màn, có phân trang** đúng mô hình
+  tương tác của reference; (2) `npm run build` phải xanh để frontend được xác nhận là
+  artifact production thật.
+- Files changed:
+  - `frontend/src/app/lesson/[lessonId]/page.tsx`: player dạng bước, một block hiển thị,
+    counter và progress bar cùng suy ra từ index của block đang xem (1/6 … 6/6 theo đúng
+    `blocks[]`), outline sheet, trạng thái kết quả.
+  - `frontend/src/app/globals.css`: dải chrome của lesson, hàng header 872 px với overhang
+    −75 px, reset `.tutor-backdrop`, căn trái `.outline-item`.
+  - `frontend/src/app/layout.tsx`: bỏ `next/font/google`, import `fonts.css`.
+  - `frontend/src/app/fonts.css`: **mới** — 21 `@font-face` tự host + các biến `--font-*`.
+  - `frontend/public/fonts/*.woff2`: **mới** — 21 file, 644 KB.
+  - Docs: `component-mapping.md` (viết lại theo cây thật), `visual-comparison.md`,
+    `evidence-register.md`, `accessibility-review.md`, `api-gap-register.md`,
+    `screen-inventory.md`, `decisions.md` (D-12 thay thế), `phase-reports/2026-11-04-lesson-player-and-build.md`,
+    file này.
+- IMPLEMENTED:
+  - **Step model.** Player hiển thị đúng một block tại một thời điểm; counter và progress bar
+    đều lấy từ index của block đang hiển thị.
+  - **Cả sáu renderer đã chạy live:** `teach`, `mc`, `blank`, `order`, `match`, `short`.
+  - **Outline sheet** 380 px: liệt kê sáu block kèm type + prompt công khai, `aria-current="step"`,
+    đóng bằng chọn item / `Escape` / click backdrop.
+  - **Một lần submit ở cuối** — đúng contract: `grade_attempt` chấm cả bài một batch và
+    `public_block()` không bao giờ trả đáp án.
+  - **Font tự host** Manrope 700/800, Inter 400/500/600, JetBrains Mono 400/500, giữ nguyên
+    `unicode-range` chia subset latin / latin-ext / vietnamese.
+- TESTED (chạy trên `next start`, không phải `next dev` — lỗi build chỉ xuất hiện ở webpack path):
+  - `cd frontend && npx tsc --noEmit` → exit 0.
+  - `cd frontend && npm run lint` → exit 0 (`ESLint: No issues found`).
+  - `cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8001 npm run build` → exit 0, 11 route.
+  - `npx next start -p 3001` + `GET /` → HTTP 200.
+  - Font trong bundle đã build: 21 tham chiếu `/fonts/*.woff2` trong `f04118c76dbb7467.css`;
+    `document.fonts` báo các face Manrope/Inter `loaded`; chuỗi 24 px Inter chứa `ặệỡử` đo
+    khác `monospace` ⇒ subset tiếng Việt thực sự được áp dụng.
+  - Lesson ở 1440 / 768 / 390, light: header 872@x285 / 720@x24 / 366@x12; bottom bar
+    97 / 97 / 81 px; `scrollWidth == clientWidth` ở cả ba.
+  - Lesson ở 1440 / 768 / 390, dark: shell `rgb(18,14,32)`, title `rgb(239,233,252)`,
+    primary `rgb(155,123,255)`, bar `rgb(25,20,48)`.
+  - Contrast cả sáu block, light: **0 lỗi WCAG**; thấp nhất 4.69:1 (CTA primary) với ngưỡng 4.5.
+  - Outline sheet: mở (x=1060 w=380), 6 block, nhảy tới bước 4, đóng bằng `Escape` và backdrop.
+  - Submit → trạng thái kết quả: một POST, response đã chấm được render; lượt đúng hết hiện
+    dải `--moss-wash`.
+- Nguyên nhân gốc đã tìm và sửa trong phase này:
+  1. **`npm run build` — null dereference trong `next/font`.** `TypeError: Cannot read
+     properties of null (reading '1')` tại `@next/font/dist/google/loader.js:122:78`
+     (`/\.(woff|woff2|eot|ttf|otf)$/.exec(googleFontFileUrl)[1]`). Đã loại trừ bằng bisection:
+     khả năng truy cập Google Fonts, UA, `fetch` vs `node:https`, các parser CSS, và bản thân
+     loader (chạy standalone cho cả ba family → `['ok','ok','ok']`). Lỗi nằm trong webpack path.
+     Sửa bằng tự host (D-12).
+  2. **`NEXT_PUBLIC_API_URL` được inline lúc build.** Build production đầu tiên mặc định
+     `http://localhost:8000` (`lib/api.ts:1`) nên mọi call API fail và app đẩy về `/login`.
+     Build lại với biến đã export; `localhost:8001` hiện trong chunk phát hành.
+  3. **Rule `button` toàn cục rò vào hai overlay.** `.tutor-backdrop` là `<button>` full
+     viewport nên `border-radius: var(--radius-pill)` biến scrim thành ellipse tím; `.outline-item`
+     thừa hưởng `justify-content: center` nên các index pill lệch cột. Đã reset cả hai;
+     sau fix backdrop `border-radius: 0px`, mọi hàng outline thẳng tại x=1077.
+  4. **Header lesson thiếu một control.** Hàng được thiết kế cho close + progress + counter
+     (816 px), không còn chỗ cho nút outline. Đo theo reference (872 px tại x=285, vượt cột
+     720 khoảng 75 px mỗi bên) và sửa bằng `width: calc(100% + 152px); margin-left: -75px`.
+- NOT TESTED:
+  - Playwright/E2E: vẫn chưa có; mọi luồng ở trên đều lái tay qua CDP.
+  - Screen-reader (NVDA/VoiceOver) — **NOT MEASURED**.
+  - Focus trap / `aria-modal` của tutor sheet — `Escape` chạy, trapping chưa đo. *(Đã đo và
+    đóng ở entry FR-4b bên trên; dòng này giữ nguyên làm bản ghi lịch sử của phase.)*
+  - Ảnh dark cho `/login`, `/new/interview`, `/new/proposal`, `/new/generating`. *(Đã chụp,
+    đóng ở entry FR-4b; dòng này giữ nguyên làm bản ghi lịch sử của phase.)*
+  - Ảnh 390×844 cho `/new/interview` và `/new/proposal`. *(Đã chụp, đóng ở entry FR-4b.)*
+  - Pixel-diff tự động; mọi so sánh là số đo DOM + quan sát bằng mắt.
+  - `pytest` backend — không chạy phiên này (backend không bị sửa).
+- BLOCKED / API GAP: thêm 5 mục, register nay **15** (`api-gap-register.md`):
+  GAP-11 feedback từng câu (bất khả thi nếu không có endpoint chấm từng block), GAP-12
+  thời lượng/type tag/lock state/thứ tự unit của lesson, GAP-13 lưu offline, GAP-14 danh sách
+  từ vựng + summary sheet, GAP-15 cấu trúc 7 bước (SopiSkill có 6 block; counter báo đúng số
+  thật). Không thêm/đổi endpoint nào; không render dữ liệu giả.
+- API contract / security review: `frontend/src/lib/api.ts` không đổi; giữ HttpOnly cookie +
+  CSRF + `credentials: 'include'`; query key session-scoped, `clientAttemptId` và
+  `contentVersion` giữ nguyên; quét `solution`/`answerKey`/`correctOption`/`answer_key` trong
+  DOM trước submit → 0 hit, và outline sheet chỉ đọc `block.type` + prompt công khai nên
+  không thể lộ đáp án. Không gọi API PolySkill; font tự host là stack OFL chung, không phải
+  font của PolySkill.
+- Visual comparison: lesson player `MATCHED (metrics + flow model)` — một block mỗi màn,
+  chrome band cố định, header 872 px tại 1440, 0 overflow ngang tại 768 và 390, token dark
+  khớp bộ đã đo. Các route khác giữ `MATCHED (metrics)` như cũ; `PARTIAL` / `NOT IMPLEMENTED`
+  không đổi.
+- Known limitations:
+  - `NEXT_PUBLIC_API_URL` phải export **trước** `npm run build`; nó bị nướng vào bundle.
+  - Chạy `npm run build` khi `next dev` đang phục vụ cùng thư mục sẽ làm hỏng `.next`.
+  - `--ink-3` cố ý tối hơn reference để qua 4.5:1 (sai lệch có chủ đích, đã ghi).
+  - Tutor sheet 380 px so với ~360–380 px của reference.
+  - Không thể khớp cấu trúc 7 bước khi lesson chỉ có 6 block.
+- Privacy: không có capture mới chứa dữ liệu cá nhân. Phiên verify dùng tài khoản test
+  `rea.verify@test.dev`; không truy cập tài khoản owner. Redaction cũ giữ nguyên.
+- Rollback: thuần Git. Việc tự host font là additive (`fonts.css` + `public/fonts/`); hoàn
+  `layout.tsx` về `next/font/google` khôi phục hành vi cũ (kèm lỗi build). Không migration,
+  không đổi backend, không mutate dữ liệu.
+- PHASE GATE: **PASS** cho hai mục tiêu của phase — player dạng bước đã xác nhận với cả sáu
+  loại block ở ba viewport trong cả hai theme, và build production xanh với font chứng minh
+  được nạp từ bundle phát hành. Toàn dự án vẫn **PARTIAL** vì ba khoảng trống cũ (E2E tự động,
+  screen-reader, focus trap của tutor) — phase này không tuyên bố đóng chúng.
+- NEXT: (1) commit toàn bộ cây (đã tồn tại chưa commit qua hai phase); (2) Playwright E2E cho
+  creation → proposal → generating → lesson → quiz, có assertion; (3) focus trap +
+  `aria-modal` cho tutor sheet, đo bằng `activeElement` sau mỗi `Tab`; (4) ảnh dark cho
+  `/login`, `/new/*` và 390×844 cho `/new/interview`, `/new/proposal`.
+  *(Mục 3 và 4 đã đóng ở entry FR-4b bên trên.)*
+- Báo cáo đầy đủ: `docs/frontend-reference/phase-reports/2026-11-04-lesson-player-and-build.md`.
+
+## 2026-11-03 — FRONTEND FR-1 — Reconstruction from observed PolySkill UI
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78ee8392a354db79805fe73b1477bc0c531`.
+- Git status: bắt đầu sạch; kết thúc có 13 file modified + 4 mục untracked
+  (`docs/SOPISKILL_FRONTEND_REA_MASTER_PLAN.md`, `docs/frontend-reconstruction-log.md`,
+  `docs/frontend-reference/`, `frontend/src/components/`). Không tạo commit nào.
+- Reference observed: S01, S02, S03, S04/S05 (transcript hoàn chỉnh), S06 (terminal), S07,
+  S08, S09, S12–S14 một phần, S15, profile — tại 1440×900, 768×1024, 390×844.
+  Bằng chứng: `docs/frontend-reference/evidence/` (52 file) và `screenshots/` (47 ảnh).
+- NOT OBSERVED: interview đang diễn ra (khóa duy nhất đã trả lời xong), generation đang chạy
+  (chụp sau khi xong), `blank`/`order`/`match`/`short` như UI reference (bài mở chỉ tới blank),
+  proposal editing, source ingest UI, sign-up (reference chỉ có OAuth).
+- Mục tiêu và phạm vi: tái thiết kế frontend SopiSkill theo hành vi/token đo được từ reference,
+  giữ nguyên backend FastAPI, auth/CSRF, session cache và chấm điểm phía server.
+- Nhật ký chi tiết (lệnh, evidence, giới hạn): `docs/frontend-reconstruction-log.md`.
+- Hồ sơ thiết kế: `docs/frontend-reference/` — `README`, `reference-audit`, `screen-inventory`,
+  `evidence-register`, `interaction-map`, `design-tokens`, `component-mapping`,
+  `api-gap-register`, `visual-comparison`, `accessibility-review`, `decisions`,
+  `implementation-checklist`, `phase-reports/`, `evidence/`, `screenshots/`.
+- Scope & decisions:
+  - Khảo sát PolySkill bằng REA 6.7.0 CLI + Chrome CDP 9222 trên profile đã đăng nhập của
+    owner. Không dùng MCP server (chưa đăng ký); không cài engine native nào.
+  - Chỉ điều hướng và đọc màn hình đã có; **không** tạo khóa học, không nộp quiz sai,
+    không đổi dữ liệu tài khoản ⇒ không mutate bản ghi học tập của owner.
+  - Token lấy từ hai nguồn FACT: CSS custom properties đang inject trên trang và bảng
+    hằng số trong bundle `entry-a3803cab…js` (SHA-256 `e7f84aaf…`).
+  - **Không copy** logo/mascot/asset/prompt/string của PolySkill. Palette, thang chữ,
+    khoảng cách, radius, shadow, breakpoint là thuộc tính layout đo được nên được tái tạo;
+    nhận diện (tên, mark, copy) là của SopiSkill.
+  - Không thêm endpoint, không đổi contract backend, không gọi API PolySkill.
+- Files changed:
+  - Modified: `docs/development-progress.md`, `frontend/src/app/{globals.css, layout.tsx,
+    providers.tsx, page.tsx, login/page.tsx}`, `frontend/src/app/new/{page, interview/page,
+    proposal/page, generating/page}.tsx`, `frontend/src/app/course/[courseId]/page.tsx`,
+    `frontend/src/app/lesson/[lessonId]/{page,TutorPanel}.tsx`.
+  - Added: `frontend/src/components/{ui,layout}/`, toàn bộ `docs/frontend-reference/`,
+    `docs/frontend-reconstruction-log.md`.
+- IMPLEMENTED:
+  - `frontend/src/app/globals.css` viết lại: token light/dark + `prefers-color-scheme`,
+    thang chữ 20 biến thể, space 2–64, radius 6/10/16/22/28/999, shadow card/raised/glow/
+    overlay/sheet, motion 120–420 ms, shell/side-nav/tab-bar, card/button/badge/field/
+    progress/skeleton, lesson/quiz/tutor, responsive 1440/768/390.
+  - `frontend/src/app/layout.tsx`: `next/font` Manrope 700/800 + Inter 400/500/600 +
+    JetBrains Mono; gắn `Providers` và `AppFrame`.
+  - `components/ui/`: `Button` (9 variant, 3 size), `Card` (7 variant), `Field`
+    (`TextInput`/`TextArea` có label/hint/error bound), `Badge`, `Progress`
+    (`ProgressBar` + `ProgressRing`), `Skeleton`, `Icon` (bộ icon stroke nội bộ).
+  - `components/layout/`: `AppFrame` (side nav 264 + content 1040 + tab bar mobile +
+    focus mode cho lesson), `TabBar`, `ThemeToggle`, `ThemeProvider` (`sopiskill.theme`).
+  - `app/page.tsx` dashboard mới: lời chào theo giờ, resume hero ember + glow, course grid,
+    empty/loading/error/retry.
+  - `app/login/page.tsx`: panel canh giữa theo token; giữ `?next=` chống open redirect,
+    `useSessionRefresh`, thông báo lỗi `role="alert"`.
+  - `app/new/page.tsx`, `app/new/interview/page.tsx`, `app/new/proposal/page.tsx`,
+    `app/new/generating/page.tsx`: transcript bubble + progress, plan card + stat strip,
+    danh sách 4 giai đoạn có trạng thái; giữ resume sau reload và polling 2 s dừng ở terminal.
+  - `app/course/[courseId]/page.tsx`: hero tiến độ, unit sections, lesson rows 74 px,
+    mastery, sources, learning-path; giữ polling và xử lý 503 khi cờ P5.0 tắt.
+  - `app/lesson/[lessonId]/page.tsx`: focus mode (không nav, cột 720 căn giữa, header 872),
+    block teach/mc/blank/order/match/short, feedback dòng, `ResultSummary`.
+  - `app/lesson/[lessonId]/TutorPanel.tsx`: sheet phải + backdrop, bubble user/assistant,
+    tool badge, citation block, composer 50 px + gửi 48 px, đóng bằng `Escape`.
+- TESTED (local, Windows):
+  - `cd frontend && npx tsc --noEmit` → exit 0.
+  - `cd frontend && npm run lint` → exit 0 (`--max-warnings=0`).
+  - `cd frontend && npm run build` → ✓ Compiled successfully, 11 route.
+  - Backend throwaway: `docker exec … CREATE DATABASE ailp_ui_check` rồi
+    `DATABASE_URL=…ailp_ui_check python -m alembic upgrade head` → `0016_p52_exposure (head)`.
+    **Database chính không bị migrate.**
+  - Seed HTTP thật: register → `POST /v1/courses` → 5× `interview/answer` → `proposal` →
+    `approve` → generation `ready` (4/4 bài) → `GET /lessons/{id}` trả 6 block
+    `teach,mc,blank,order,match,short`.
+  - Đo DOM/computed style local ở 1440/768/390 và so với reference: shell 264/1040, hero
+    1040x155 `#7B5BE6` + glow, quiz option 68 px radius 16, selected `#EBE3FF`/`#7B5BE6`,
+    CTA disabled `#CDC1EF`, lesson column 720 tại x=353, header 872 tại x=277.
+  - Không overflow ngang ở 390 (`scrollWidth == 390`) cho home/course/lesson.
+  - Quét DOM trước khi nộp: `['solution','answerKey','correctOption','answer_key']` → 0 hit.
+  - Đổi tài khoản user1 → user2 trên local build: `leakedUser1=false`, `leakedCourse1=false`,
+    `ownCourse=true`; user2 mở lesson của user1 → server trả thông điệp ownership, UI không
+    lộ nội dung.
+  - A11y lesson: 20 control hiển thị, `unnamed=0`, `tabReachable=20`, focus ring `#7b5be6`;
+    đã bổ sung `id` cho input blank/short. Trước khi sửa, input blank/short chỉ có
+    `aria-label` (vẫn đọc được) nhưng thiếu `id` để `label[for]` — nay đủ cả hai.
+- NOT TESTED:
+  - Playwright/E2E tự động (dự án không có Playwright; không thêm dependency).
+  - `pytest` backend trong phiên này (không sửa backend).
+  - Docker image build frontend/backend với UI mới.
+  - Dark mode local mới chụp dashboard (`local-home-dark-1440x900.png`); các route còn lại
+    chưa chụp ở dark. Token dark là FACT đo từ reference và khớp giá trị local.
+    *(Nay đã phủ dark cho mọi route — xem entry FR-4 và FR-4b; dòng này giữ nguyên làm bản
+    ghi lịch sử của phase.)*
+- BLOCKED / API GAP (không tự phát minh endpoint): 10 mục trong
+  `docs/frontend-reference/api-gap-register.md` — thời lượng bài, unit tone/paywall,
+  milestone/league/weekly chart, quick-answer chips cho interview, `prefetch=1`,
+  `terms[]` glossary, tên tool của tutor, proposal editing, source ingest theo reference,
+  hình thức dark toggle. Không thêm/đổi endpoint nào; không gọi API PolySkill.
+- API contract / security review: `frontend/src/lib/api.ts` không đổi (839 dòng); giữ
+  HttpOnly cookie + CSRF + `credentials: 'include'`; query key vẫn session-scoped; giữ
+  `clientAttemptId` và `contentVersion`; không render đáp án trước khi server trả `results`;
+  ownership do server quyết định. `providers.tsx` chỉ thêm `ThemeProvider` và chuyển
+  `AuthBar` sang `AppFrame` — không mất logic auth nào.
+- Visual comparison: `MATCHED` cho khung shell, token, thang chữ, kích thước card/quiz,
+  cột đọc lesson; `PARTIAL` cho tutor sheet (380 vs ~360) và cấu trúc proposal/interview
+  (khác contract); `NOT OBSERVED` cho 5 màn đã liệt kê; không có `NOT MATCHED` nào được
+  tuyên bố và **không có pixel-diff tự động** — so sánh ở mức số đo DOM.
+- Regression results: 0 hồi quy trong phần đã chạy; `tsc`/`lint`/`build` pass; session
+  isolation, ownership và quét answer-key đều pass trên môi trường throwaway.
+- Known limitations:
+  - `next/font/google` cần mạng ở lần build đầu (CI offline sẽ fail).
+  - Tutor sheet 380 px rộng hơn reference (~360) — chấp nhận, ghi PARTIAL.
+  - Interview/proposal khác cấu trúc reference do contract backend khác — ghi PARTIAL,
+    không tuyên bố pixel-perfect.
+  - `/new`, interview, proposal và generating mới chụp ở 1440; chưa có 390/768.
+- Rollback: hoàn nguyên thuần Git — `git checkout -- frontend/src/app docs/development-progress.md`,
+  `rm -rf frontend/src/components docs/frontend-reference`; không có migration hay thay đổi
+  backend; DB throwaway `ailp_ui_check` drop độc lập.
+- PHASE GATE: **PARTIAL** — code, build, typecheck, lint và các luồng đã lái đều đạt; chưa
+  PASS vì thiếu E2E có assertion và chưa audit contrast/screen-reader.
+- NEXT: (1) thêm Playwright E2E cho login → course → quiz → đổi tài khoản; (2) chạy contrast
+  + screen-reader audit; (3) chụp `/new`, interview, proposal, generating ở 390/768.
+
+### 2026-11-03 — FRONTEND FR-2 — Review pass: PII, hồ sơ thiếu, restyle `/review` + `/sources`
+
+- Repository / branch / HEAD: giữ nguyên `feat/p6.0-ci-pipeline` · `d747e78`; vẫn không commit.
+- Files changed: `docs/development-progress.md`, `docs/frontend-reference/` (thêm `README`,
+  `evidence-register`, `api-gap-register`, `accessibility-review`, `decisions`,
+  `phase-reports/`; sửa `implementation-checklist`, `evidence-register`), `frontend/src/app/review/page.tsx`,
+  `frontend/src/app/sources/page.tsx`, `frontend/src/app/globals.css` (+3 rule).
+- Reference observed: không khảo sát mới; chỉ dùng lại bằng chứng FR-1.
+- NOT OBSERVED: như FR-1.
+- Mục tiêu: đóng các khoảng trống tuân thủ MASTER_PLAN và làm hai route còn lại đồng bộ.
+- IMPLEMENTED:
+  - Redact tên chủ tài khoản khỏi 7 file JSON, 1 file Markdown và 4 ảnh PNG (thay bằng
+    "Người học" / phủ màu nền). JSON được `json.load` lại để xác nhận hợp lệ.
+  - Tạo 5 hồ sơ còn thiếu + `phase-reports/` theo template §11; sửa `development-progress.md`
+    sang đúng 17 mục của template (gồm `PHASE GATE` và `Rollback`).
+  - Restyle `/review` và `/sources` sang `Button`/`ButtonLink`/`Card`/`Badge`/`TextInput`/
+    `Skeleton`; thêm `.source-item`, `.web-ingest`, `.source-create-btn`.
+  - Sửa 2 lỗi thật trên `/sources`: input thiếu `type` nên không khớp selector CSS (viền mặc
+    định trình duyệt), và `flex` đặt trực tiếp lên input trong `.field` (flex column) khiến
+    `flex-basis` thành chiều cao 260 px.
+- TESTED:
+  - `npx tsc --noEmit` → exit 0; `npm run lint` → exit 0; `npm run build` → 0, 11 route.
+  - Đo lại `/sources`: input cao 53 px, radius 16, viền `1px #E6DEFA`, font 17 px.
+  - Chụp 768×1024: course, lesson, quiz, review, sources (và 1440 cho review/sources);
+    `scrollWidth == clientWidth` ở tất cả.
+- NOT TESTED: contrast/screen-reader; E2E tự động; `/new`–generating ở 390/768.
+- BLOCKED / API GAP: không thay đổi so với FR-1 (10 mục).
+- API contract / security review: hai trang được restyle nhưng logic mutation/query/polling/
+  session-scope invalidate giữ nguyên từng dòng; không đổi `lib/api.ts`.
+- Visual comparison: `/review` và `/sources` giờ dùng cùng token/primitive với phần còn lại;
+  `/review` hiển thị trạng thái 503 (tính năng tắt) đúng như backend trả.
+- Regression results: 0; gates xanh sau khi sửa.
+- Known limitations: như FR-1, trừ hai mục đã đóng (restyle 2 route, ảnh 768 cho các màn học).
+- Rollback: như FR-1; riêng redaction không thể hoàn tác từ repo (bản gốc chỉ tồn tại ngoài
+  repo trong phiên) — điều này là chủ đích.
+- PHASE GATE: **PARTIAL** — vẫn thiếu E2E có assertion và audit contrast/screen-reader.
+- NEXT: (1) Playwright E2E; (2) contrast + screen-reader audit; (3) ảnh 390/768 cho
+  `/new` → generating.
+
+### 2026-11-03 — FRONTEND FR-3 — Accessibility closure, contrast audit và ma trận ảnh chụp
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Vẫn không tạo
+  commit nào.
+- Git status: 15 file modified + 4 mục untracked (như FR-2, thêm các file được liệt kê dưới).
+- Reference observed: không khảo sát PolySkill mới. Toàn bộ số đo trong phase này là **local
+  build** tại `localhost:3000`, Chrome CDP `127.0.0.1:9222`.
+- NOT OBSERVED: như FR-1/FR-2.
+- Mục tiêu và phạm vi: đóng ba mục NEXT của FR-2 — audit contrast thật, audit accessibility
+  thật, và lấp ma trận ảnh chụp 768/390/dark. Không đổi logic nghiệp vụ, không đổi
+  `lib/api.ts`, không đổi backend.
+- Files changed:
+  - `frontend/src/app/globals.css`: `--ink-3` light `#8a82a6 → #645c81`, dark
+    `#8479a8 → #9f94c5` (cả block `[data-theme="dark"]` và block `prefers-color-scheme`);
+    bỏ `opacity` ở `.hero-card .eyebrow` / `.hero-kicker` / `.hero-step`; `.profile-box h3`
+    → `.profile-box h2`.
+  - `frontend/src/components/layout/AppFrame.tsx`: nhánh `/login` bọc `children` trong
+    `<main>`.
+  - `frontend/src/app/new/page.tsx`: advice card `h3 → h2`.
+  - `frontend/src/app/new/proposal/page.tsx`: plan name `h2 → h1`, `Hồ sơ học viên`
+    `h3 → h2`; trạng thái thiếu `courseId` render `H1` + nút quay lại thay cho `<p>`.
+  - `frontend/src/app/new/interview/page.tsx`: `flow-header-title` và nhãn "đã xong"
+    thành `H1`; trạng thái thiếu `courseId` render `H1` + nút quay lại.
+  - Docs: `docs/frontend-reference/accessibility-review.md` (viết lại theo số đo),
+    `implementation-checklist.md` (thêm phase UI-7 + đính chính),
+    `design-tokens.md` (bảng deviation), `decisions.md` (D-10 đóng lại),
+    `phase-reports/2026-11-03-frontend-reconstruction.md`, `frontend-reconstruction-log.md`,
+    file này.
+- IMPLEMENTED (trạng thái a11y):
+  - Mọi route có đúng một `<main>`; `/login` trước đây nằm ngoài landmark.
+  - Mọi route bắt đầu bằng `H1`, không nhảy cấp; `/new/interview` và `/new/proposal` không
+    còn khả năng render không có heading ở ba trạng thái khác nhau.
+  - Chữ trên `.hero-card` (ember `#7b5be6`) hết bị làm mờ bằng `opacity`.
+- TESTED (local, Windows, đã chạy thật):
+  - `npx tsc --noEmit` → exit 0.
+  - `npm run lint` → exit 0 (`--max-warnings=0`).
+  - `npm run build` → exit 0, ✓ Compiled successfully, 11 route.
+  - **axe-core** (`axe.run(document, {resultTypes:['violations']})`, inject từ
+    `frontend/node_modules/axe-core/axe.min.js`) trên 9 route (`/`, `/login`, `/course/{id}`,
+    `/lesson/{id}`, `/new`, `/new/interview`, `/new/proposal`, `/review`, `/sources`),
+    chạy hai lần: light và `data-theme="dark"` → **0 violations cả 18 lượt**.
+  - Hai lỗi thật do axe phát hiện và đã sửa trước khi xanh: `color-contrast` trên `/`
+    (`.hero-kicker` 4.23:1, `.hero-step` 3.36:1 do `opacity` composite trên `--ember`) và
+    `landmark-one-main` + `region` trên `/login`.
+  - Probe tên control / thứ tự heading trên 7 route: 0 control không tên, 100 %
+    tab-reachable, 0 `tabindex` âm, 0 `input` thiếu `type`, 0 `img` thiếu `alt`. Bảng chi
+    tiết trong `accessibility-review.md`.
+  - Overflow ngang: 9 route × 3 viewport (1440×900, 768×1024, 390×844) = **27 phép đo**,
+    `scrollWidth == clientWidth` ở tất cả → 0/27 lỗi.
+  - Zoom 200 % (viewport CSS 720×450, DPR 2) trên `/`, `/course`, `/lesson`, `/new`,
+    `/review`, `/sources` → `overflowX = 0`, không có phần tử tràn.
+  - Ảnh chụp local: 768×1024 cho **10/10 route**; 390×844 cho 9 route (thiếu
+    interview/proposal); dark 1440×900 cho 6 route (/, /course, /lesson, /new, /review,
+    /sources) cộng 2 ảnh trạng thái quiz (MC + match). Tổng 69 file trong
+    `docs/frontend-reference/screenshots/`.
+- NOT TESTED:
+  - Playwright/E2E tự động — dự án vẫn không có Playwright, không thêm dependency.
+  - `pytest` backend — backend không bị chạm trong phase này.
+  - Screen-reader thật (NVDA/VoiceOver) — **NOT MEASURED**, chỉ có axe.
+  - Focus trap / `aria-modal` của Tutor sheet — chỉ xác nhận `Escape` đóng được; trapping
+    chưa đo.
+  - Dark-mode capture cho `/login`, `/new/interview`, `/new/proposal`, `/new/generating`.
+  - 390×844 cho `/new/interview` và `/new/proposal`.
+- BLOCKED / API GAP: không đổi so với FR-1 (10 mục trong `api-gap-register.md`).
+- API contract / security review: không sửa `frontend/src/lib/api.ts`; không đổi auth, CSRF,
+  session-scoped query key, `clientAttemptId`, `contentVersion` hay thứ tự submit. Các thay
+  đổi chỉ là CSS token và thẻ ngữ nghĩa (`h1`/`h2`/`main`).
+- Visual comparison: `MATCHED` cho shell/token/thang chữ (không đổi từ FR-1); việc tăng độ
+  đậm `--ink-3` làm chữ phụ đậm hơn reference một chút — đánh đổi có chủ đích để đạt 4.5:1,
+  ghi nhận là deviation chứ không phải sai số.
+- Regression results: 0 hồi quy. Ảnh chụp sau khi sửa được kiểm kích thước file để tránh
+  hai ảnh trùng nhau do điều hướng chưa xong — lỗi này đã thực sự xảy ra một lần (một "trang
+  quiz bước 4" thực chất vẫn là trang lesson) và được sửa bằng cách cuộn tới `#block-N`.
+- Known limitations:
+  - `next/font/google` vẫn cần mạng ở lần build đầu.
+  - `--ink-3` light/dark đậm hơn reference (xem Visual comparison).
+  - Script CDP dùng để audit nằm ngoài repo
+    (`%TEMP%/opencode/ps-recon/*.mjs`) — không tái lập được chỉ từ repo; muốn chạy lại phải
+    viết lại. axe-core thì có sẵn trong `node_modules`.
+- Rollback: như FR-2. Riêng `--ink-3`/opacity/heading là thay đổi thuần CSS+JSX nên
+  `git checkout -- frontend/src` hoàn tác được toàn bộ.
+- PHASE GATE: **PARTIAL** — typecheck/lint/build xanh, axe 0 violation trên 9 route × 2 theme,
+  overflow 0/27 và ma trận ảnh chụp đã đủ; chưa PASS vì vẫn không có E2E có assertion, không
+  có screen-reader thật, và focus trap của Tutor sheet chưa được đo.
+- NEXT: (1) Playwright E2E cho luồng tạo 5 câu → proposal → generating → lesson → quiz, có
+  assertion; (2) focus trap + `aria-modal` cho Tutor sheet, đo bằng `activeElement` sau
+  `Tab`; (3) dark capture cho `/login` + `/new/*` và 390 cho interview/proposal.
+
+## 2026-11-02 — P6.1 CI pipeline, static security & dependency gates
+
+- Base commit: `8afc688` (branch `feat/p5.2-adaptive-readiness`); branch
+  `feat/p6.0-ci-pipeline` (chưa push)
+- Scope & decisions:
+  - **P6 trong plan không có mục "P6.0"**; mục đầu tiên và độc lập là **P6.1 CI pipeline**
+    ⇒ dùng làm lát cắt đầu của P6, giữ đúng thứ tự plan.
+  - **Không trộn việc:** không làm P6.2–P6.9 (security review, TLS, Redis rate limit,
+    backup drill, observability, privacy, a11y, release checklist) trong commit này.
+  - **`next lint` bị loại khỏi gate**: khi thiếu cấu hình ESLint nó mở wizard tương tác
+    và treo CI. Thay bằng flat config + `eslint . --max-warnings=0`.
+  - **Warning chặn merge** (không chỉ error), và 4 warning có sẵn đã được dọn thật.
+  - **Nâng Next 15.1.6 → 15.5.28** vì baseline có advisory critical/high (RCE Image
+    Optimization, RCE Windows-hosted, DoS Server Actions, cache poisoning, SSRF rewrites).
+    Thêm `overrides.postcss ^8.5.32` cho advisory transitive. **Không** nâng Next 16
+    (breaking major, ngoài phạm vi).
+  - **Bandit: sửa code thay vì `# nosec` mù.** 3 `assert` (bị bỏ khi `python -O`) đổi thành
+    raise tường minh; 5 chỗ `# nosec` còn lại đều là false positive có lý do ghi kèm
+    (PRNG seed cho shuffle/backoff, đóng connection best-effort, mã lỗi hằng chuỗi).
+- IMPLEMENTED:
+  - `.github/workflows/ci.yml` — 5 job: `backend-tests`, `postgres-migrations`,
+    `postgres-race`, `frontend`, `security`; `permissions.contents: read`, concurrency
+    cancel, **không đọc `secrets.*`** (PR từ fork chạy được).
+  - `backend/requirements-dev.txt` — pin `bandit==1.9.4`, `pip-audit==2.10.1`,
+    `PyYAML==6.0.3`; không đụng `requirements.txt` runtime.
+  - `backend/tests/test_p61_ci_contract.py` — 11 test đọc `ci.yml`/`package.json` chặn
+    tái phát: mất job, mất `downgrade -1`, mất `POSTGRES_TEST_URL`, quay lại `next lint`,
+    bỏ `--max-warnings=0`, hạ Next xuống bản dính advisory, thêm `secrets.*`.
+  - `frontend/eslint.config.mjs` (flat config, `next/core-web-vitals` + `next/typescript`).
+  - `frontend/package.json` — `lint` = `eslint . --max-warnings=0`, thêm `typecheck`,
+    `eslint@^9.39.5`, `eslint-config-next@15.5.28`, `next@15.5.28`, `overrides.postcss`.
+  - Dọn warning thật: bỏ import `CourseList` không dùng (`src/app/page.tsx`), bỏ tham số
+    callback không dùng (`src/app/sources/page.tsx`).
+  - Sửa `assert` → raise: `api/v1/tutor.py`, `providers/openai_compatible_provider.py` ×2.
+  - `docs/specs/25-P61-CI-PIPELINE.md` (spec + baseline + lý do) và cập nhật
+    `docs/specs/README.md`, master plan P6.1.
+- TESTED (local, Windows):
+  - `cd backend && python -m pytest -q` → **691 passed, 29 skipped** (trước 680/29;
+    +11 test contract).
+  - `cd backend && python -m bandit -r app` → **Low 0 / Medium 0 / High 0**, 5 `# nosec`
+    có giải thích.
+  - `cd backend && PYTHONUTF8=1 python -m pip_audit -r requirements.txt --progress-spinner off`
+    → **No known vulnerabilities found**.
+  - `cd frontend && npm ci && npm run lint && npm run typecheck && npm run build`
+    → exit 0/0/0/0 (lint `--max-warnings=0` sạch).
+  - `cd frontend && npm audit --omit=dev --audit-level=high` → **0 vulnerabilities**
+    (baseline trước đó: 3 vulnerabilities, 1 critical + 2 high).
+  - PostgreSQL throwaway `p60_migration_check` (đã drop): `alembic upgrade head` →
+    `0016_p52_exposure (head)`; `downgrade -1` → `0015_p50_learner_profile`;
+    `upgrade head` → `0016_p52_exposure (head)`, exit 0.
+  - PostgreSQL throwaway `p60_race_check`: `pytest -k postgres_concurrency` →
+    **29 passed, 680 deselected**.
+  - `.github/workflows/ci.yml` parse bằng `yaml.safe_load` → 5 job hợp lệ.
+  - Test contract được kiểm chứng **có hiệu lực**: tạm đổi `lint` về `next lint` ⇒ 1
+    failed; khôi phục ⇒ 11 passed.
+- NOT TESTED:
+  - **GitHub Actions runner thật** — không push/PR trong phiên; chưa có run log ⇒ **không
+    được báo "CI green"**. Người có quyền push cần xác nhận.
+  - Docker image build backend/frontend với Next 15.5.28 (chỉ `npm run build` local).
+  - Coverage threshold, CodeQL/Semgrep, SBOM/license, OpenAPI diff — đề xuất P6.2/P6.9.
+  - `mypy`/`pyright` backend (chưa có type baseline; bật ngay sẽ đỏ hàng loạt).
+- BLOCKED: không.
+- Database: **không có migration mới**. Chỉ chạy migration hiện có trên DB throwaway.
+- Security: CI không đọc secrets; token `contents: read`; static scan sửa lỗi thật;
+  dependency Next/postcss được nâng tới bản đã vá; không thêm endpoint/field nào.
+- Regressions: 0 — 680 test cũ vẫn pass; UI/API không đổi hành vi (chỉ bỏ import/tham số
+  không dùng và đổi `assert` thành raise tương đương).
+- Known limitations:
+  - `minimatch < 11.0.1` (moderate, **dev-only** qua `@typescript-eslint`) còn lại; gate
+    `--omit=dev --audit-level=high` nên không chặn; `npm audit fix --force` sẽ đổi major
+    toolchain ⇒ không tự làm.
+  - Backend chưa có lint/format gate (ruff/flake8) — chưa có baseline, đề xuất P6.2.
+- **Fix pass sau fresh review (Critical + Important), cùng phase:**
+  - **C1 (Critical) — hoán vị `order`/`match` suy ra được từ dữ liệu công khai.** Seed cũ
+    `sha256("<lessonId>:<version>:<blockIndex>")` dùng toàn thành phần public (`lessonId`
+    trong URL `lsn_<uuid>`), nên dựng lại đúng hoán vị ⇒ đọc được đáp án. Đã chứng minh
+    bằng script chỉ dùng public data cho cả `order` và `match`. Sửa: seed =
+    `HMAC-SHA256(khoá server, msg)`, khoá từ `LESSON_SHUFFLE_SECRET` (fallback
+    `JWT_SECRET`); `ENV=production` + không có khoá ⇒ **RuntimeError**, không dùng khoá
+    công khai. `docker-compose.yml` chia sẻ khoá cho `backend` và `worker` (grading và
+    projection phải khớp). Test: `test_shuffle_seed_is_keyed_and_not_reproducible_from_public_data`,
+    `test_shuffle_seed_changes_when_server_secret_changes`,
+    `test_production_without_any_secret_refuses_to_shuffle` (RED trước fix).
+    **Hệ quả phải biết:** xoay khoá làm attempt đang mở bị chấm sai; mọi replica (backend/
+    worker/beat) phải cùng khoá.
+  - **I1 — race test p50/p52 chỉ pass nhờ thứ tự module.** Chạy một mình trên DB rỗng ⇒
+    `UndefinedTableError`; nay fixture tự `create_all`. Kiểm chứng: chạy riêng từng file
+    trên DB rỗng ⇒ 4 passed; stash fix ⇒ 1 failed.
+  - **I2 — job race không trỏ `DATABASE_URL` sang PostgreSQL** ⇒ `SessionLocal`/
+    `record_standalone` vẫn chạy SQLite; nay set cả hai ở job level.
+  - **I3 — gate có thể pass giả khi mọi test skip** (`pytest` exit 0). Thêm bước guard
+    kiểm tra `POSTGRES_TEST_URL` là PostgreSQL; test contract chặn `|| true` và
+    `continue-on-error: true`.
+  - **I4 — bước "verify revisions" chỉ in history** ⇒ nay `downgrade base → upgrade head`
+    và assert đúng một head.
+  - **I5 — `@eslint/eslintrc` không khai báo**, chỉ resolve nhờ npm hoist ⇒ đã thêm
+    `3.3.7`.
+  - Minor cùng pass: job race cài `requirements-dev.txt`; `pip-audit` đặt `PYTHONUTF8=1`
+    và quét cả `requirements-dev.txt`; commit `next-env.d.ts` như Next 15.5 sinh ra.
+  - Bằng chứng sau fix: `pytest -q` → **698 passed, 29 skipped**; bandit **0/0/0**;
+    `pip-audit` sạch cho cả hai file requirements; race `-k postgres_concurrency` với
+    cả hai biến PostgreSQL → **29 passed**; `alembic downgrade base → upgrade head` OK,
+    `heads` = 1; frontend lint/typecheck/build exit 0.
+- **Pass 2 (2026-11-03) — chạy lại trên Linux, đúng OS của runner:**
+  - **L1 (Critical) — job `backend-tests` sẽ ĐỎ ngay lần push đầu.** Mọi số trước đó đo
+    trên Windows. Chạy lại trong `python:3.13-slim` chỉ cài `requirements-dev.txt`:
+    `11 failed, 685 passed` với `ModuleNotFoundError: No module named 'PIL'`
+    (`tests/scan_fixtures.py:37`). Nguyên nhân: `scan_fixtures` cần Pillow để render PDF
+    scan giả; Pillow chỉ nằm trong `requirements-ocr.txt` (optional, CI cố ý không cài),
+    còn máy dev Windows có sẵn từ lúc thử OCR nên 11 test P4.3 xanh giả.
+    Sửa: khai báo `pillow>=10.0` trong `requirements-dev.txt` (vẫn KHÔNG cài engine OCR;
+    các test fail-fast `OCR_NOT_CONFIGURED` giữ nguyên ý nghĩa).
+  - Thêm 1 test contract (**16 test**) `test_test_only_third_party_imports_are_declared_in_requirements`
+    quét AST `backend/tests/*.py` đối chiếu `requirements*.txt`; kiểm chứng **RED thật**
+    (gỡ `pillow` ⇒ 1 failed/15 passed; khôi phục ⇒ 16 passed).
+  - Sửa lỗi tài liệu trong `docs/specs/25-P61-CI-PIPELINE.md`: ký tự form-feed làm hỏng
+    dòng `cd ../frontend` (thành `cd ..\x0crontend`) — copy lệnh trong doc sẽ fail.
+- TESTED (Linux container = OS runner, không cài gì từ máy dev):
+  - `python:3.13-slim` + `pip install -r requirements-dev.txt` → `pytest -q` =
+    **697 passed, 31 skipped** (sau fix; trước fix 11 failed/685 passed).
+  - `node:22-slim` + `npm ci` → `lint=0`, `typecheck=0`, `build=0`,
+    `npm audit --omit=dev --audit-level=high` = **0 vulnerabilities**.
+  - `bandit -r app` = 0 issue; `pip_audit` cả `requirements.txt` và `requirements-dev.txt`
+    = No known vulnerabilities.
+  - `pytest -k postgres_concurrency` với **cả** `POSTGRES_TEST_URL` + `DATABASE_URL` trỏ
+    PostgreSQL 16 trong container Linux → **29 passed, 698 deselected**.
+  - Migration walk trên PostgreSQL 16 throwaway (project `p61verify`, volume riêng):
+    `upgrade head` → `0016_p52_exposure`; `downgrade -1` → `0015`; `upgrade head`;
+    `downgrade base`; `upgrade head`; `heads` = **1**.
+  - Docker images: `docker compose build backend worker frontend` → OK.
+  - E2E Docker thật (mock provider): `backend/e2e_acceptance.py` → **61/61 PASS**
+    (answer key không lộ, stale version 409, progress từ attempts, cross-user 404,
+    CSRF 403, token giả 401, PDF provenance, RAG/Tutor/Research flag tắt trả mã rõ).
+- TESTED (Windows, sau fix): `pytest -q` → **699 passed, 29 skipped**.
+- TESTED (GitHub Actions runner thật — **lần đầu tiên**):
+  - Branch `feat/p6.0-ci-pipeline` push lên `origin`; run
+    https://github.com/XuanHuu2906/SopiSkill/actions/runs/41583115455
+    `head_sha=5658b31`, attempt 1, **conclusion = success** (~1m43s).
+  - Cả 5 job xanh, kiểm qua API: `Backend tests (Python 3.13)`,
+    `Alembic migrations on empty PostgreSQL`, `PostgreSQL concurrency tests`,
+    `Frontend lint, typecheck, build`, `Static security and dependency audit`.
+  - Các bước quan trọng đều `success`: `Run pytest`; `Upgrade head on empty database`
+    → `Downgrade one revision then upgrade again` → `Walk the full revision chain down to
+    base and back up` → `Verify the revision graph is linear and single-headed`; `Guard
+    against a vacuous (all-skipped) race run` (guard chạy trước) → `Run
+    race/idempotency tests against PostgreSQL`; `Lint`/`Typecheck`/`Build`; `Bandit`/
+    `pip-audit`/`npm audit`.
+  - Giới hạn bằng chứng: log chi tiết của job cần auth (`GET .../jobs/{id}/logs` → 403
+    với request ẩn danh), nên số test cụ thể trên runner **không** đọc trực tiếp được ở
+    đây. Kết luận dựa trên: step `Run pytest` success (pytest exit ≠ 0 khi collection
+    rỗng/lỗi) + guard chống skip chạy trước bước race. Không suy ra con số 697.
+- NOT TESTED (vẫn còn):
+  - Image scan (Trivy/Grype), xoay khoá shuffle khi có attempt mở, multi-replica cùng
+    khoá shuffle.
+  - `minimatch` (moderate, dev-only) vẫn còn; gate `--omit=dev --audit-level=high` nên
+    không chặn.
+- PHASE GATE: **GATE-PASS cho phần CI** — P6.1 IMPLEMENTED + TESTED local (Windows **và**
+  Linux) **và** GitHub Actions runner thật xanh (5/5 job, run 41583115455). Các mục
+  NOT TESTED ở trên là ngoài phạm vi P6.1 (thuộc P6.5/P6.9 image scan, vận hành khoá).
+- NEXT: P6.2 API security review (JWT/CSRF/issuer/audience/secret rotation, login abuse
+  limit, scope checks, uploads/SSRF, redacted logs, session cache isolation).
+
+## 2026-11-02 — P5.2 Adaptive readiness + exposure logging (flag TẮT)
+
+- Base commit: `44a2bc9` (`feat/p5.1-bkt-research`); branch `feat/p5.2-adaptive-readiness` (chưa push)
+- Scope & decisions (người dùng đã chốt):
+  - **Tách P5.2a (readiness, research-only) và P5.2b (exposure logging, runtime flag TẮT).**
+    Plan §18 cũ ghi P5.2 "chỉ nghiên cứu"; phần runtime đã được duyệt riêng và ghi vào
+    §26 Decision log — lý do: không có exposure thì OPE vĩnh viễn không hợp lệ.
+  - **Không huấn luyện model nào** (không DKT/LSTM/bandit); không thêm dependency.
+  - **Reward suy offline** bằng JOIN, không có cột `reward_*`, không UPDATE bảng audit.
+  - **Propensity = 1.0** vì policy deterministic; công bố `opeSupported=false`.
+  - **Token HMAC server-phát** thay vì client tự tính hash (client không có khoá ⇒ không
+    bịa được arm/context). Server vẫn tính lại learning-path khi POST.
+  - **`arm_id NOT NULL`** để UNIQUE chặn trùng trên PostgreSQL (NULL != NULL sẽ lọt).
+- IMPLEMENTED:
+  - `backend/app/models/models.py` + `models/__init__.py`: `RecommendationEvent` +
+    `uq_recommendation_event_context` + 2 index composite.
+  - `backend/alembic/versions/0016_p52_exposure.py`: expand-only, guard `_has_table`,
+    downgrade chỉ drop bảng mới.
+  - `backend/app/services/recommendation_token_service.py`: `mint`/`verify` HMAC-SHA256,
+    TTL, `context_hash_from_path` (bỏ title/message để đổi wording không phá token).
+  - `backend/app/services/recommendation_log_service.py`: `derive_arm`,
+    `record_exposure` (idempotent + SAVEPOINT), `reward_for_events` (attempt đúng version
+    → review qua `review_cards` → None).
+  - `backend/app/api/v1/learner.py`: GET phát `recommendationToken` (null khi tắt);
+    `POST /v1/courses/{id}/recommendation-events` (503 trước khi chạm bảng, CSRF, rate
+    limit, ownership 404, verify + so context/version).
+  - `backend/app/schemas/schemas.py`: `recommendationToken` (additive),
+    `RecommendationEventRequest/Out`.
+  - `backend/app/core/config.py`: `p52_exposure_enabled=false`, `p52_token_ttl_seconds=900`.
+  - `backend/evals/p52_readiness.py`: metric SQL portable + verdict `READY/BLOCKED`.
+  - `.env.example`, `docker-compose.yml` (backend/worker/beat).
+  - Frontend: `recordRecommendation` + effect gọi 1 lần mỗi token (`useRef` chống
+    StrictMode), fire-and-forget, không đổi UI.
+  - Tests mới: `test_p52_migration_contract.py` (5), `test_p52_token.py` (12),
+    `test_p52_exposure_service.py` (11), `test_p52_api.py` (12), `test_p52_readiness.py` (5),
+    `test_p52_postgres_concurrency.py` (1, skip khi không có URL).
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **680 passed, 29 skipped** (trước 635/28).
+  - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK.
+  - `docker compose config` → exit 0.
+- TESTED (PostgreSQL throwaway, đã drop):
+  - `p52_migration_check`: `upgrade head` → `0016_p52_exposure` với
+    `uq_recommendation_event_context`, `ix_recommendation_events_course`,
+    `ix_recommendation_events_user`, 3 FK CASCADE; `downgrade -1` → `0015`, quan hệ biến
+    mất, `users` còn nguyên; `upgrade head` lại OK.
+  - `p52_race_check`: 6 `record_exposure` đồng thời cùng context ⇒ **đúng 1 row**,
+    không task nào ném exception (SAVEPOINT giữ transaction).
+- TESTED (readiness trên DB thật, chỉ SELECT):
+  - `python -m evals.p52_readiness --database-url postgresql+asyncpg://ailp:***@127.0.0.1:5433/ailp`
+    → `attempts=127 users=66 maxPerUser=3 usersGe10=0 sequencesGe5=0 coursesGe2Users=0`,
+    `exposures=0 policies=0 arms=0 propensitySpread=None`;
+    **DKT BLOCKED**, **BANDIT BLOCKED**, `opeSupported=False`. Khớp `psql`.
+- NOT TESTED:
+  - **Chất lượng bandit/OPE** — không thể: propensity=1.0, 0 exposure.
+  - **DKT/LSTM** — dữ liệu dưới ngưỡng.
+  - Browser E2E (Playwright) cho effect gọi record.
+  - Multi-replica rate limit (in-memory theo process) — thuộc P6.4.
+- BLOCKED: contextual bandit/deep tracing — cần `exposures ≥ 5000`, ≥2 policy, ≥3 arm,
+  **và propensity có spread** (quyết định exploration) + privacy review.
+- Database: `0016_p52_exposure` (expand-only). Backup trước trên DB thật:
+  `docker compose exec db pg_dump -U ailp ailp > backup_pre_p52_YYYYmmdd_HHMMSS.sql`.
+- Security: client không gửi được `userId`/`courseId`/`arm`/`propensity` (extra=forbid);
+  token HMAC khoá server-side, TTL 900s, sai/lệch ⇒ `recorded=false` không ghi row;
+  cross-user ⇒ 404; CSRF + rate limit; cờ TẮT ⇒ 503 **trước** khi chạm bảng; log chỉ
+  id/hash/reason code.
+- Regressions: 0 — 635 test cũ vẫn pass; `learning_path_service` logic không đổi; field
+  `recommendationToken` chỉ additive.
+- Known limitations:
+  - Không đếm impression (một exposure mỗi context+arm).
+  - Reward review dùng rating 1..4 làm proxy, chưa hiệu chuẩn với quiz score.
+  - Chưa có job tổng hợp reward; `reward_for_events` gọi thủ công.
+  - `P52` phụ thuộc `P50` (POST trả 503 nếu P50 tắt), không ngầm bật.
+- Review toàn branch (fresh reviewer) đã tìm và sửa trong cùng phase (680 pytest):
+  - **I1** UNIQUE thiếu `lesson_content_version`: sau khi lesson regenerate, POST bị
+    dedupe vào row version cũ ⇒ reward của attempt version mới không bao giờ khớp. Nay
+    UNIQUE gồm version; có test `test_exposure_after_version_bump_is_not_deduped`
+    (RED→GREEN) và đã kiểm lại constraint trên PostgreSQL thật.
+  - **I2** `hmac.compare_digest` so hai `str` của client ⇒ chữ ký non-ASCII ném
+    `TypeError` → HTTP 500. Nay decode/encode hai phía về base64 ASCII trước khi so;
+    test `test_verify_rejects_non_ascii_signature_without_crashing` (RED→GREEN).
+  - **I3** `policyVersion` có trong token nhưng không được kiểm khi POST ⇒ token policy
+    cũ ghi nhận dưới policy mới, sai attribution. Nay so cả `policyVersion`; test
+    `test_post_stale_policy_version_is_rejected` (RED→GREEN).
+  - **I4** Chưa có test chứng minh cờ TẮT không chạm bảng. Nay
+    `test_flag_off_never_queries_the_table` gắn listener `before_cursor_execute` và
+    assert 0 statement chạm `recommendation_events`.
+  - **I5** Chưa có test token arm A không ghi được arm B. Nay
+    `test_token_for_other_arm_cannot_record` (RED→GREEN).
+  - Dọn design doc: bỏ tham chiếu `p52_bandit_eval.py`/`token_service.py` chưa ship.
+- PHASE GATE: **GATE-PARTIAL** — P5.2a và P5.2b IMPLEMENTED + TESTED (offline + PG
+  migration/race); bandit/DKT **BLOCKED** theo điều kiện của plan, không phải lỗi code.
+- NEXT: P6 (production hardening) hoặc tích luỹ dữ liệu rồi chạy lại readiness.
+
+## 2026-11-02 — P5.1 Bayesian Knowledge Tracing (research-only)
+
+- Base commit: `e4f9017` (branch `feat/p5.0-learner-profile`); branch `feat/p5.1-bkt-research` (chưa push)
+- Scope & decisions (người dùng đã chốt):
+  - **Research-only offline**: không route, không feature flag runtime, không migration,
+    không bảng prediction, không worker shadow. API mastery **giữ** `method="rule_based"`.
+  - **Dữ liệu thật chưa đủ** ⇒ mục tiêu trung thực là dựng hạ tầng đo và công bố
+    `INSUFFICIENT_DATA`, không phải tuyên bố BKT tốt hơn baseline.
+  - **Mục tiêu so sánh là điểm mềm** `y = score_correct/score_total` cho **cả** BKT và
+    baseline (tránh so lệch mục tiêu mềm vs nhị phân); Brier = `(p-y)^2`.
+  - **Baseline as-of** theo từng mốc thời gian (trọng số `0.5^(age/30d)` trên event
+    trước đó cùng chuỗi), **không** gọi `compute_mastery(now=...)` ⇒ không nhìn tương lai.
+  - **Chỉ attempt khớp `contentVersion`** (`score_total>0`) được dùng, đồng bộ policy P1.1/P5.0.
+  - **Extractor read-only**, không `create_all` (khác `rag_eval.py`): bảng skill luôn tồn tại
+    nếu tạo bảng, sẽ che mất schema cũ. Phát hiện bảng bằng
+    `run_sync(inspect)` vì `inspect(AsyncEngine)` không hợp lệ.
+  - **Không thêm dependency**: BKT/AUC/ECE viết pure Python (`numpy`/`sklearn` không có
+    trong `requirements.txt`).
+- IMPLEMENTED:
+  - `backend/app/services/bkt.py`: `BktParams`, `validate`, `observe` (Bayes mềm),
+    `apply_learning`, `predict_correct`, `predict_sequence` (không leakage),
+    `brier`, `fit_grid` (grid cố định, deterministic).
+  - `backend/evals/mastery_dataset.py`: `Sequence`, `DatasetReport`, `redact_dsn`,
+    `detect_tables`, `load_sequences` (fallback skill→lesson, DB rỗng an toàn),
+    `summarize`.
+  - `backend/evals/bkt_eval.py`: `split_by_user`, `split_by_time`, `evaluate`
+    (Brier/log loss/AUC/ECE/drift/leakage), `simulate`, `decide_gate`, CLI
+    `--dataset real|simulated`, `--save`, `--json`.
+  - Tests: `test_p51_bkt.py` (11), `test_p51_dataset.py` (7), `test_p51_eval.py` (17).
+  - Docs: `docs/specs/23-P51-BKT.md` (mới), `docs/specs/12-ADAPTIVE-LEARNING.md`,
+    `docs/SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md` mục 3 + 18.
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **635 passed, 28 skipped** (trước 600/28; +35).
+  - `python -m pytest tests/test_p51_bkt.py tests/test_p51_dataset.py tests/test_p51_eval.py -q`
+    → **35 passed** (không cần PostgreSQL/network).
+  - `git diff --stat e4f9017 -- backend/app/models backend/alembic backend/app/api
+    backend/app/core/config.py backend/app/services/learner_profile_service.py
+    backend/app/services/learning_path_service.py backend/requirements.txt frontend`
+    → **rỗng** (chứng minh không đổi runtime/schema/dependency).
+- TESTED (PostgreSQL thật, chỉ SELECT — container `db`, DB `ailp`):
+  - `python -m evals.bkt_eval --dataset real --database-url postgresql+asyncpg://ailp:***@127.0.0.1:5433/ailp`
+    → `users=21 sequences=21 rawAttempts=127 versionedAttempts=37 skillGranularity=False`;
+    `lengthHistogram={'1': 6, '2': 14, '3': 1}`; **`INSUFFICIENT_DATA`** với lý do
+    `0 chuỗi ≥5 event` và `37 event < 300`.
+  - Đối chiếu `psql` cùng DB: **37** event đúng version, **21** user — khớp extractor.
+  - `... --granularity lesson --database-url sqlite+aiosqlite:///./tmp_bkt_check.db`
+    → DB rỗng không crash, trả 0 và `INSUFFICIENT_DATA`.
+  - `python -m evals.bkt_eval --dataset simulated --seed 20261102 --save`
+    → `dataSource=simulated`, 800 event, `brier bkt≈0.0228` vs `baseline≈0.0526`,
+    `auc≈0.868`, `ece≈0.026`, `leakage=0`, gate `PASS`; report
+    `backend/evals/reports/bkt_simulated_<ts>.json`. **Chỉ chứng minh code đúng.**
+  - `... --dataset simulated --force-correct` → gate **`NOT_MET`** (baseline Brier=0,
+    ECE vượt ngưỡng, AUC không xác định) ⇒ harness không tự khen.
+- NOT TESTED:
+  - **BKT trên dữ liệu người học thật** — bất khả thi với 0 chuỗi ≥5 event.
+  - **Calibration/fairness kết luận** — slice nhỏ, không đủ n; report chỉ mô tả.
+  - Chưa chạy trên schema `0015` có bảng skill thật (DB dev vẫn `0012`); nhánh skill
+    chỉ được test bằng SQLite in-memory trong `test_p51_dataset.py`.
+- BLOCKED: deploy BKT (gate #18) — cần ≥30 chuỗi ≥5 event và ≥300 event đúng version;
+  cần quyết định sản phẩm về việc hiển thị "dự đoán" cho người học.
+- Database: **N/A** — không migration, không ghi dữ liệu.
+- Security: extractor chỉ SELECT; DSN in ra đã che mật khẩu; không log nội dung bài học;
+  không có endpoint/route mới; không mở đường đọc chéo user (script chạy cục bộ, không serve).
+- Regressions: 0 — 600 test cũ vẫn pass; không file runtime bị sửa.
+- Review toàn branch (fresh reviewer) đã tìm và sửa trong cùng phase (635 pytest):
+  - **C1** gate không thực thi `min_sequences` đúng nghĩa: dùng `max(10, min//3)` và chỉ
+    kiểm tổng event ⇒ 30 chuỗi train dài + 10 chuỗi test 1-event vẫn có thể PASS. Nay gate
+    đếm **chuỗi đủ dài riêng từng phía** (`nQualifyingTrain/Test`) + tổng ≥ `min_sequences`.
+  - **C2** `driftBrier` chia theo vị trí list (thứ tự user/key), không theo thời gian, và
+    `split_by_time` là dead code. Nay `chronological_drift` sắp theo timestamp trước khi chia.
+  - **C3** baseline hard-code half-life 30d trong khi runtime dùng
+    `MASTERY_RECENCY_HALF_LIFE_DAYS`; nay đọc setting, ghi vào report, có `--baseline-half-life-days`.
+  - **C4** quảng cáo fairness slice và "báo cả hai split" nhưng chưa có code; nay thêm
+    `slices` (short/long, chỉ mô tả) và ghi rõ CLI mới chạy split theo user.
+  - **C5** test chống leakage quá yếu (chỉ so index 0); nay đột biến từng vị trí k và assert
+    toàn bộ prefix `< k` không đổi.
+  - **C6** test "mismatched model" không assert gate; nay assert `NOT_MET`.
+  - **C7** `LEFT JOIN lesson_skills` nhân đôi event khi một bài gắn nhiều skill (data
+    inflation) — nay `MIN(s.key)` + `GROUP BY a.id`, có test đếm event.
+  - **C8** `redact_dsn` có thể lộ mật khẩu percent-encoded; nay dựng lại netloc từ thành
+    phần đã parse, có test `p%40ss`.
+  - **C9** tài liệu gọi simulation PASS là "chứng minh code đúng" ⇒ hạ xuống "chứng minh tự
+    nhất quán của đường ống", nhấn mạnh chiều `--force-correct` mới là bằng chứng không tự khen.
+- Known limitations:
+  - Mục tiêu mềm (`k/5`) khác BKT nhị phân cổ điển, chọn để so cùng đại lượng với mastery.
+  - 1 skill/bài (kế thừa P2.1) ⇒ chuỗi skill thực chất là chuỗi bài.
+  - `skills.key` chỉ ổn định trong một course ⇒ không gộp chuỗi xuyên course.
+  - `question`-level (`results`) chưa map skill nên chưa dùng trong gate.
+  - Baseline trong harness là bản tái lập `compute_mastery`; nếu đổi baseline runtime
+    phải cập nhật song song, nếu không so sánh sẽ sai.
+- PHASE GATE: **GATE-PARTIAL** — code + test + số liệu thật đầy đủ, nhưng gate deploy
+  là **BLOCKED** vì dữ liệu chưa đủ (đúng điều kiện của plan, không phải lỗi triển khai).
+- NEXT: tích luỹ dữ liệu attempt (đặc biệt user có ≥5 bài cùng skill) rồi chạy lại
+  `evals.bkt_eval --dataset real`; hoặc chuyển P6 (production hardening).
+
+## 2026-11-02 — P5.0 Learner Profile, Mastery Baseline & FSRS
+
+- Base commit: `2150b0d` (`feat/p4.3-ocr`); branch `feat/p5.0-learner-profile` (chưa push)
+- Scope & decisions (người dùng đã chốt):
+  - **Snapshot bền vững + thư viện `fsrs`** (không tự viết lại thuật toán), pin
+    `FSRS_SCHEDULER_VERSION = "py-fsrs-6.3.2"` vào từng card/event.
+  - **Review card tạo ngay ở attempt đầu tiên** (kể cả <80%) ⇒ rating `Again/Hard`
+    là luồng thật (ôn bài yếu), không phải code chết.
+  - **1 card/(user, lesson)**, recall theo **chủ đề bài + skill** — không lộ answer key quiz.
+  - **Mastery = accuracy có trọng số thời gian** (half-life 30 ngày), ngưỡng đạt `0.7`.
+    Đây là **heuristic**, KHÔNG phải xác suất đã hiệu chuẩn; API trả `method="rule_based"`.
+  - **`contentVersion` đổi ⇒ không reset mastery**: mastery chỉ tính attempt đúng version
+    hiện hành nên tự rơi về 0 cho tới khi có attempt mới; dữ liệu cũ giữ nguyên.
+  - **Prerequisite chưa đạt ⇒ CHẶN bài mới** + trả `blockedBy` kèm lý do, và fallback
+    `reviewLessonId` = bài đã học có mastery thấp nhất (tránh dead-end).
+  - **Skill map theo VỊ TRÍ** `(unit.order_index, lesson.order_index)`, không theo title —
+    generation ghi đè `lesson.title` bằng `content.title` của provider.
+  - **`learning_steps=()`** ⇒ card vào thẳng `State.Review`, lịch theo ngày
+    (đo thật với `fsrs` 6.3.2: Again 1d / Hard 1d / Good 2d / Easy 8d),
+    `enable_fuzzing=False` để tái lập.
+- IMPLEMENTED:
+  - `backend/requirements.txt`: `fsrs>=6.3,<7` (pure Python, chỉ kéo `typing-extensions`;
+    optimizer extras KHÔNG cài).
+  - `backend/app/core/config.py`: `p50_enabled`, `p50_backfill_enabled`,
+    `mastery_pass_threshold`, `mastery_recency_half_life_days`, `fsrs_desired_retention`.
+  - `backend/app/models/models.py` + `models/__init__.py`: `Skill`, `LessonSkill`,
+    `SkillMastery`, `ReviewCard`, `ReviewEvent`.
+  - `backend/alembic/versions/0015_p50_learner_profile.py` (expand-only, downgrade đối xứng).
+  - `backend/app/services/learner_profile_service.py`: `backfill_course_skills`,
+    `skills_for_course`, `skill_for_lesson`, `compute_mastery`, `refresh_skill_mastery`,
+    `course_mastery`, `backfill_all_skills`, `_as_utc`.
+  - `backend/app/services/spaced_repetition_service.py`: `scheduler`, `new_card`, `review`,
+    `initial_rating`, `ensure_card_for_attempt`, `grade_card`, `due_cards`, `_card_id`.
+  - `backend/app/services/learning_path_service.py`: `build_learning_path`, `position_key`,
+    reason codes `NEXT_IN_SEQUENCE`/`PREREQUISITES_MET`/`PREREQUISITE_NOT_MET`/
+    `FALLBACK_REVIEW_WEAKEST`.
+  - `backend/app/services/lesson_service.py`: `submit_attempt` trả 3-tuple, cập nhật mastery
+    + tạo card trong **cùng transaction** khi `P50_ENABLED`.
+  - `backend/app/api/v1/learner.py` + `main.py`: 4 endpoint, 503 `P50_NOT_ENABLED` khi tắt.
+  - `backend/app/worker/generation.py`: backfill skill sau generation (lỗi không làm job fail).
+  - `backend/app/worker/reconcile.py` + `celery_app.py`: task `reconcile_skills` trên beat,
+    chỉ chạy khi `P50_BACKFILL_ENABLED`.
+  - Frontend: `lib/api.ts` (5 hàm + types), khối "Học tiếp"/"Ôn tập"/"Mức nắm kỹ năng" ở
+    `/course/[courseId]`, trang mới `/review` (hàng đợi, reveal, 4 mức rating, một
+    `clientReviewId` mỗi lần chấm), thông báo "Đã thêm vào lịch ôn tập" ở lesson.
+  - `backend/e2e_acceptance.py`: check `8e`/`8f`/`8g` (503 khi tắt; mastery rule-based;
+    learning-path có lý do; review grade idempotent).
+  - Docs: `docs/specs/22-P50-LEARNER-PROFILE.md`, plan
+    `docs/superpowers/plans/2026-11-02-p50-learner-profile.md`, `database-design.md`,
+    `migration-runbook.md`, `.env.example`, `docker-compose.yml` (3 service).
+- TESTED (offline, SQLite in-memory):
+  - `cd backend && python -m pytest -q` → **597 passed, 25 skipped** (trước 540/25; +57).
+    Mới: `test_p50_config.py` (2), `test_p50_migration_contract.py` (5), `test_p50_skills.py` (6),
+    `test_p50_mastery.py` (11), `test_p50_fsrs.py` (16), `test_p50_learning_path.py` (5),
+    `test_p50_api.py` (9), `test_p50_generation_hook.py` (3).
+  - Phủ: FSRS interval chính xác cho 4 rating; ép UTC cho datetime naive; card tạo ở attempt
+    đầu (kể cả `score_total=0`); idempotency theo `clientReviewId`; cross-user ⇒ 404;
+    mastery deterministic + không tăng khi nộp lại cùng version; version mới ⇒ không còn
+    attempt hợp lệ (row cũ giữ nguyên); backfill theo vị trí khi title khác; slug trùng ⇒
+    hậu tố deterministic; backfill không xoá mastery; prerequisite chưa đạt ⇒ chặn + fallback;
+    cờ tắt ⇒ 503; CSRF 403; rating ngoài 1..4 ⇒ 422.
+  - `cd frontend && npx tsc --noEmit` → 0 lỗi; `npm run build` → OK (11 route, thêm `/review`).
+  - `docker compose config` → OK (biến P50 có ở backend/worker/beat).
+- TESTED (PostgreSQL throwaway `p50_migration_check`, đã `DROP DATABASE`):
+  - `alembic upgrade head` → `0015_p50_learner_profile (head)`; `skills` có
+    `uq_skill_course_key` + FK CASCADE; `review_cards` có `uq_review_card_user_lesson`,
+    `ix_review_cards_user_due`, FK `lesson_attempts ON DELETE SET NULL`;
+    `review_events` có `uq_review_event_client_id` + 2 index composite.
+  - `downgrade -1` → `0014_p43_ocr`; 5 bảng biến mất, `users`/`lessons` **còn 1/1**;
+    `upgrade head` lại thành công, row legacy đọc được.
+- TESTED (PostgreSQL throwaway `p50_race_check`, đã drop):
+  - `POSTGRES_TEST_URL=…/p50_race_check python -m pytest tests/test_p50_postgres_concurrency.py -q`
+    → **3 passed** (tạo card đồng thời, grade đồng thời, cross-user grade).
+  - Full suite sau khi thêm file này: **600 passed, 28 skipped** (25 skip cũ + 3 skip khi
+    không có `POSTGRES_TEST_URL`).
+- NOT TESTED:
+  - **E2E Docker full stack** với `P50_ENABLED=true` — chưa chạy `e2e_acceptance.py` trong
+    phiên này (stack chỉ bật container `db`); các check `8e/8f/8g` mới chỉ được review tĩnh.
+  - ~~Race PostgreSQL cho review grade/`ensure_card_for_attempt`~~ — **đã chạy** (xem mục
+    TESTED PostgreSQL bên dưới); vẫn chưa chạy E2E Docker có worker thật.
+  - **Chất lượng sư phạm thật** của mastery/ngưỡng 0.7: chưa có dữ liệu học thật để hiệu
+    chuẩn; các ngưỡng là PROPOSAL.
+  - Browser E2E (Playwright) cho `/review`.
+  - `fsrs` optimizer / cá nhân hoá tham số (cố ý không dùng).
+- BLOCKED: không blocked code. Cần quyết định vận hành: có bật `P50_ENABLED=true` ở production
+  ngay không (thay đổi UX + ghi dữ liệu mới), và có chạy `P50_BACKFILL_ENABLED` một lần cho
+  course cũ hay để course mới tự sinh skill.
+- Database: `0015_p50_learner_profile` (expand-only). Backup trước trên DB thật:
+  `docker compose exec db pg_dump -U ailp ailp > backup_pre_p50_YYYYmmdd_HHMMSS.sql`.
+- Security: ownership ở SQL (course/card ⇒ 404); mastery tính từ attempt đã lưu, không nhận
+  score từ client; rating client chỉ là input FSRS, không ảnh hưởng XP/điểm; CSRF + rate limit
+  120/60s cho grade; `stability/difficulty` **không** trả ra API người học; log chỉ id + interval.
+- Regressions: 0 — 540 test cũ vẫn pass; `submit_attempt` chỉ đổi tuple khi `P50_ENABLED`,
+  contract HTTP thêm field additive `reviewCardCreated` (mặc định false).
+- Known limitations:
+  - Mastery không phân biệt độ khó câu hỏi, không hiệu chuẩn xác suất, chưa tính
+    `duration_ms`.
+  - `review_cards` 1 card/lesson: không ôn theo từng block/câu sai.
+  - Chưa có notify/push/email nhắc ôn; due date hiển thị theo giờ máy người dùng.
+  - `fsrs` chạy in-process; chưa có job dọn card/event cũ.
+- Review toàn branch (fresh reviewer) đã tìm và sửa trong cùng phase (600 pytest):
+  - **C1** `ensure_card_for_attempt` rollback toàn session khi race ⇒ mất attempt: đổi sang
+    SAVEPOINT (`db.begin_nested()`), lỗi P5.0 không còn phá transaction attempt.
+  - **C2** slug trùng làm mất skill đầu + map sai lesson: `_dedupe_keys` trả list song song
+    theo vị trí, map skill↔lesson theo **index** (không tra title).
+  - **I1** đổi `contentVersion` không reset mastery: giờ khi không còn attempt đúng version
+    hiện hành, snapshot mastery được ghi `mastery_score=0, attempts=0` (attempt cũ giữ nguyên).
+  - **I2** `reviewDueCount` bị chặn bởi `limit`: thêm `COUNT(*)` không phụ thuộc page size.
+  - **I3** grade đồng thời mất review: `SELECT ... FOR UPDATE` trên `review_cards`.
+  - **I4** test race PostgreSQL P1.1 bị hỏng do `submit_attempt` đổi thành 3-tuple: đã sửa.
+  - **I5** test "lesson không skill" chưa thực sự bật cờ: đã bật cờ và assert card `skill_id=None`.
+  - **I6** thiếu `skillTitle` trong due reviews: đã thêm (schema + service).
+  - **I7** `fsrs>=6.3,<7` có thể lệch với `scheduler_version`: **pin `fsrs==6.3.2`**.
+  - **I8** backfill sau generation đọc proposal mới nhất thay vì version job đã pin: truyền
+    `proposal_version=job.proposal_version`.
+  - Thêm `tests/test_p50_postgres_concurrency.py` và chạy thật trên PostgreSQL throwaway
+    (`p50_race_check`, đã drop): 6 task tạo card đồng thời ⇒ **đúng 1 card**, mọi task không
+    ném exception (SAVEPOINT giữ attempt), attempt còn 1 row; 4 grade đồng thời khác
+    `clientReviewId` ⇒ 5 event, không lost update; cross-user ⇒ `CardNotFoundError`.
+- PHASE GATE: **GATE-PARTIAL** — code + offline tests + migration PostgreSQL thật đầy đủ; E2E
+  Docker và race PostgreSQL (bao gồm race grade mới) còn NOT TESTED (ghi rõ, không tuyên bố PASS).
+- NEXT: chạy E2E Docker với `P50_ENABLED=true` (cần approve), hoặc P6 (production hardening)
+  nếu ưu tiên release.
+
+## 2026-11-01 — P4.3 OCR cho PDF scan (opt-in, engine pretrained)
+
+- Base commit: `e3cb783` (`feat/p4.3-ocr`, working tree)
+- New commit/branch: branch `feat/p4.3-ocr` — **NOT COMMITTED**
+- Scope & decisions:
+  - **Mặc định TẮT** (`OCR_ENABLED=false`): hành vi P4.0/P4.2 giữ nguyên; PDF scan vẫn `no_text`.
+    Bật cờ mà engine chưa cài/`OCR_MODEL_VERSION` trống ⇒ upload **422 `OCR_NOT_CONFIGURED`**,
+    không ghi file, không âm thầm quay về text-only.
+  - **Pretrained only**: `rapidocr` (ONNX PP-OCR, CNN det + CNN rec, chạy cục bộ). Không
+    train/fine-tune, không gửi tài liệu ra API ngoài. So sánh v6-small/v6-medium (kết quả giống
+    nhau), PP-OCRv4/v5 (không hỗ trợ `vi`).
+  - **Chỉ OCR trang THIẾU text**; trang native không bị đọc lại ⇒ tài liệu hỗn hợp có
+    `textSource=mixed`, chunk native giữ `ocrConfidence=NULL` (không bịa điểm tin cậy).
+  - **Provenance**: chunk OCR mang `textSource=ocr`, `ocrConfidence` (điểm engine, **không** phải
+    xác suất đúng đã hiệu chuẩn) và `ocrBbox=[x0,y0,x1,y1]` chuẩn hoá theo trang; offset vẫn cắt
+    đúng substring text trang.
+  - **Bật OCR đổi `pipelineVersion`** (`p4.0-v1+ocr-rapidocr-<ver>`, web: `p4.2-v1+…`) ⇒ document
+    cũ (`no_text`) không bị ghi đè, citation cũ giữ đúng dữ liệu đã sinh ra nó.
+  - **Fail-closed**: trần `OCR_MAX_PAGES` kiểm TRƯỚC khi chạy engine; `OCR_TIMEOUT`/`OCR_FAILED`
+    retryable → `failed`; OCR không đọc được chữ → `no_text` + `OCR_NO_TEXT`.
+- IMPLEMENTED:
+  - `backend/app/services/ocr.py` (mới): `OcrLine{text,confidence,bbox}`, `OcrPage`, `OcrError`,
+    `engine_available`, `configured`, `ocr_pdf_pages` (render pypdfium2 → engine ONNX), cache
+    engine có lock, `reset_engine`.
+  - `backend/app/services/ingest.py`: `LineSpan`, `ExtractedPage.text_source/line_spans`,
+    `ChunkDraft.text_source/ocr_confidence/ocr_bbox`, `pages_without_text`, `build_ocr_pages`,
+    `apply_ocr`/`apply_ocr_pages`, `extract_document`, `pipeline_version_for`/`ocr_pipeline_version`,
+    `_annotate_provenance`, `finish_ready`/`finish_no_text(code=…)`.
+  - `backend/app/worker/ingest.py`: PDF upload và arXiv/PDF fetched dùng chung `extract_document`.
+  - `backend/app/services/web_ingest.py`: `pipeline_version_for` cho web/arXiv.
+  - `backend/app/services/retrieval_service.py`: `RetrievedChunk.text_source/ocr_confidence`.
+  - `backend/app/services/citation_service.py`: citation/pointer có `textSource`, `ocrConfidence`.
+  - `backend/app/models/models.py`, `alembic/versions/0014_p43_ocr.py` (expand-only): document
+    `text_source|ocr_pages|ocr_engine|ocr_version`; chunk `text_source|ocr_confidence|ocr_bbox`.
+  - `backend/app/core/config.py`: 8 cấu hình `OCR_*` + `ocr_configured`.
+  - `backend/app/schemas/schemas.py`, `backend/app/api/v1/sources.py`: `textSource/ocrPages/
+    ocrEngine/ocrVersion` trong document; `ocrEnabled/ocrConfigured/ocrEngine/ocrVersion/
+    ocrMaxPages/ocrDpi` trong ingest-config; `textSource/ocrConfidence/ocrBbox` trong search.
+  - `frontend/src/lib/api.ts`, `frontend/src/app/sources/page.tsx`: badge OCR/mixed, notice khi
+    OCR tắt, thông điệp trung thực khi `OCR_NO_TEXT`.
+  - `backend/requirements-ocr.txt` (mới), `backend/Dockerfile` (`ARG INSTALL_OCR=false`),
+    `.env.example`, `docker-compose.yml`, `docs/specs/21-P43-OCR.md` (mới), `docs/specs/
+    11-SOURCES-AND-RAG.md`, `docs/SOPISKILL_MASTER_IMPLEMENTATION_PLAN.md`.
+  - `backend/evals/ocr_eval.py` (mới): CER/WER/confidence/latency trên corpus synthetic EN+VI.
+  - `backend/tests/scan_fixtures.py`, `backend/tests/test_p43_ocr.py` (O01–O15 + web/upload
+    pipeline), `backend/tests/test_p43_migration_contract.py`.
+- TESTED (đã chạy trong phiên này):
+  - `cd backend && python -m pytest -q` → **534 passed, 25 skipped, 16 warnings** (exit 0). Suite
+    gồm 16 test P4.3 + 7 test migration contract; test O15 chạy **engine rapidocr thật** trên PDF
+    scan tự sinh.
+  - `python -m evals.ocr_eval --lang vi` → 8 case: **CER avg 0.0470** (EN 0.000 / **VI 0.0939**),
+    **WER avg 0.2068**, mean confidence 0.9913, detectedPageRate 1.000, **~2770 ms/trang @200 DPI**.
+    Model **rơi dấu tiếng Việt** ("Cấu trúc" → "Cu trúc"); thử v6-medium/v4/v5 không cải thiện.
+  - `python -m evals.ocr_eval --lang en --language vi` → CER 0.0939, WER 0.4137 (xác nhận lỗi do
+    model/ngôn ngữ, không do tham số eval).
+  - Migration trên **PostgreSQL tạm** `p43_mig_check` (container `reverseengineer-db-1`, port 5433):
+    `alembic upgrade head` → `current` = `0014_p43_ocr` → `downgrade -1` (6 cột biến mất, bảng còn)
+    → `upgrade head` → `0014_p43_ocr`. DB tạm đã `DROP DATABASE` sau kiểm tra; **không đụng DB
+    chính**.
+  - `docker compose config` OK; `docker compose build backend` OK (image mặc định **không** có OCR
+    deps ⇒ fail-fast giữ nguyên).
+  - `cd frontend && npx tsc --noEmit` OK; `npm run build` OK (10 route).
+  - `git diff --check` sạch.
+- NOT TESTED:
+  - OCR trên **corpus scan thật** (mờ/nghiêng/bảng/công thức/chữ viết tay). Corpus hiện tại là
+    synthetic dựng bằng font hệ thống ⇒ không suy rộng CER.
+  - Layout-aware parser cho bảng/công thức (chưa làm; chỉ dòng text).
+  - E2E Docker full stack với `OCR_ENABLED=true` (image chưa cài `requirements-ocr.txt`).
+  - `e2e_acceptance.py` chưa chạy lại trong phiên này (stack Docker không được bật).
+- BLOCKED: không. **Quyết định cần người dùng**: có chấp nhận chất lượng tiếng Việt hiện tại
+  (mất dấu) cho bật OCR production hay không, và có cho phép cài OCR deps vào image production.
+- Database: `0014_p43_ocr` (expand-only, downgrade chỉ drop 6 cột mới). Không backfill document cũ
+  (`text_source=NULL` ⇒ tầng đọc coi là `native`).
+- Security: không tin client (magic/size/page); text OCR là **untrusted** (vẫn qua `wrap_untrusted`
+  khi vào prompt); engine chạy cục bộ, không request outbound; log không chứa nội dung tài liệu;
+  cross-user vẫn 404 (O10); config API không lộ credential.
+- Regressions: 0 — 518 test cũ vẫn pass, P4.0/P4.2 giữ nguyên hành vi khi OCR tắt.
+- Known limitations: xem `docs/specs/21-P43-OCR.md` mục 5.
+- PHASE GATE: **PASS (opt-in)** — kèm giới hạn tiếng Việt + corpus synthetic đã công bố.
+- NEXT: quyết định bật OCR production (cần corpus thật + chấp nhận sai dấu), hoặc chuyển P5.0/P6.
+
 ## 2026-11-01 — P4.2 Web/arXiv Sources (offline + SSRF guard đầy đủ)
 
 - Base commit: `bc78efe` (`main`, working tree)

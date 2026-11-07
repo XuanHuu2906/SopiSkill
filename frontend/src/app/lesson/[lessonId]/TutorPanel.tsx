@@ -15,6 +15,9 @@ import {
   type TutorThread,
 } from "@/lib/api";
 import { useSessionQueryKey } from "../../providers";
+import { Button, IconButton } from "@/components/ui/Button";
+import Icon from "@/components/ui/Icon";
+import useModalPanel from "@/components/ui/useModalPanel";
 
 interface ToolNote {
   name: string;
@@ -66,11 +69,18 @@ export default function TutorPanel({
   lessonId,
   activeBlockIndex,
   blockLabel,
+  open,
+  onClose,
+  docked = false,
 }: {
   courseId: string;
   lessonId: string;
   activeBlockIndex: number;
   blockLabel?: string;
+  open: boolean;
+  onClose: () => void;
+  /** True when the viewport is wide enough to dock the rail beside the lesson. */
+  docked?: boolean;
 }) {
   const queryClient = useQueryClient();
   const threadsKey = useSessionQueryKey("tutor-threads", courseId);
@@ -82,6 +92,7 @@ export default function TutorPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const sheetRef = useRef<HTMLDivElement | null>(null);
   const messageIdRef = useRef<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [toolNotes, setToolNotes] = useState<ToolNote[]>([]);
@@ -337,200 +348,225 @@ export default function TutorPanel({
     }
   }
 
+
+  // Focus the composer rather than the close button: the user opened the sheet
+  // to type, and starting on "Đóng" makes the first Tab skip the input.
+  useModalPanel({
+    open,
+    onClose,
+    panelRef: sheetRef,
+    initialFocusSelector: "#tutor-input",
+    modal: !docked,
+  });
+
+  if (!open) return null;
+
   return (
-    <section className="card tutor-panel" aria-labelledby="tutor-heading">
-      <div className="topbar" style={{ marginBottom: 8 }}>
-        <h2 id="tutor-heading">Trợ giảng AI</h2>
-        <span className="badge badge-muted">
-          {blockLabel ? `Block #${activeBlockIndex} · ${blockLabel}` : `Block #${activeBlockIndex}`}
-        </span>
-      </div>
-      <p className="muted">
-        Trợ giảng trả lời dựa trên bài đang học và không đọc đáp án quiz. Câu trả lời có thể
-        chưa được kiểm chứng với nguồn tài liệu.
-      </p>
-
-      {threads.data && threads.data.total > 0 && (
-        <div className="tutor-threads">
-          <label className="sr-only" htmlFor="tutor-thread-select">
-            Chọn hội thoại
-          </label>
-          <select
-            id="tutor-thread-select"
-            value={threadId ?? ""}
-            onChange={(e) => {
-              const value = e.target.value;
-              if (!value) {
-                setThreadId(null);
-                setMessages([]);
-                return;
-              }
-              void openThread(value);
-            }}
-          >
-            <option value="">Hội thoại mới</option>
-            {threads.data.items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.title || "Hội thoại"} ({item.messageCount} lượt)
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {notice && <p className="muted">{notice}</p>}
-
+    <>
+      <button
+        type="button"
+        className={`tutor-backdrop${docked ? " is-docked" : ""}`}
+        aria-label="Đóng trợ giảng"
+        tabIndex={-1}
+        onClick={onClose}
+      />
+      {/* `aside` carries an implicit `complementary` role, and ARIA forbids
+          overriding it with `dialog` — axe reports `aria-allowed-role`. A `div`
+          is the valid host. The element type stays constant across the dock
+          breakpoint so resizing never remounts the panel. */}
       <div
-        className="tutor-messages"
-        ref={listRef}
-        role="log"
-        aria-live="polite"
-        aria-relevant="additions text"
+        className={`tutor-sheet${docked ? " is-docked" : ""}`}
+        role="dialog"
+        aria-modal={docked ? undefined : "true"}
+        aria-labelledby="tutor-heading"
+        ref={sheetRef}
+        tabIndex={-1}
       >
-        {messages.length === 0 && (
-          <p className="muted">Chưa có câu hỏi nào trong bài này.</p>
+        <div className="tutor-head">
+          <div>
+            <div id="tutor-heading" className="tutor-title">
+              Trợ giảng
+            </div>
+            <div className="tutor-subtitle">
+              {blockLabel ? `${blockLabel} · block ${activeBlockIndex + 1}` : "Bài đang học"}
+              {usage.data
+                ? ` · còn ${usage.data.remaining.messages ?? 0}/${usage.data.limits.messagesPerDay} lượt`
+                : ""}
+            </div>
+          </div>
+          <IconButton aria-label="Đóng" onClick={onClose}>
+            <Icon name="close" size={18} />
+          </IconButton>
+        </div>
+
+        {threads.data && threads.data.total > 0 && (
+          <div className="tutor-threads" style={{ marginBottom: 8 }}>
+            <label className="sr-only" htmlFor="tutor-thread-select">
+              Chọn hội thoại
+            </label>
+            <select
+              id="tutor-thread-select"
+              value={threadId ?? ""}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (!value) {
+                  setThreadId(null);
+                  setMessages([]);
+                  return;
+                }
+                void openThread(value);
+              }}
+            >
+              <option value="">Hội thoại mới</option>
+              {threads.data.items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.title || "Hội thoại"} ({item.messageCount} lượt)
+                </option>
+              ))}
+            </select>
+          </div>
         )}
-        {toolNotes.length > 0 && (
-          <ul className="tutor-tool-notes" aria-label="Công cụ trợ giảng đã dùng">
-            {toolNotes.map((note, index) => (
-              <li key={`${note.name}-${index}`}>
-                <span className="badge badge-muted">
-                  {note.name}
-                </span>{" "}
-                <span className={note.status === "ok" ? "muted" : "error-text"}>
-                  {note.status === "ok" ? "đã dùng" : "bị từ chối"}
-                  {note.summary ? ` — ${note.summary}` : ""}
-                  {note.code ? ` (${note.code})` : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`tutor-message tutor-message-${message.role}`}
-          >
-            <span className="badge badge-muted">
-              {message.role === "user" ? "Bạn" : "Trợ giảng"}
-            </span>
-            <p>
-              {message.content}
-              {message.status === "streaming" && (
-                <span className="tutor-caret" aria-hidden="true">
-                  ▍
-                </span>
-              )}
+
+        {notice && <p className="caption">{notice}</p>}
+
+        <div className="tutor-scroll" ref={listRef} role="log" aria-live="polite" aria-relevant="additions text">
+          {messages.length === 0 && (
+            <p className="muted" style={{ fontSize: 13 }}>
+              Hỏi về phần đang học — trợ giảng không đọc đáp án quiz.
             </p>
-            {message.status === "failed" && (
-              <p className="error-text">
-                Không hoàn tất
-                {message.errorCode
-                  ? ` (${STATUS_NOTE[message.errorCode] ?? message.errorCode})`
-                  : ""}
-              </p>
-            )}
-            {message.status === "cancelled" && (
-              <p className="muted">Đã dừng — nội dung một phần được giữ lại.</p>
-            )}
-            {message.role === "assistant" && message.citations && message.citations.length > 0 && (
-              <div className="tutor-citations" aria-label="Trích dẫn đã xác minh vị trí">
-                <p className="muted">Nguồn đã xác minh vị trí (chưa chứng minh từng câu):</p>
-                <ul>
-                  {message.citations.map((citation) => (
-                    <li key={citation.chunkId}>
-                      <a href={`/sources#${citation.sourceId}`} rel="noreferrer">
-                        {citationLabel(citation)}
-                      </a>
-                      {citation.sectionAnchor ? ` · ${citation.sectionAnchor}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {message.role === "assistant" &&
-              message.insufficientEvidence &&
-              message.unverified &&
-              message.unverified.length > 0 && (
-                <div className="tutor-citations tutor-citations-unverified">
-                  <p className="muted">
-                    Câu trả lời chưa trích dẫn nguồn. Các đoạn liên quan đã tìm thấy
-                    nhưng CHƯA được dẫn — hãy tự đối chiếu trước khi tin:
+          )}
+
+          {toolNotes.length > 0 && (
+            <ul className="tutor-tool-notes" aria-label="Công cụ trợ giảng đã dùng">
+              {toolNotes.map((note, index) => (
+                <li key={`${note.name}-${index}`}>
+                  <span className="badge badge-muted">{note.name}</span>{" "}
+                  <span className={note.status === "ok" ? "caption" : "error-text"}>
+                    {note.status === "ok" ? "đã dùng" : "bị từ chối"}
+                    {note.summary ? ` — ${note.summary}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {messages.map((message) => (
+            <div key={message.id} className={`tutor-message tutor-message-${message.role}`}>
+              {message.role === "user" ? (
+                <div className="bubble-user">{message.content}</div>
+              ) : (
+                <div className="bubble-assistant">
+                  {message.content}
+                  {message.status === "streaming" && (
+                    <span className="tutor-caret" aria-hidden="true">
+                      ▍
+                    </span>
+                  )}
+                  {message.status === "failed" && (
+                    <p className="error-text" style={{ marginTop: 6 }}>
+                      Không hoàn tất
+                      {message.errorCode
+                        ? ` — ${STATUS_NOTE[message.errorCode] ?? message.errorCode}`
+                        : ""}
+                    </p>
+                  )}
+                  {message.status === "cancelled" && (
+                    <p className="caption" style={{ marginTop: 6 }}>
+                      Đã dừng — nội dung một phần được giữ lại.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {message.role === "assistant" && message.citations && message.citations.length > 0 && (
+                <div className="tutor-citations" aria-label="Trích dẫn đã xác minh vị trí">
+                  <p className="caption" style={{ margin: 0 }}>
+                    Nguồn đã xác minh vị trí:
                   </p>
                   <ul>
-                    {message.unverified.map((pointer) => (
-                      <li key={pointer.chunkId}>
-                        {pointer.sourceTitle ?? "Tài liệu"}
-                        {pointer.pageNumber ? ` — tr.${pointer.pageNumber}` : ""}
+                    {message.citations.map((citation) => (
+                      <li key={citation.chunkId}>
+                        <a href={`/sources#${citation.sourceId}`} rel="noreferrer">
+                          {citationLabel(citation)}
+                        </a>
+                        {citation.sectionAnchor ? ` · ${citation.sectionAnchor}` : ""}
                       </li>
                     ))}
                   </ul>
                 </div>
               )}
-            {message.role === "assistant" &&
-              message.insufficientEvidence &&
-              (!message.unverified || message.unverified.length === 0) &&
-              message.status === "completed" && (
-                <p className="muted">
-                  Chưa đủ thông tin từ tài liệu để trả lời có căn cứ.
-                </p>
-              )}
-          </div>
-        ))}
-      </div>
 
-      {error && <div className="error-box">{error}</div>}
+              {message.role === "assistant" &&
+                message.insufficientEvidence &&
+                message.unverified &&
+                message.unverified.length > 0 && (
+                  <div className="tutor-citations tutor-citations-unverified">
+                    <p className="caption" style={{ margin: 0 }}>
+                      Chưa trích dẫn nguồn. Đoạn liên quan đã tìm thấy nhưng chưa được dẫn:
+                    </p>
+                    <ul>
+                      {message.unverified.map((pointer) => (
+                        <li key={pointer.chunkId}>
+                          {pointer.sourceTitle ?? "Tài liệu"}
+                          {pointer.pageNumber ? ` — tr.${pointer.pageNumber}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
-      <label htmlFor="tutor-input" className="sr-only">
-        Câu hỏi cho trợ giảng
-      </label>
-      <textarea
-        id="tutor-input"
-        value={text}
-        maxLength={2000}
-        placeholder="Hỏi về block này… (Ctrl+Enter để gửi)"
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-            e.preventDefault();
-            void send();
-          }
-        }}
-        disabled={streaming || quotaExhausted}
-      />
-      <div className="tutor-actions">
-        <button
-          onClick={send}
-          disabled={streaming || quotaExhausted || text.trim().length === 0}
-        >
-          {streaming ? "Đang trả lời…" : "Gửi câu hỏi"}
-        </button>
-        {streaming && (
-          <button className="secondary" onClick={stop} disabled={stopping}>
-            {stopping ? "Đang dừng…" : "Dừng"}
-          </button>
-        )}
-        {usage.data && (
-          <span className="muted tutor-quota">
-            {usage.data.limits.messagesPerDay > 0
-              ? `Còn ${usage.data.remaining.messages ?? 0}/${usage.data.limits.messagesPerDay} lượt hôm nay`
-              : "Không giới hạn lượt"}
-            {usage.data.limits.tokensPerDay > 0 && (
-              <>
-                {" · "}
-                {usage.data.tokensKnown
-                  ? `token ${usage.data.used.tokens}/${usage.data.limits.tokensPerDay}`
-                  : "chưa có số token (provider không báo)"}
-              </>
-            )}
-          </span>
+              {message.role === "assistant" &&
+                message.insufficientEvidence &&
+                (!message.unverified || message.unverified.length === 0) &&
+                message.status === "completed" && (
+                  <p className="caption">Chưa đủ thông tin từ tài liệu để trả lời có căn cứ.</p>
+                )}
+            </div>
+          ))}
+        </div>
+
+        {error && <div className="error-box" role="alert">{error}</div>}
+
+        <div className="tutor-composer">
+          <label htmlFor="tutor-input" className="sr-only">
+            Câu hỏi cho trợ giảng
+          </label>
+          <textarea
+            id="tutor-input"
+            value={text}
+            maxLength={2000}
+            placeholder="Hỏi về phần này…"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            disabled={streaming || quotaExhausted}
+          />
+          {streaming ? (
+            <Button variant="secondary" size="md" onClick={() => void stop()} disabled={stopping}>
+              {stopping ? "Đang dừng" : "Dừng"}
+            </Button>
+          ) : (
+            <Button
+              className="tutor-send"
+              aria-label="Gửi"
+              onClick={() => void send()}
+              disabled={quotaExhausted || text.trim().length === 0}
+            >
+              <Icon name="arrowRight" size={18} />
+            </Button>
+          )}
+        </div>
+
+        {quotaExhausted && (
+          <p className="caption" style={{ marginTop: 8 }}>
+            Bạn đã dùng hết hạn mức trợ giảng trong 24 giờ. Hạn mức sẽ tự làm mới.
+          </p>
         )}
       </div>
-      {quotaExhausted && (
-        <p className="muted">
-          Bạn đã dùng hết hạn mức trợ giảng trong 24 giờ. Hạn mức sẽ tự làm mới.
-        </p>
-      )}
-    </section>
+    </>
   );
 }

@@ -13,12 +13,22 @@ argon2-cffi>=23.1
 pyjwt>=2.8
 alembic>=1.13
 psycopg[binary]>=3.1
-# P4.0 — PDF text extraction (không OCR) + multipart upload + S3/MinIO storage
+# P4.0 — PDF text extraction + multipart upload + S3/MinIO storage
 pypdf>=5.0
 python-multipart>=0.0.9
 minio>=7.2
 # P4.2 — XML parsing an toàn cho arXiv Atom metadata (chặn entity expansion)
 defusedxml>=0.7
+
+# P5.0 — FSRS spaced repetition (pure Python; optimizer extras KHÔNG cài).
+# PIN chính xác: `scheduler_version` ghi vào card/event phải khớp thư viện thật,
+# nếu không lịch đã lưu sẽ không tái lập được sau khi nâng minor version.
+fsrs==6.3.2
+
+# P4.3 — OCR cho PDF scan KHÔNG nằm trong requirements mặc định: nó nặng
+# (onnxruntime + opencv-headless + model ~15MB) và mặc định TẮT. Cài riêng bằng
+# `pip install -r requirements-ocr.txt` khi thật sự cần OCR. Bật cờ OCR mà chưa
+# cài ⇒ API trả 422 `OCR_NOT_CONFIGURED` (fail-fast, không âm thầm bỏ qua).
 
 # dev/test
 pytest>=8.0

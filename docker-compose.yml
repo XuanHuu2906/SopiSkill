@@ -119,6 +119,25 @@ services:
       WEB_INGEST_USER_AGENT: ${WEB_INGEST_USER_AGENT:-SopiSkillBot/1.0 (+source-ingest)}
       WEB_PIPELINE_VERSION: ${WEB_PIPELINE_VERSION:-p4.2-v1}
       ARXIV_METADATA_SOURCE: ${ARXIV_METADATA_SOURCE:-abs}
+      # P4.3 — OCR cho PDF scan (mặc định TẮT; cần requirements-ocr.txt trong image)
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+      OCR_ENGINE: ${OCR_ENGINE:-rapidocr}
+      OCR_LANG: ${OCR_LANG:-vi}
+      OCR_MODEL_VERSION: ${OCR_MODEL_VERSION:-}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-20}
+      OCR_DPI: ${OCR_DPI:-200}
+      OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-300}
+      OCR_MIN_CONFIDENCE: ${OCR_MIN_CONFIDENCE:-0.0}
+      OCR_VIETOCR_WEIGHTS: ${OCR_VIETOCR_WEIGHTS:-}
+      OCR_VIETOCR_CONFIG: ${OCR_VIETOCR_CONFIG:-}
+      # P5.0 — learner profile/mastery/FSRS (mặc định TẮT; route trả 503 khi tắt)
+      P50_ENABLED: ${P50_ENABLED:-false}
+      P52_EXPOSURE_ENABLED: ${P52_EXPOSURE_ENABLED:-false}
+      P52_TOKEN_TTL_SECONDS: ${P52_TOKEN_TTL_SECONDS:-900}
+      P50_BACKFILL_ENABLED: ${P50_BACKFILL_ENABLED:-false}
+      MASTERY_PASS_THRESHOLD: ${MASTERY_PASS_THRESHOLD:-0.7}
+      MASTERY_RECENCY_HALF_LIFE_DAYS: ${MASTERY_RECENCY_HALF_LIFE_DAYS:-30}
+      FSRS_DESIRED_RETENTION: ${FSRS_DESIRED_RETENTION:-0.9}
       ARXIV_API_HOST: ${ARXIV_API_HOST:-export.arxiv.org}
       ARXIV_PDF_HOST: ${ARXIV_PDF_HOST:-arxiv.org}
       SOURCE_STORAGE_BACKEND: ${SOURCE_STORAGE_BACKEND:-s3}
@@ -148,6 +167,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENV: development
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (copy .env.example)}
+      # Rỗng ⇒ backend dùng JWT_SECRET làm khoá shuffle quiz.
+      LESSON_SHUFFLE_SECRET: ${LESSON_SHUFFLE_SECRET:-}
       ALLOW_DEMO_HEADER: ${ALLOW_DEMO_HEADER:-false}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       # Có broker Redis → không chạy generation inline trong process API.
@@ -170,6 +191,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
+      # Cùng khoá shuffle với backend: nếu worker grade/project mà thiếu khoá,
+      # hoán vị sẽ khác và đáp án đúng bị chấm sai.
+      LESSON_SHUFFLE_SECRET: ${LESSON_SHUFFLE_SECRET:-${JWT_SECRET:-}}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_MAX_SCHEMA_RETRIES: ${LLM_MAX_SCHEMA_RETRIES:-1}
@@ -236,6 +260,25 @@ services:
       WEB_INGEST_USER_AGENT: ${WEB_INGEST_USER_AGENT:-SopiSkillBot/1.0 (+source-ingest)}
       WEB_PIPELINE_VERSION: ${WEB_PIPELINE_VERSION:-p4.2-v1}
       ARXIV_METADATA_SOURCE: ${ARXIV_METADATA_SOURCE:-abs}
+      # P4.3 — OCR cho PDF scan (mặc định TẮT; cần requirements-ocr.txt trong image)
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+      OCR_ENGINE: ${OCR_ENGINE:-rapidocr}
+      OCR_LANG: ${OCR_LANG:-vi}
+      OCR_MODEL_VERSION: ${OCR_MODEL_VERSION:-}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-20}
+      OCR_DPI: ${OCR_DPI:-200}
+      OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-300}
+      OCR_MIN_CONFIDENCE: ${OCR_MIN_CONFIDENCE:-0.0}
+      OCR_VIETOCR_WEIGHTS: ${OCR_VIETOCR_WEIGHTS:-}
+      OCR_VIETOCR_CONFIG: ${OCR_VIETOCR_CONFIG:-}
+      # P5.0 — learner profile/mastery/FSRS (mặc định TẮT; route trả 503 khi tắt)
+      P50_ENABLED: ${P50_ENABLED:-false}
+      P52_EXPOSURE_ENABLED: ${P52_EXPOSURE_ENABLED:-false}
+      P52_TOKEN_TTL_SECONDS: ${P52_TOKEN_TTL_SECONDS:-900}
+      P50_BACKFILL_ENABLED: ${P50_BACKFILL_ENABLED:-false}
+      MASTERY_PASS_THRESHOLD: ${MASTERY_PASS_THRESHOLD:-0.7}
+      MASTERY_RECENCY_HALF_LIFE_DAYS: ${MASTERY_RECENCY_HALF_LIFE_DAYS:-30}
+      FSRS_DESIRED_RETENTION: ${FSRS_DESIRED_RETENTION:-0.9}
       ARXIV_API_HOST: ${ARXIV_API_HOST:-export.arxiv.org}
       ARXIV_PDF_HOST: ${ARXIV_PDF_HOST:-arxiv.org}
       SOURCE_STORAGE_BACKEND: ${SOURCE_STORAGE_BACKEND:-s3}
@@ -349,6 +392,25 @@ services:
       WEB_INGEST_USER_AGENT: ${WEB_INGEST_USER_AGENT:-SopiSkillBot/1.0 (+source-ingest)}
       WEB_PIPELINE_VERSION: ${WEB_PIPELINE_VERSION:-p4.2-v1}
       ARXIV_METADATA_SOURCE: ${ARXIV_METADATA_SOURCE:-abs}
+      # P4.3 — OCR cho PDF scan (mặc định TẮT; cần requirements-ocr.txt trong image)
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+      OCR_ENGINE: ${OCR_ENGINE:-rapidocr}
+      OCR_LANG: ${OCR_LANG:-vi}
+      OCR_MODEL_VERSION: ${OCR_MODEL_VERSION:-}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-20}
+      OCR_DPI: ${OCR_DPI:-200}
+      OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-300}
+      OCR_MIN_CONFIDENCE: ${OCR_MIN_CONFIDENCE:-0.0}
+      OCR_VIETOCR_WEIGHTS: ${OCR_VIETOCR_WEIGHTS:-}
+      OCR_VIETOCR_CONFIG: ${OCR_VIETOCR_CONFIG:-}
+      # P5.0 — learner profile/mastery/FSRS (mặc định TẮT; route trả 503 khi tắt)
+      P50_ENABLED: ${P50_ENABLED:-false}
+      P52_EXPOSURE_ENABLED: ${P52_EXPOSURE_ENABLED:-false}
+      P52_TOKEN_TTL_SECONDS: ${P52_TOKEN_TTL_SECONDS:-900}
+      P50_BACKFILL_ENABLED: ${P50_BACKFILL_ENABLED:-false}
+      MASTERY_PASS_THRESHOLD: ${MASTERY_PASS_THRESHOLD:-0.7}
+      MASTERY_RECENCY_HALF_LIFE_DAYS: ${MASTERY_RECENCY_HALF_LIFE_DAYS:-30}
+      FSRS_DESIRED_RETENTION: ${FSRS_DESIRED_RETENTION:-0.9}
       ARXIV_API_HOST: ${ARXIV_API_HOST:-export.arxiv.org}
       ARXIV_PDF_HOST: ${ARXIV_PDF_HOST:-arxiv.org}
       SOURCE_STORAGE_BACKEND: ${SOURCE_STORAGE_BACKEND:-s3}

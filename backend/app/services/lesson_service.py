@@ -9,6 +9,7 @@ Bảo mật (P1.1):
 """
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -16,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Course, Lesson, LessonAttempt, User, XpEvent
+from app.core.config import get_settings
 from app.schemas.schemas import AttemptRequest
 from app.services.course_service import parse_prefixed_uuid
 from app.services.lesson_content import grade_attempt
@@ -89,13 +91,16 @@ async def _find_attempt(
 
 async def submit_attempt(
     db: AsyncSession, lesson: Lesson, user: User, request: AttemptRequest
-) -> tuple[LessonAttempt, bool]:
-    """Idempotent theo (lesson, user, clientAttemptId). Chấm server-side."""
+) -> tuple[LessonAttempt, bool, bool]:
+    """Idempotent theo (lesson, user, clientAttemptId). Chấm server-side.
+
+    Trả `(attempt, duplicate, reviewCardCreated)` — phần tử thứ ba phục vụ P5.0.
+    """
     _validate_answers(lesson.content or [], request)
 
     existing = await _find_attempt(db, lesson.id, user.id, request.clientAttemptId)
     if existing is not None:
-        return existing, True
+        return existing, True, False
 
     # Serialize XP computation per user (PostgreSQL row lock; SQLite no-op).
     # Lấy luôn giá trị xp hiện tại trong cùng câu SELECT ... FOR UPDATE để không
@@ -111,7 +116,7 @@ async def submit_attempt(
     # Re-check sau khi có lock: request khác có thể vừa commit cùng clientAttemptId.
     existing = await _find_attempt(db, lesson.id, user.id, request.clientAttemptId)
     if existing is not None:
-        return existing, True
+        return existing, True, False
 
     results, correct, total = grade_attempt(
         lesson.id, lesson.content_version, lesson.content or [], request.answers
@@ -154,6 +159,24 @@ async def submit_attempt(
             )
         )
 
+    # P5.0 — mastery + review card trong CÙNG transaction với attempt để không có
+    # trạng thái "attempt đã lưu nhưng mastery chưa cập nhật". Lỗi ở đây không được
+    # làm hỏng attempt: nếu lỗi ⇒ rollback toàn bộ là hành vi đúng (attempt chưa
+    # commit), nên bọc try/except chỉ để log rõ nguyên nhân.
+    review_card_created = False
+    if get_settings().p50_enabled:
+        from app.services import learner_profile_service, spaced_repetition_service
+
+        await db.flush()
+        skill = await learner_profile_service.skill_for_lesson(db, lesson.id)
+        if skill is not None:
+            await learner_profile_service.refresh_skill_mastery(
+                db, user_id=user.id, skill_id=skill.id, now=datetime.now(UTC)
+            )
+        review_card_created = await spaced_repetition_service.ensure_card_for_attempt(
+            db, lesson=lesson, attempt=attempt, user_id=user.id
+        )
+
     try:
         await db.commit()
     except IntegrityError:
@@ -162,7 +185,7 @@ async def submit_attempt(
         found = await _find_attempt(db, lesson.id, user.id, request.clientAttemptId)
         if found is None:
             raise
-        return found, True
+        return found, True, False
 
     await db.refresh(attempt)
-    return attempt, False
+    return attempt, False, review_card_created

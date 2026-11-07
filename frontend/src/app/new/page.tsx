@@ -1,15 +1,26 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api, newClientId } from "@/lib/api";
 import { useRequireAuth } from "../providers";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { TextInput } from "@/components/ui/Field";
 
 interface CourseOut {
   id: string;
   topic: string;
   status: string;
 }
+
+const SUGGESTIONS = [
+  "Python cho người mới",
+  "Xác suất thống kê cơ bản",
+  "Cách hoạt động của LLM",
+  "Nhạc lý cơ bản",
+];
 
 export default function NewCoursePage() {
   const router = useRouter();
@@ -18,14 +29,15 @@ export default function NewCoursePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function start() {
-    if (!topic.trim()) return;
+  async function start(value?: string) {
+    const finalTopic = (value ?? topic).trim();
+    if (!finalTopic) return;
     setLoading(true);
     setError(null);
     try {
       const course = await api<CourseOut>("/v1/courses", {
         method: "POST",
-        body: { topic: topic.trim(), clientCourseId: newClientId("cc") },
+        body: { topic: finalTopic, clientCourseId: newClientId("cc") },
       });
       router.push(`/new/interview?courseId=${encodeURIComponent(course.id)}`);
     } catch (e) {
@@ -35,37 +47,81 @@ export default function NewCoursePage() {
     }
   }
 
-  if (authLoading) return <div className="container">Đang kiểm tra phiên đăng nhập…</div>;
-  if (!isAuthenticated) return <div className="container">Đang chuyển tới trang đăng nhập…</div>;
+  if (authLoading) return <p className="muted">Đang kiểm tra phiên đăng nhập…</p>;
+  if (!isAuthenticated) return <p className="muted">Đang chuyển tới trang đăng nhập…</p>;
 
   return (
-    <div className="container">
-      <div className="topbar">
-        <h1>Tạo khóa học mới</h1>
-      </div>
+    <div style={{ maxWidth: 680, margin: "0 auto", paddingTop: 24 }}>
+      <h1 className="display-xl" style={{ marginBottom: 12 }}>
+        Bạn muốn học gì?
+      </h1>
+      <p className="lede" style={{ marginBottom: 28 }}>
+        Nêu một chủ đề bất kỳ. Hệ thống sẽ hỏi vài câu nhanh rồi soạn khóa học phù hợp
+        với bạn.
+      </p>
 
-      <div className="card">
-        <h2>Bạn muốn học gì?</h2>
-        <p>Nhập một chủ đề — hệ thống sẽ phỏng vấn bạn rồi đề xuất lộ trình.</p>
-        <label htmlFor="topic-input" className="sr-only">
-          Chủ đề khóa học
-        </label>
-        <input
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void start();
+        }}
+      >
+        <TextInput
           id="topic-input"
+          label="Chủ đề khóa học"
           type="text"
           placeholder="Ví dụ: Python cho người mới"
           value={topic}
           maxLength={200}
           onChange={(e) => setTopic(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && start()}
+          autoFocus
         />
-        {error && <div className="error-box">{error}</div>}
-        <div style={{ marginTop: 12 }}>
-          <button type="button" onClick={start} disabled={loading || !topic.trim()}>
-            {loading ? "Đang tạo..." : "Bắt đầu"}
-          </button>
+        {error && (
+          <div className="error-box" role="alert">
+            {error}
+          </div>
+        )}
+        <Button type="submit" size="lg" block disabled={loading || !topic.trim()}>
+          {loading ? "Đang tạo..." : "Bắt đầu"}
+        </Button>
+      </form>
+
+      <div style={{ marginTop: 28 }}>
+        <span className="eyebrow" style={{ color: "var(--ink-3)" }}>
+          Cần gợi ý?
+        </span>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+          {SUGGESTIONS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className="quick-chip"
+              disabled={loading}
+              onClick={() => {
+                setTopic(s);
+                void start(s);
+              }}
+            >
+              {s}
+            </button>
+          ))}
         </div>
       </div>
+
+      <Card variant="tint" className="card" style={{ marginTop: 28 }}>
+        <h2 className="section-title" style={{ fontSize: 19, marginBottom: 6 }}>
+          Bạn luôn có thể dừng giữa chừng
+        </h2>
+        <p className="muted">
+          Câu trả lời phỏng vấn được lưu theo từng bước, nên tải lại trang vẫn tiếp tục
+          đúng câu chưa trả lời.
+        </p>
+        <p style={{ marginTop: 10 }}>
+          <Link href="/sources" className="link" style={{ fontSize: 15 }}>
+            Hoặc tạo khóa học từ tài liệu của bạn
+          </Link>
+        </p>
+      </Card>
     </div>
   );
 }

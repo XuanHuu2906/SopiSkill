@@ -262,6 +262,10 @@ def verify_answer_citations(
                 "sourceTitle": item.source_title,
                 # P4.2 — URL gốc cho tài liệu web/arXiv (None cho PDF upload).
                 "sourceUrl": getattr(item, "source_url", None),
+                # P4.3 — text này đọc từ ảnh (OCR) hay từ text layer gốc. Người
+                # đọc phải biết khi trích dẫn là do máy đọc.
+                "textSource": getattr(item, "text_source", "native") or "native",
+                "ocrConfidence": getattr(item, "ocr_confidence", None),
                 "sourceVersion": item.source_version,
                 "evidenceText": item.text[:600],
                 "validationStatus": CitationValidationStatus.locator_verified.value,
@@ -287,6 +291,7 @@ def unverified_source_pointers(retrieved: list, *, max_items: int = 5) -> list[d
                 "sourceId": f"src_{item.source_id}",
                 "sourceTitle": item.source_title,
                 "sourceUrl": getattr(item, "source_url", None),
+                "textSource": getattr(item, "text_source", "native") or "native",
                 "pageNumber": item.page_number,
                 "sectionAnchor": item.section_anchor,
                 "validationStatus": CitationValidationStatus.unverified.value,

@@ -1,16 +1,19 @@
-"""PDF ingestion service (P4.0) — validate, extract text, chunk, provenance.
+"""PDF ingestion service (P4.0 + P4.3 OCR) — validate, extract, chunk, provenance.
 
 Nguyên tắc:
   - **Không tin client**: extension/Content-Type không chứng minh gì. Chỉ chấp nhận
     file bắt đầu bằng magic `%PDF-`; page count/size bị giới hạn cứng; file mã
     hoá/corrupt bị từ chối với mã lỗi ổn định.
-  - **Không OCR** ở P4.0. PDF scan (không có text layer) ⇒ trạng thái `no_text`,
-    không bịa nội dung và không đánh dấu `ready`.
+  - **OCR là opt-in** (P4.3). Tắt ⇒ PDF scan (không có text layer) ⇒ trạng thái
+    `no_text`, không bịa nội dung và không đánh dấu `ready`. Bật ⇒ trang không có
+    text được OCR bằng engine pretrained, chunk mang `textSource=ocr` +
+    `ocrConfidence` + `ocrBbox`; không bao giờ trộn hai loại mà không ghi nhãn.
   - **Provenance thật**: mỗi chunk giữ `page_number` + offset ký tự trong text
     của trang + `text_hash`. Không overlap giữa chunk để citation không mơ hồ.
   - **Idempotent** theo `(source_id, content_hash, pipeline_version)`: retry không
     tạo document/chunk trùng; chunk được thay thế theo `document_id` trong một
-    transaction.
+    transaction. Bật/tắt OCR đổi `pipeline_version` ⇒ document mới, không ghi đè
+    chunk cũ (citation cũ vẫn trỏ đúng dữ liệu cũ).
   - **Không log nội dung**: log chỉ id/kích thước/số trang/mã lỗi.
 """
 
@@ -21,7 +24,7 @@ import io
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select, update
@@ -30,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models import Source, SourceChunk, SourceDocument, SourceDocumentStatus, SourceVisibility
+from app.services import ocr as ocr_module
 from app.services import storage as storage_module
 
 logger = logging.getLogger(__name__)
@@ -37,6 +41,9 @@ logger = logging.getLogger(__name__)
 PDF_MAGIC = b"%PDF-"
 UNTRUSTED_OPEN = "<<<NGUON_BAT_DAU>>>"
 UNTRUSTED_CLOSE = "<<<NGUON_KET_THUC>>>"
+TEXT_SOURCE_NATIVE = "native"
+TEXT_SOURCE_OCR = "ocr"
+TEXT_SOURCE_MIXED = "mixed"
 
 
 class IngestError(Exception):
@@ -53,9 +60,23 @@ class IngestError(Exception):
 
 
 @dataclass
+class LineSpan:
+    """Một dòng OCR: khoảng ký tự trong text trang + confidence + bbox chuẩn hoá."""
+
+    char_start: int
+    char_end: int
+    confidence: float
+    bbox: tuple[float, float, float, float]
+
+
+@dataclass
 class ExtractedPage:
     page_number: int
     text: str
+    # P4.3 — `native` (text layer của PDF) hay `ocr` (đọc từ ảnh trang).
+    text_source: str = TEXT_SOURCE_NATIVE
+    # Chỉ có ý nghĩa với trang OCR; trang native để rỗng ⇒ confidence = None.
+    line_spans: list[LineSpan] = field(default_factory=list)
 
 
 @dataclass
@@ -65,6 +86,9 @@ class ChunkDraft:
     char_end: int
     section_anchor: str | None
     text: str
+    text_source: str = TEXT_SOURCE_NATIVE
+    ocr_confidence: float | None = None
+    ocr_bbox: tuple[float, float, float, float] | None = None
 
 
 @dataclass
@@ -75,6 +99,22 @@ class ExtractionResult:
     @property
     def has_text(self) -> bool:
         return any(page.text.strip() for page in self.pages)
+
+    @property
+    def text_source(self) -> str:
+        """`native` | `ocr` | `mixed` — dựa trên các trang THỰC SỰ có text."""
+        sources = {page.text_source for page in self.pages if page.text.strip()}
+        if sources == {TEXT_SOURCE_OCR}:
+            return TEXT_SOURCE_OCR
+        if sources and sources <= {TEXT_SOURCE_OCR, TEXT_SOURCE_NATIVE} and len(sources) > 1:
+            return TEXT_SOURCE_MIXED
+        return TEXT_SOURCE_NATIVE
+
+    @property
+    def ocr_pages(self) -> int:
+        return sum(
+            1 for page in self.pages if page.text.strip() and page.text_source == TEXT_SOURCE_OCR
+        )
 
 
 # ---------- validation ----------
@@ -144,7 +184,7 @@ def check_limits(data: bytes, *, max_bytes: int | None = None, max_pages: int | 
 
 
 def extract_pages(data: bytes) -> ExtractionResult:
-    """Trích text theo trang (native text layer). Không OCR, không sửa nội dung."""
+    """Trích text layer của PDF (KHÔNG OCR). Trang scan ⇒ `text` rỗng."""
     reader = _open_reader(data)
     pages: list[ExtractedPage] = []
     for index, page in enumerate(reader.pages, start=1):
@@ -154,13 +194,139 @@ def extract_pages(data: bytes) -> ExtractionResult:
             raw = ""
         pages.append(ExtractedPage(page_number=index, text=raw))
 
-    result = ExtractionResult(page_count=len(pages), pages=pages)
-    if not result.has_text:
+    return ExtractionResult(page_count=len(pages), pages=pages)
+
+
+def pages_without_text(result: ExtractionResult) -> list[int]:
+    """Số trang (1-based) không có text layer — ứng viên cho OCR."""
+    return [page.page_number for page in result.pages if not page.text.strip()]
+
+
+def pipeline_version_for(base: str, settings=None) -> str:
+    """Gắn hậu tố OCR vào `pipeline_version` khi OCR đang bật.
+
+    `pipeline_version` phản ánh ĐÚNG cách text được tạo: bật OCR đổi giá trị ⇒
+    document mới (không ghi đè chunk cũ) và citation cũ vẫn trỏ đúng dữ liệu đã
+    sinh ra nó.
+    """
+    settings = settings or get_settings()
+    if not ocr_module.configured(settings):
+        return base
+    return f"{base}+ocr-{settings.ocr_engine}-{settings.ocr_model_version}"
+
+
+def ocr_pipeline_version(settings=None) -> str:
+    """`pipeline_version` của PDF upload (P4.0 base + hậu tố OCR nếu bật)."""
+    settings = settings or get_settings()
+    return pipeline_version_for(settings.source_pipeline_version, settings)
+
+
+def build_ocr_pages(ocr_pages: list[ocr_module.OcrPage]) -> list[ExtractedPage]:
+    """Chuyển kết quả engine → `ExtractedPage` + `LineSpan` (offset chính xác).
+
+    Text trang dựng từ các dòng theo đúng thứ tự engine trả về, nối bằng `\\n`.
+    `LineSpan.char_start/char_end` trỏ ĐÚNG vào text đó nên bbox/confidence của
+    chunk luôn khớp nội dung chunk.
+    """
+    pages: list[ExtractedPage] = []
+    for page in sorted(ocr_pages, key=lambda item: item.page_number):
+        spans: list[LineSpan] = []
+        pieces: list[str] = []
+        cursor = 0
+        for line in page.lines:
+            text = line.text.strip()
+            if not text:
+                continue
+            if cursor:
+                cursor += 1  # ký tự '\n' nối dòng
+            pieces.append(text)
+            spans.append(
+                LineSpan(
+                    char_start=cursor,
+                    char_end=cursor + len(text),
+                    confidence=line.confidence,
+                    bbox=line.bbox,
+                )
+            )
+            cursor += len(text)
+        pages.append(
+            ExtractedPage(
+                page_number=page.page_number,
+                text="\n".join(pieces),
+                text_source=TEXT_SOURCE_OCR,
+                line_spans=spans,
+            )
+        )
+    return pages
+
+
+def extract_document(data: bytes, *, settings=None) -> ExtractionResult:
+    """Trích text đầy đủ: native text layer → (nếu bật) OCR các trang scan.
+
+    Tắt OCR ⇒ hành vi P4.0: không có text ⇒ `NO_EXTRACTABLE_TEXT`.
+    Bật OCR ⇒ chỉ OCR trang THIẾU text; nếu sau OCR vẫn rỗng ⇒ `OCR_NO_TEXT`.
+    """
+    settings = settings or get_settings()
+    native = extract_pages(data)
+    ocr_active = ocr_module.configured(settings)
+    if not native.has_text and not ocr_active:
         raise IngestError(
             "NO_EXTRACTABLE_TEXT",
             "PDF không có lớp text (có thể là bản scan). OCR chưa được bật ở giai đoạn này.",
         )
-    return result
+    if ocr_active and pages_without_text(native):
+        native = apply_ocr(data, native, settings=settings)
+    if not native.has_text:
+        raise IngestError(
+            "OCR_NO_TEXT" if ocr_active else "NO_EXTRACTABLE_TEXT",
+            "OCR chạy xong nhưng không nhận dạng được chữ nào trên tài liệu."
+            if ocr_active
+            else "PDF không có lớp text (có thể là bản scan). OCR chưa được bật ở giai đoạn này.",
+        )
+    return native
+
+
+def apply_ocr(data: bytes, result: ExtractionResult, *, settings=None) -> ExtractionResult:
+    """OCR các trang thiếu text của `data` rồi ghép; trang native giữ nguyên.
+
+    Trần `OCR_MAX_PAGES` được kiểm TRƯỚC khi chạy engine ⇒ fail-closed thay vì
+    ingest nửa vời. Trả `ExtractionResult` mới (không sửa object đầu vào).
+    """
+    settings = settings or get_settings()
+    targets = pages_without_text(result)
+    if not targets:
+        return ExtractionResult(page_count=result.page_count, pages=list(result.pages))
+
+    limit = max(0, int(settings.ocr_max_pages))
+    if limit and len(targets) > limit:
+        raise IngestError(
+            "OCR_PAGE_LIMIT",
+            f"Tài liệu có {len(targets)} trang cần OCR, vượt giới hạn {limit} trang.",
+            retryable=False,
+        )
+
+    try:
+        ocr_pages = ocr_module.ocr_pdf_pages(data, targets, dpi=settings.ocr_dpi)
+    except ocr_module.OcrError as exc:
+        raise IngestError(exc.code, exc.message, retryable=exc.retryable) from exc
+    return apply_ocr_pages(result, ocr_pages)
+
+
+def apply_ocr_pages(
+    result: ExtractionResult, ocr_pages: list[ocr_module.OcrPage]
+) -> ExtractionResult:
+    """Ghép trang OCR (đã chạy) vào kết quả native. Tách riêng để test/worker
+    truyền dữ liệu OCR mà không phải gọi engine hai lần."""
+    by_page = {page.page_number: page for page in build_ocr_pages(ocr_pages)}
+    merged: list[ExtractedPage] = []
+    for page in result.pages:
+        replacement = by_page.get(page.page_number)
+        if replacement is not None and not page.text.strip():
+            merged.append(replacement)
+        else:
+            merged.append(page)
+    return ExtractionResult(page_count=result.page_count, pages=merged)
+
 
 
 # ---------- chunking ----------
@@ -301,7 +467,63 @@ def chunk_pages(
         if pending:
             emit()
 
-    return _merge_tiny_chunks(drafts, pages=pages, minimum=minimum)
+    merged = _merge_tiny_chunks(drafts, pages=pages, minimum=minimum)
+    return _annotate_provenance(merged, pages=pages)
+
+
+def _annotate_provenance(
+    drafts: list[ChunkDraft], *, pages: list[ExtractedPage]
+) -> list[ChunkDraft]:
+    """Gắn `text_source` + confidence/bbox cho chunk dựa trên trang nguồn.
+
+    Trang native ⇒ `textSource=native`, confidence/bbox = None (KHÔNG bịa điểm tin
+    cậy). Trang OCR ⇒ confidence = điểm thấp nhất của các dòng giao với chunk
+    (cách đọc bảo thủ) và bbox = hợp các bbox dòng đó, chuẩn hoá theo trang.
+    """
+    by_page = {page.page_number: page for page in pages}
+    annotated: list[ChunkDraft] = []
+    for draft in drafts:
+        page = by_page.get(draft.page_number)
+        if page is None or page.text_source != TEXT_SOURCE_OCR:
+            annotated.append(draft)
+            continue
+        overlapping = [
+            span
+            for span in page.line_spans
+            if span.char_end > draft.char_start and span.char_start < draft.char_end
+        ]
+        if not overlapping:
+            annotated.append(
+                ChunkDraft(
+                    page_number=draft.page_number,
+                    char_start=draft.char_start,
+                    char_end=draft.char_end,
+                    section_anchor=draft.section_anchor,
+                    text=draft.text,
+                    text_source=TEXT_SOURCE_OCR,
+                )
+            )
+            continue
+        confidence = min(span.confidence for span in overlapping)
+        bbox = (
+            min(span.bbox[0] for span in overlapping),
+            min(span.bbox[1] for span in overlapping),
+            max(span.bbox[2] for span in overlapping),
+            max(span.bbox[3] for span in overlapping),
+        )
+        annotated.append(
+            ChunkDraft(
+                page_number=draft.page_number,
+                char_start=draft.char_start,
+                char_end=draft.char_end,
+                section_anchor=draft.section_anchor,
+                text=draft.text,
+                text_source=TEXT_SOURCE_OCR,
+                ocr_confidence=round(confidence, 6),
+                ocr_bbox=bbox,
+            )
+        )
+    return annotated
 
 
 def _split_long_block(
@@ -475,6 +697,14 @@ async def register_document(
         raise storage_module.StorageNotConfigured(
             "Kho lưu trữ nguồn chưa được cấu hình trên server."
         )
+    # P4.3 — fail-fast TRƯỚC khi ghi file: bật OCR mà engine không dùng được thì
+    # từ chối rõ ràng, không ghi object rồi mới phát hiện ở worker.
+    if settings.ocr_enabled and not ocr_module.configured(settings):
+        raise IngestError(
+            "OCR_NOT_CONFIGURED",
+            "OCR đã bật nhưng engine chưa sẵn sàng trên server "
+            "(thiếu thư viện hoặc chưa khai báo OCR_MODEL_VERSION).",
+        )
 
     page_count = check_limits(
         data,
@@ -482,7 +712,7 @@ async def register_document(
         max_pages=settings.source_max_pdf_pages,
     )
     digest = content_hash(data)
-    pipeline = settings.source_pipeline_version
+    pipeline = ocr_pipeline_version(settings)
 
     existing = (
         await db.execute(
@@ -626,10 +856,22 @@ async def finish_ready(
                 section_anchor=draft.section_anchor,
                 text=draft.text,
                 text_hash=text_hash(draft.text),
+                # P4.3 — provenance của text, không phải điểm tin cậy nội dung.
+                text_source=draft.text_source,
+                ocr_confidence=draft.ocr_confidence,
+                ocr_bbox=list(draft.ocr_bbox) if draft.ocr_bbox else None,
             )
         )
+    settings = get_settings()
+    source = ExtractionResult(page_count=len(pages), pages=pages)
     document.status = SourceDocumentStatus.ready
     document.page_count = len(pages)
+    document.text_source = source.text_source
+    document.ocr_pages = source.ocr_pages
+    # Gán lại CẢ HAI chiều: retry cùng document trên pipeline khác không được giữ
+    # engine/version cũ khi thực tế không còn trang OCR nào.
+    document.ocr_engine = settings.ocr_engine if source.ocr_pages else None
+    document.ocr_version = settings.ocr_model_version if source.ocr_pages else None
     document.error_code = None
     document.error = None
     document.lease_expires_at = None
@@ -638,15 +880,21 @@ async def finish_ready(
     await db.commit()
 
 
-async def finish_no_text(db: AsyncSession, document: SourceDocument) -> None:
+async def finish_no_text(
+    db: AsyncSession, document: SourceDocument, *, code: str = "NO_EXTRACTABLE_TEXT"
+) -> None:
+    """Không có text dùng được. `code` phân biệt "chưa bật OCR" và "OCR không đọc
+    được chữ" — hai tình huống khác nhau nhưng cùng KHÔNG có chunk."""
     await db.execute(delete(SourceChunk).where(SourceChunk.document_id == document.id))
+    if code == "OCR_NO_TEXT":
+        message = "OCR chạy xong nhưng không nhận dạng được chữ nào trên tài liệu."
+    else:
+        message = "PDF không có lớp text (có thể là bản scan). OCR chưa được bật."
     document.status = SourceDocumentStatus.no_text
-    document.error_code = "NO_EXTRACTABLE_TEXT"
-    document.error = {
-        "code": "NO_EXTRACTABLE_TEXT",
-        "message": "PDF không có lớp text (có thể là bản scan). OCR chưa được bật.",
-        "retryable": False,
-    }
+    document.error_code = code
+    document.error = {"code": code, "message": message, "retryable": False}
+    document.text_source = None
+    document.ocr_pages = 0
     document.lease_expires_at = None
     document.heartbeat_at = datetime.now(UTC)
     await db.commit()

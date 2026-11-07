@@ -250,6 +250,13 @@ class SourceDocumentOut(BaseModel):
     error: dict | None = None
     attempts: int = 0
     rightsConfirmed: bool = False
+    # P4.3 — text đến từ đâu: `native` (text layer PDF), `ocr`, hay `mixed`.
+    # `null` = document cũ trước P4.3 (không suy đoán ngược).
+    textSource: Literal["native", "ocr", "mixed"] | None = None
+    # Số trang đã OCR + engine/version. Chỉ để truy vết "text do máy đọc".
+    ocrPages: int = 0
+    ocrEngine: str | None = None
+    ocrVersion: str | None = None
     ingestedAt: str | None = None
     createdAt: str | None = None
 
@@ -285,6 +292,14 @@ class SourceIngestConfigOut(BaseModel):
     webMaxFetchBytes: int = 0
     webRespectRobots: bool = True
     arxivEnabled: bool = False
+    # P4.3 — OCR cho PDF scan. `ocrConfigured=false` ⇒ scan vẫn `no_text`; UI phải
+    # nói thật là "chưa bật OCR", không hứa đọc được bản scan.
+    ocrEnabled: bool = False
+    ocrConfigured: bool = False
+    ocrEngine: str = ""
+    ocrVersion: str = ""
+    ocrMaxPages: int = 0
+    ocrDpi: int = 0
 
 
 class RagSearchRequest(BaseModel):
@@ -314,6 +329,11 @@ class RagChunkOut(BaseModel):
     sourceVersion: str | None = None
     # P4.2 — URL nguồn thực (web/arXiv); None với PDF upload.
     sourceUrl: str | None = None
+    # P4.3 — `native` hay `ocr`. Đoạn do máy đọc ảnh phải được nói rõ cho người
+    # học/người review, không giả vờ là text gốc.
+    textSource: Literal["native", "ocr"] = "native"
+    ocrConfidence: float | None = None
+    ocrBbox: list[float] | None = None
     snippet: str
     lexicalRank: int | None = None
     vectorRank: int | None = None
@@ -643,6 +663,8 @@ class AttemptOut(BaseModel):
     score: dict
     rewards: dict
     results: list[AttemptResultOut]
+    # P5.0 — additive: UI hiện "Đã thêm vào lịch ôn tập" khi True.
+    reviewCardCreated: bool = False
 
 
 # ---------- AI Tutor (P3.0) ----------
@@ -763,3 +785,127 @@ class TutorStopOut(BaseModel):
     # Luôn False ở P3.1: dừng là best-effort, provider có thể đã tính phí phần đã sinh.
     providerStopGuaranteed: bool = False
     notice: str | None = None
+
+
+# ---------- Learner profile, mastery & FSRS (P5.0) ----------
+class SkillMasteryOut(BaseModel):
+    skillId: str
+    title: str
+    bloomLevel: str
+    # Heuristic accuracy có trọng số thời gian — KHÔNG phải xác suất đã hiệu chuẩn.
+    masteryScore: float
+    method: str = "rule_based"
+    attempts: int
+    correct: int
+    total: int
+    lastAttemptAt: str | None = None
+    passThreshold: float
+
+
+class MasteryOut(BaseModel):
+    items: list[SkillMasteryOut]
+    coursePercent: float
+    reviewDueCount: int
+
+
+class LearningPathReasonOut(BaseModel):
+    code: str
+    message: str
+
+
+class LearningPathNextLessonOut(BaseModel):
+    lessonId: str
+    title: str
+    reason: LearningPathReasonOut
+
+
+class LearningPathPrerequisiteOut(BaseModel):
+    skillId: str
+    title: str
+    masteryScore: float
+    met: bool
+
+
+class LearningPathBlockedOut(BaseModel):
+    lessonId: str
+    title: str
+    prerequisites: list[LearningPathPrerequisiteOut]
+    reason: LearningPathReasonOut
+
+
+class PrerequisiteDagNodeOut(BaseModel):
+    id: str
+    title: str
+    bloomLevel: str
+
+
+class PrerequisiteDagOut(BaseModel):
+    nodes: list[PrerequisiteDagNodeOut]
+    edges: list[list[str]]
+
+
+class LearningPathOut(BaseModel):
+    nextLesson: LearningPathNextLessonOut | None = None
+    reviewLessonId: str | None = None
+    reviewDueCount: int
+    blockedBy: list[LearningPathBlockedOut]
+    prerequisitesDag: PrerequisiteDagOut
+    # P5.2b — additive: token server ký để client báo exposure. `None` khi cờ TẮT
+    # hoặc learning-path không có arm nào. Client KHÔNG được tự tạo giá trị này.
+    recommendationToken: str | None = None
+
+
+class RecommendationEventRequest(BaseModel):
+    """Body của POST /v1/courses/{courseId}/recommendation-events.
+
+    Chỉ nhận token do server phát. `arm`, `propensity`, `userId`, `courseId`,
+    `contextHash` tự tính đều bị từ chối (extra=forbid) để client không ghi khống.
+    """
+
+    recommendationToken: str = Field(min_length=8, max_length=4096)
+
+    model_config = {"extra": "forbid"}
+
+
+class RecommendationEventOut(BaseModel):
+    recorded: bool
+    duplicate: bool = False
+    exposureId: str | None = None
+    reason: str | None = None
+
+
+class DueReviewOut(BaseModel):
+    cardId: str
+    lessonId: str
+    lessonTitle: str
+    skillTitle: str | None = None
+    # stability/difficulty cố tình KHÔNG trả ra: chỉ dùng nội bộ, tránh gây hiểu
+    # nhầm là điểm số của người học.
+    dueAt: str
+    state: int
+    overdueDays: int
+
+
+class ReviewDueOut(BaseModel):
+    items: list[DueReviewOut]
+    total: int
+
+
+class ReviewGradeRequest(BaseModel):
+    rating: int = Field(ge=1, le=4)
+    clientReviewId: str = Field(min_length=1, max_length=64)
+    durationMs: int | None = Field(default=None, ge=0)
+
+
+class ReviewCardOut(BaseModel):
+    cardId: str
+    lessonId: str
+    state: int
+    dueAt: str
+    lastReviewAt: str | None = None
+
+
+class ReviewGradeOut(BaseModel):
+    card: ReviewCardOut
+    eventId: str
+    duplicate: bool
