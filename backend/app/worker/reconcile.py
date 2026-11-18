@@ -54,3 +54,33 @@ if _app is not None:
 def reconcile_now(limit: int = 20) -> list[uuid.UUID]:
     """Entry point đồng bộ cho test/CLI (không cần Celery)."""
     return [uuid.UUID(x) for x in asyncio.run(_run_reconcile_async(limit))]
+
+
+async def _run_skills_backfill_async() -> int:
+    """P5.0 — backfill skill cho course cũ chưa có `lesson_skills`.
+
+    Chỉ chạy khi `P50_BACKFILL_ENABLED=true`; service tự no-op khi tắt.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.core.config import get_settings
+    from app.services import learner_profile_service
+
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with Session() as db:
+            written = await learner_profile_service.backfill_all_skills(db)
+            if written:
+                logger.info("reconciler backfilled skill links count=%s", written)
+            return written
+    finally:
+        await engine.dispose()
+
+
+if _app is not None:
+
+    @_app.task(name="app.worker.reconcile.reconcile_skills", bind=True, max_retries=0)
+    def reconcile_skills(self):  # noqa: ANN001
+        return asyncio.run(_run_skills_backfill_async())

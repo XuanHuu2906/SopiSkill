@@ -327,6 +327,11 @@ Index `message_id` để xem toàn bộ tool của một lượt; FK cascade đ�
 - `source_research_runs(course_id, created_at)`, `source_research_runs(user_id)`, unique `(course_id, request_fingerprint)`
 - `source_documents(source_id)`, `source_documents(status, created_at)`, unique `(source_id, content_hash, pipeline_version)`
 - `source_chunks(document_id)`, `source_chunks(source_id)`, `source_chunks(source_id, page_number)`
+- `skills(course_id)`, unique `(course_id, key)` — P5.0
+- `lesson_skills(skill_id)`, PK `(lesson_id, skill_id)` — P5.0
+- `skill_mastery(skill_id)`, PK `(user_id, skill_id)` — P5.0
+- `review_cards(user_id)`, `review_cards(user_id, due_at)`, unique `(user_id, lesson_id)` — P5.0
+- `review_events(card_id)`, `review_events(card_id, reviewed_at)`, `review_events(user_id, reviewed_at)`, unique `(card_id, client_review_id)` — P5.0
 
 ### source_chunk_embeddings (P4.1 — revision `0012_p41_rag`)
 
@@ -341,6 +346,22 @@ Index `message_id` để xem toàn bộ tool của một lượt; FK cascade đ�
 
 `tutor_messages.citations` (JSONB, nullable) lưu citation **đã verify**; NULL = không có RAG
 hoặc không đủ căn cứ.
+
+### P5.0 — Learner profile, mastery & FSRS (revision `0015_p50_learner_profile`)
+
+| Bảng | Vai trò | Ghi chú trung thực |
+|---|---|---|
+| `skills` | Skill ổn định trong **một** course, backfill từ `CurriculumSkill` của proposal | `key` = `CurriculumSkill.id`; `UNIQUE(course_id, key)`; **upsert**, không delete+insert (CASCADE sẽ xoá mastery) |
+| `lesson_skills` | Liên kết lesson ↔ skill | Map theo **vị trí** `(unit.order_index, lesson.order_index)`, không theo title (provider ghi đè `lesson.title`) |
+| `skill_mastery` | Snapshot mastery `(user, skill)` | `mastery_score` là **heuristic** accuracy có trọng số thời gian (half-life 30 ngày) — **không phải** xác suất đã hiệu chuẩn |
+| `review_cards` | Snapshot FSRS hiện tại `(user, lesson)` | `scheduler_version` pin thuật toán; `state/step/stability/difficulty` là dữ liệu nội bộ, **không** trả ra API người học |
+| `review_events` | Audit append-only mỗi lần review | `client_review_id` unique theo card ⇒ retry không nhân bản; `elapsed_days`/`scheduled_days` do server tự tính (thư viện `fsrs` không trả) |
+
+Quyết định đã chốt: card tạo ngay ở **attempt đầu tiên** (kể cả <80%) để ôn bài yếu là luồng
+thật; `learning_steps=()` để lịch theo ngày (Again 1d / Hard 1d / Good 2d / Easy 8d, đo với
+`py-fsrs-6.3.2`, `enable_fuzzing=False`); `contentVersion` đổi **không** reset mastery — mastery
+chỉ tính attempt đúng version hiện hành nên tự rơi về 0 cho tới khi học lại. Chi tiết:
+`docs/specs/22-P50-LEARNER-PROFILE.md`.
 
 ## 5. Mở rộng sau (RAG)
 

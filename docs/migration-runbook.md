@@ -392,3 +392,41 @@ tutor **không** bị đụng. Backup trước khi downgrade trên DB thật.
 **Lưu ý vận hành:** nếu bảng `source_documents` lớn, `CREATE INDEX` sẽ giữ lock ghi; chạy ngoài
 giờ cao điểm hoặc tạo index thủ công bằng `CREATE INDEX CONCURRENTLY` trước rồi đánh dấu
 `alembic stamp` **chỉ sau khi xác minh** — không stamp mù quáng.
+
+## P5.0 — `0015_p50_learner_profile` (2026-11-02)
+
+Tạo 5 bảng mới: `skills`, `lesson_skills`, `skill_mastery`, `review_cards`, `review_events`.
+**Expand-only**: không sửa/xoá cột hay bảng P1.1–P4.x.
+
+```powershell
+# Backup trước trên DB thật
+docker compose exec db pg_dump -U ailp ailp > backup_pre_p50_YYYYmmdd_HHMMSS.sql
+
+# Kiểm chứng trên DB tạm (KHÔNG chạy trên ailp)
+docker compose exec db psql -U ailp -d postgres -c "CREATE DATABASE p50_migration_check;"
+$env:DATABASE_URL = "postgresql+asyncpg://ailp:ailp_password@127.0.0.1:5433/p50_migration_check"
+cd backend
+python -m alembic upgrade head            # → 0015_p50_learner_profile (head)
+python -m alembic downgrade -1            # → 0014_p43_ocr
+python -m alembic upgrade head            # → 0015_p50_learner_profile (head)
+python -m alembic current
+cd ..
+docker compose exec db psql -U ailp -d postgres -c "DROP DATABASE p50_migration_check;"
+```
+
+Kết quả ghi nhận (2026-11-02, DB tạm đã drop):
+
+- `0015_p50_learner_profile (head)`; `skills` có `uq_skill_course_key UNIQUE (course_id, key)`
+  + FK `courses ON DELETE CASCADE`; `review_cards` có `uq_review_card_user_lesson` +
+  `ix_review_cards_user_due (user_id, due_at)` + FK `lesson_attempts ON DELETE SET NULL`;
+  `review_events` có `uq_review_event_client_id` + 2 index composite.
+- `downgrade -1` → `0014_p43_ocr`; 5 bảng biến mất, `users`/`lessons` **còn nguyên** (1/1);
+  `upgrade head` lại thành công, dữ liệu cũ đọc được.
+- Legacy-row: row user/course/unit/lesson tạo ở `0015` đọc đúng sau downgrade→upgrade.
+
+**Downgrade làm mất** mastery đã tính và lịch ôn tập (kể cả `review_events` audit). Nội dung
+bài học, attempt, XP **không** bị đụng. Backup trước khi downgrade trên DB thật.
+
+**Không backfill tự động:** `skills` chỉ có row khi (a) generation chạy với `P50_ENABLED=true`,
+hoặc (b) reconciler chạy với `P50_BACKFILL_ENABLED=true`. Tắt cả hai ⇒ không có skill, mastery
+rỗng (endpoint trả mảng rỗng, không lỗi).

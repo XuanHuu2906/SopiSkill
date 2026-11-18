@@ -65,6 +65,10 @@ class RetrievedChunk:
     # P4.2 — URL gốc của tài liệu web/arXiv (None cho PDF upload). Đây là bằng
     # chứng "citation trỏ nguồn thực", KHÔNG phải chứng minh nội dung đúng.
     source_url: str | None = None
+    # P4.3 — `native` hay `ocr`. Citation từ text OCR phải nói rõ nguồn gốc để
+    # người đọc biết đây là máy đọc, không phải text gốc của tài liệu.
+    text_source: str = "native"
+    ocr_confidence: float | None = None
     lexical_rank: int | None = None
     vector_rank: int | None = None
     lexical_score: float = 0.0
@@ -409,6 +413,8 @@ async def retrieve(
                 source_version=source.version,
                 source_type=source.source_type.value,
                 source_url=origin_url,
+                text_source=chunk.text_source or "native",
+                ocr_confidence=chunk.ocr_confidence,
                 lexical_rank=lex_rank,
                 vector_rank=vec_rank,
                 lexical_score=lex_score,

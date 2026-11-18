@@ -1,0 +1,15 @@
+# P4.3 — OCR cho PDF scan (tùy chọn, mặc định KHÔNG cài).
+#
+# Nguyên tắc: chỉ dùng model PRETRAINED chạy cục bộ (ONNX), không train/fine-tune,
+# không gọi API trả phí. Bật bằng OCR_ENABLED=true + OCR_MODEL_VERSION=<version>
+# và giữ OCR_ENGINE=rapidocr.
+#
+# Lưu ý vận hành:
+#   - `rapidocr` tải weight lần đầu (đã đóng gói trong wheel ở bản ≥3.x; nếu tải từ
+#     mạng thì CHỈ được tải trong lúc build image, không phải lúc ingest).
+#   - `opencv-python-headless` là dependency của rapidocr (~60MB); không cần GUI.
+#   - Không cài gói này trong image production nếu bạn không bật OCR.
+rapidocr>=3.10
+onnxruntime>=1.20
+pypdfium2>=5.0
+pillow>=10.0

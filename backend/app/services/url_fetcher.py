@@ -645,8 +645,8 @@ async def fetch_resource(
             if own_transport:
                 try:
                     await transport.aclose()
-                except Exception:  # noqa: BLE001 — đóng transport best-effort
-                    pass
+                except Exception:  # đóng transport best-effort; không che lỗi fetch ở trên
+                    pass  # nosec B110
 
 
 def decode_html(data: bytes, media_type_header: str | None = None) -> str:

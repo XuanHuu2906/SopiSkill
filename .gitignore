@@ -47,3 +47,6 @@ backup_*.sql
 
 # P2.1 eval reports (không commit — có metadata chi phí/latency)
 backend/evals/reports/
+
+# superpowers SDD scratch (git-ignored)
+.superpowers/

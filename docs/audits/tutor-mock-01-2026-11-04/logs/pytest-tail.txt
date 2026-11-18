@@ -1,0 +1,30 @@
+SKIPPED [1] tests\test_p11_postgres_concurrency.py:147: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p11_postgres_concurrency.py:176: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p12_postgres_concurrency.py:107: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p12_postgres_concurrency.py:139: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p12_postgres_concurrency.py:176: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p12_postgres_concurrency.py:209: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p2sr_postgres_concurrency.py:48: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p30_postgres_concurrency.py:55: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p30_postgres_concurrency.py:81: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p30_postgres_concurrency.py:114: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p30_tutor_postgres_concurrency.py:79: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p30_tutor_postgres_concurrency.py:129: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p31_tutor_postgres_concurrency.py:80: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p31_tutor_postgres_concurrency.py:124: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p31_tutor_postgres_concurrency.py:180: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p31_tutor_postgres_concurrency.py:225: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p31_tutor_postgres_concurrency.py:269: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p40_postgres_concurrency.py:67: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p40_postgres_concurrency.py:104: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p40_postgres_concurrency.py:140: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p41_postgres_concurrency.py:104: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p41_postgres_concurrency.py:126: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p41_postgres_concurrency.py:161: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p41_postgres_concurrency.py:222: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p42_postgres_concurrency.py:97: Set POSTGRES_TEST_URL to a throwaway PostgreSQL DB to run race tests
+SKIPPED [1] tests\test_p50_postgres_concurrency.py:127: POSTGRES_TEST_URL chưa đặt — bỏ qua race test PostgreSQL
+SKIPPED [1] tests\test_p50_postgres_concurrency.py:181: POSTGRES_TEST_URL chưa đặt — bỏ qua race test PostgreSQL
+SKIPPED [1] tests\test_p50_postgres_concurrency.py:227: POSTGRES_TEST_URL chưa đặt — bỏ qua race test PostgreSQL
+SKIPPED [1] tests\test_p52_postgres_concurrency.py:92: POSTGRES_TEST_URL chưa đặt — bỏ qua race test PostgreSQL
+699 passed, 29 skipped, 17 warnings in 165.73s (0:02:45)

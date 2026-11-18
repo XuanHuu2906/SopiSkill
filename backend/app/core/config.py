@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     generation_retry_backoff_seconds: int = 2
     generation_dispatch_timeout_seconds: float = 5.0
     generation_dispatch_grace_seconds: int = 10
+    # Broker đã ack nhưng chưa worker nào claim: sau ngưỡng này reconciler coi là
+    # message thất lạc và gửi lại. Phải lớn hơn hẳn grace để không giành với worker
+    # vừa nhận message (claim nguyên tử vẫn là chốt chặn cuối nên gửi lại an toàn).
+    generation_stale_dispatch_seconds: int = 300
     generation_max_dispatch_attempts: int = 5
     generation_lesson_timeout_seconds: float = 60.0
     generation_reconcile_interval_seconds: int = 30
@@ -149,6 +153,39 @@ class Settings(BaseSettings):
     # Lease của một lượt ingest (giây) — hết hạn ⇒ reconciler cho worker khác claim.
     source_ingest_lease_seconds: int = 300
     source_ingest_max_attempts: int = 3
+
+    # ---------- P4.3 OCR cho PDF scan ----------
+    # MẶC ĐỊNH TẮT: PDF scan vẫn `no_text` như P4.0. Bật chỉ khi có corpus scan
+    # thật và đã đo CER/WER (`evals/ocr_eval.py`).
+    ocr_enabled: bool = False
+    # Engine pretrained (chạy cục bộ, không network):
+    #   `rapidocr` — ONNX PP-OCR, nhẹ; charset THIẾU dấu tiếng Việt ⇒ CER VI ≈ 9,4%.
+    #   `vietocr`  — VGG-Transformer pretrained VI + detector rapidocr; CER VI ≈ 0,4%,
+    #                cần torch (~250MB) và chậm hơn ~1,5×.
+    # Giá trị khác ⇒ `OCR_NOT_CONFIGURED`, KHÔNG quay về text-only.
+    ocr_engine: str = "rapidocr"
+    # Ngôn ngữ nhận dạng của engine. `vi` cần model Latin của PP-OCR; model mặc
+    # định (Trung/Anh) làm RƠI DẤU tiếng Việt ⇒ phải khai báo và đo lại CER.
+    ocr_lang: str = "vi"
+    # Phiên bản model/pipeline OCR. Đổi ⇒ `pipeline_version` đổi ⇒ document mới,
+    # chunk cũ không bị ghi đè.
+    ocr_model_version: str = ""
+    # VietOCR (engine `vietocr`): weight pretrained CỤC BỘ. Để trống ⇒ Predictor
+    # dùng cache của VietOCR; ingest KHÔNG tự tải từ mạng.
+    ocr_vietocr_weights: str = ""
+    # File config VietOCR tuỳ biến (rỗng = dùng cấu hình có sẵn `vgg_transformer`).
+    ocr_vietocr_config: str = ""
+    # Trần số trang OCR cho MỘT tài liệu (0 = không giới hạn — KHÔNG khuyến nghị:
+    # OCR là CPU-bound, vài giây/trang).
+    ocr_max_pages: int = 20
+    # DPI render trang trước khi OCR. 200 là mức cân bằng chất lượng/thời gian;
+    # dưới 150 mất dấu tiếng Việt, trên 300 chậm mà ít cải thiện.
+    ocr_dpi: int = 200
+    # Trần thời gian OCR toàn bộ một tài liệu (giây) ⇒ `OCR_TIMEOUT`.
+    ocr_timeout_seconds: float = 300.0
+    # Ngưỡng confidence tối thiểu để giữ một dòng OCR (0–1). Dòng dưới ngưỡng bị
+    # BỎ chứ không bịa; đây là lọc nhiễu, KHÔNG phải bảo đảm độ chính xác.
+    ocr_min_confidence: float = 0.0
 
     # Kho lưu trữ: `s3` (MinIO/S3-compatible) cho mọi môi trường thật;
     # `memory` chỉ là backend test/dev (mất khi restart, KHÔNG dùng production).
@@ -311,6 +348,40 @@ class Settings(BaseSettings):
     def web_ingest_active(self) -> bool:
         """Chỉ có hiệu lực khi bật cờ VÀ có ít nhất một host được phép."""
         return bool(self.web_ingest_enabled and self.web_allowed_hosts)
+
+    @property
+    def ocr_configured(self) -> bool:
+        """OCR có hiệu lực thật? Cờ bật + engine hợp lệ + version khai báo.
+
+        Import `app.services.ocr` ở đây sẽ tạo vòng import (ocr đọc Settings), nên
+        chỉ kiểm tra cấu hình tĩnh; việc kiểm tra engine importable do
+        `app.services.ocr.configured()` làm (dùng cùng điều kiện).
+        """
+        if not self.ocr_enabled:
+            return False
+        if (self.ocr_engine or "").strip().lower() not in ("rapidocr", "vietocr"):
+            return False
+        return bool((self.ocr_model_version or "").strip())
+
+    # P5.0 — learner profile, mastery & FSRS. Mặc định TẮT để hành vi cũ nguyên vẹn.
+    p50_enabled: bool = False
+    p50_backfill_enabled: bool = False
+    # PROPOSAL: ngưỡng đạt + half-life recency cần hiệu chỉnh khi có dữ liệu thật.
+    mastery_pass_threshold: float = 0.7
+    mastery_recency_half_life_days: int = 30
+    fsrs_desired_retention: float = 0.9
+
+    # P5.2b — exposure logging (mặc định TẮT). Token HMAC dùng `jwt_secret`;
+    # bật cờ mà thiếu secret ⇒ mint fail (endpoint trả token null, API 503).
+    p52_exposure_enabled: bool = False
+    p52_token_ttl_seconds: int = 900
+
+    # P6.1 — khoá HMAC cho seed shuffle của `order`/`match`. Trước P6.1 seed chỉ
+    # là sha256(lessonId:version:blockIndex) — mọi thành phần đều công khai nên
+    # client tự dựng lại được hoán vị và suy ra đáp án. Đổi khoá này sẽ đổi mapping
+    # hiển thị (không đổi nội dung/đáp án). Rỗng ⇒ fallback `JWT_SECRET`; ở
+    # production cả hai rỗng ⇒ lỗi rõ ràng, KHÔNG rơi về khoá công khai.
+    lesson_shuffle_secret: str = ""
 
     # Auth
     jwt_secret: str = ""

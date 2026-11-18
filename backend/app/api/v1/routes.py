@@ -243,7 +243,9 @@ async def submit_attempt(
             status_code=409,
             detail={"code": "CONTENT_VERSION_MISMATCH", "message": "Nội dung bài học đã đổi, hãy tải lại."},
         )
-    attempt, duplicate = await lesson_service.submit_attempt(db, lesson, user, body)
+    attempt, duplicate, review_card_created = await lesson_service.submit_attempt(
+        db, lesson, user, body
+    )
     # XP trả về là giá trị đã ghi cho chính attempt này (0 khi retry/nộp lại),
     # không tính lại từ score — tránh hiển thị reward không hề được cộng.
     await db.refresh(user)
@@ -253,4 +255,5 @@ async def submit_attempt(
         score={"correct": attempt.score_correct, "total": attempt.score_total},
         rewards={"xp": user.xp, "xpEarned": attempt.xp_awarded},
         results=attempt.results or [],
+        reviewCardCreated=review_card_created,
     )

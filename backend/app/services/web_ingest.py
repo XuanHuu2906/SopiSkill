@@ -255,7 +255,9 @@ async def register_web_document(
     except Exception as exc:  # noqa: BLE001 — chuẩn hoá mã lỗi cho API/worker
         raise _as_web_error(exc) from exc
 
-    pipeline = cfg.web_pipeline_version
+    # P4.3 — PDF arXiv cũng đi qua `extract_document`, nên bật OCR phải đổi
+    # pipelineVersion: document `no_text` cũ không bị ghi đè.
+    pipeline = ingest.pipeline_version_for(cfg.web_pipeline_version, cfg)
 
     existing = (
         await db.execute(

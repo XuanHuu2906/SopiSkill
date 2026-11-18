@@ -2,6 +2,8 @@
 
 import uuid
 
+import pytest
+
 from app.schemas.schemas import AttemptAnswer
 from app.services.lesson_content import (
     grade_attempt,
@@ -19,6 +21,14 @@ BLANK = {"type": "blank", "sentence": "s", "answer": "Python"}
 ORDER = {"type": "order", "prompt": "p", "items": ["đọc", "làm", "kiểm"]}
 MATCH = {"type": "match", "prompt": "p", "pairs": [["A", "1"], ["B", "2"]]}
 SHORT = {"type": "short", "question": "q", "acceptedAnswers": ["python", "Python "]}
+
+
+def _match_answer() -> dict[int, int]:
+    """Đáp án đúng dạng id public (tính từ public blocks, không đọc key)."""
+    pub = public_block(LESSON_ID, VERSION, 1, MATCH)
+    left = {item["text"]: item["id"] for item in pub["lefts"]}
+    right = {item["text"]: item["id"] for item in pub["rights"]}
+    return {left[a]: right[b] for a, b in MATCH["pairs"]}
 
 
 def _grade(block: dict, answer, index: int = 0):
@@ -154,3 +164,76 @@ def test_completion_threshold_policy():
     assert is_completed(4, 5) is True  # 80%
     assert is_completed(3, 5) is False  # 60%
     assert is_completed(0, 0) is False
+
+
+
+# ---------- P6.1: shuffle seed must depend on a server-only secret ----------
+
+
+def _legacy_seed(lesson_id, version: int, index: int) -> int:
+    """Công thức seed CŨ: mọi thành phần đều công khai ⇒ client tái lập được."""
+    import hashlib
+
+    raw = f"{lesson_id}:{version}:{index}".encode("utf-8")
+    return int(hashlib.sha256(raw).hexdigest()[:16], 16)
+
+
+def test_shuffle_seed_is_keyed_and_not_reproducible_from_public_data():
+    """Trước P6.1, seed = sha256("<lessonId>:<version>:<blockIndex>").
+
+    lessonId nằm trong URL, version/index trong payload ⇒ học viên dựng lại đúng
+    hoán vị và suy ra đáp án `order`/`match`. Nay seed là HMAC(key server, msg)
+    nên không tái lập được nếu không có khoá.
+    """
+    from app.services.lesson_content import _seed
+
+    inputs = [(LESSON_ID, VERSION + (i // 3), i) for i in range(24)]
+    assert all(_seed(*args) != _legacy_seed(*args) for args in inputs)
+
+    # Ổn định khi cùng khoá — nếu không, public projection mỗi lần một khác.
+    assert {_seed(*args) for args in inputs} == {_seed(*args) for args in inputs}
+
+
+def test_shuffle_seed_changes_when_server_secret_changes(monkeypatch):
+    from app.core.config import get_settings
+    from app.services import lesson_content
+
+    def seeded() -> list[int]:
+        get_settings.cache_clear()
+        lesson_content.reset_shuffle_key_cache()
+        return [_seed(LESSON_ID, VERSION, i) for i in range(16)]
+
+    from app.services.lesson_content import _seed
+
+    monkeypatch.setenv("LESSON_SHUFFLE_SECRET", "secret-one")
+    first = seeded()
+    monkeypatch.setenv("LESSON_SHUFFLE_SECRET", "secret-two")
+    second = seeded()
+
+    assert first != second
+    # Đổi khoá KHÔNG được đổi đáp án đúng, chỉ đổi mapping hiển thị.
+    ids = {
+        item["text"]: item["id"]
+        for item in public_block(LESSON_ID, VERSION, 1, ORDER)["items"]
+    }
+    assert _grade(ORDER, [ids[text] for text in ORDER["items"]]) is True
+    assert _grade(MATCH, _match_answer()) is True
+
+
+def test_production_without_any_secret_refuses_to_shuffle(monkeypatch):
+    """Production thiếu secret phải lỗi rõ ràng, KHÔNG rơi về khoá dev công khai."""
+    from app.core.config import get_settings
+    from app.services import lesson_content
+
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("LESSON_SHUFFLE_SECRET", "")
+    monkeypatch.setenv("JWT_SECRET", "")
+    get_settings.cache_clear()
+    lesson_content.reset_shuffle_key_cache()
+    try:
+        with pytest.raises(RuntimeError, match="LESSON_SHUFFLE_SECRET"):
+            public_block(LESSON_ID, VERSION, 1, ORDER)
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+        lesson_content.reset_shuffle_key_cache()

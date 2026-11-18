@@ -7,6 +7,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("LLM_PROVIDER", "mock")
 os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("JWT_SECRET", "test-secret-key-for-pytest-only-not-production")
+# P6.1 — seed shuffle quiz phải tất định trong test (không dùng khoá dev mặc định).
+os.environ.setdefault("LESSON_SHUFFLE_SECRET", "test-shuffle-secret-for-pytest-only")
 os.environ.setdefault("ALLOW_DEMO_HEADER", "false")
 # Chạy generation đồng bộ trong test: SQLite :memory: dùng chung một connection,
 # task nền fire-and-forget sẽ chồng transaction với session của request.

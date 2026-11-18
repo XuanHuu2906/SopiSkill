@@ -513,6 +513,12 @@ export interface SourceDocument {
   attempts: number;
   /** P4.2 — đã xác nhận quyền sử dụng nguồn hay chưa (audit). */
   rightsConfirmed?: boolean;
+  /** P4.3 — text đến từ đâu: text layer PDF, OCR, hay cả hai. null = document cũ. */
+  textSource?: "native" | "ocr" | "mixed" | null;
+  /** Số trang phải OCR (máy đọc ảnh). Chỉ để truy vết, không phải độ tin cậy. */
+  ocrPages?: number;
+  ocrEngine?: string | null;
+  ocrVersion?: string | null;
   ingestedAt: string | null;
   createdAt: string | null;
 }
@@ -544,6 +550,13 @@ export interface SourceIngestConfig {
   webMaxFetchBytes?: number;
   webRespectRobots?: boolean;
   arxivEnabled?: boolean;
+  /** P4.3 — OCR cho PDF scan. false ⇒ scan vẫn "không có lớp text". */
+  ocrEnabled?: boolean;
+  ocrConfigured?: boolean;
+  ocrEngine?: string;
+  ocrVersion?: string;
+  ocrMaxPages?: number;
+  ocrDpi?: number;
 }
 
 export interface RagChunk {
@@ -692,4 +705,135 @@ export async function uploadSourceDocument(
     throw new ApiError(res.status, code, message);
   }
   return (await res.json()) as SourceDocument;
+}
+
+// ---------- Learner profile / mastery / spaced repetition (P5.0) ----------
+
+export interface SkillMastery {
+  skillId: string;
+  title: string;
+  bloomLevel: string;
+  masteryScore: number;
+  method: string;
+  attempts: number;
+  correct: number;
+  total: number;
+  lastAttemptAt: string | null;
+  passThreshold: number;
+}
+
+export interface CourseMastery {
+  items: SkillMastery[];
+  coursePercent: number;
+  reviewDueCount: number;
+}
+
+export interface LearningPathReason {
+  code: string;
+  message: string;
+}
+
+export interface LearningPath {
+  nextLesson: { lessonId: string; title: string; reason: LearningPathReason } | null;
+  reviewLessonId: string | null;
+  reviewDueCount: number;
+  blockedBy: {
+    lessonId: string;
+    title: string;
+    prerequisites: { skillId: string; title: string; masteryScore: number; met: boolean }[];
+    reason: LearningPathReason;
+  }[];
+  prerequisitesDag: {
+    nodes: { id: string; title: string; bloomLevel: string }[];
+    edges: string[][];
+  };
+  // P5.2b — token server ký để báo exposure. null khi cờ tắt hoặc không có arm.
+  recommendationToken?: string | null;
+}
+
+export interface RecommendationEventResult {
+  recorded: boolean;
+  duplicate: boolean;
+  exposureId: string | null;
+  reason: string | null;
+}
+
+export interface DueReview {
+  cardId: string;
+  lessonId: string;
+  lessonTitle: string;
+  dueAt: string;
+  state: number;
+  overdueDays: number;
+}
+
+export interface DueReviewList {
+  items: DueReview[];
+  total: number;
+}
+
+export interface ReviewGradeResult {
+  card: {
+    cardId: string;
+    lessonId: string;
+    state: number;
+    dueAt: string;
+    lastReviewAt: string | null;
+  };
+  eventId: string;
+  duplicate: boolean;
+}
+
+export function fetchCourseMastery(courseId: string): Promise<CourseMastery> {
+  return api<CourseMastery>(`/v1/courses/${courseId}/mastery`);
+}
+
+export function fetchLearningPath(courseId: string): Promise<LearningPath> {
+  return api<LearningPath>(`/v1/courses/${courseId}/learning-path`);
+}
+
+/**
+ * Báo exposure cho gợi ý vừa hiển thị. Server tự verify token + tính lại arm;
+ * client không gửi arm/propensity. Lỗi bị nuốt ở caller (hành vi ẩn, không UI).
+ */
+export function recordRecommendation(
+  courseId: string,
+  recommendationToken: string
+): Promise<RecommendationEventResult> {
+  return api<RecommendationEventResult>(
+    `/v1/courses/${courseId}/recommendation-events`,
+    { method: "POST", body: { recommendationToken } }
+  );
+}
+
+export function fetchDueReviews(
+  courseId?: string,
+  limit = 20
+): Promise<DueReviewList> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (courseId) params.set("courseId", courseId);
+  return api<DueReviewList>(`/v1/reviews/due?${params.toString()}`);
+}
+
+export function gradeReview(
+  cardId: string,
+  body: { rating: number; clientReviewId: string; durationMs?: number }
+): Promise<ReviewGradeResult> {
+  return api<ReviewGradeResult>(`/v1/reviews/${cardId}/grade`, {
+    method: "POST",
+    body,
+  });
+}
+
+export function reviewStateLabel(state: number): string {
+  switch (state) {
+    case 1:
+      return "Đang học";
+    case 2:
+      return "Ôn tập";
+    case 3:
+      return "Học lại";
+    default:
+      return "Không rõ";
+  }
 }
