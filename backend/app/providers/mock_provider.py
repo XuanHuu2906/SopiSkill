@@ -31,7 +31,16 @@ INTERVIEW_QUESTIONS = [
     "Với {topic}, bạn muốn khóa học đi sâu hay phủ rộng kiến thức?",
 ]
 
+INTERVIEW_QUESTIONS_EN = [
+    "Have you worked with {topic} before, and what is your current level?",
+    "What is your main goal for learning {topic}?",
+    "How much time per week can you dedicate to learning {topic}?",
+    "Which learning style works best for you for {topic}: hands-on examples, theory, or projects?",
+    "For {topic}, do you want a broad overview or an in-depth dive?",
+]
+
 LEVEL_WORDS = ["cơ bản", "nền tảng", "thực hành", "nâng cao", "chuyên sâu"]
+LEVEL_WORDS_EN = ["fundamentals", "foundations", "practical", "advanced", "in-depth"]
 
 
 def _hash_int(text: str) -> int:
@@ -41,13 +50,72 @@ def _hash_int(text: str) -> int:
 class MockProvider(LLMProvider):
     name = "mock"
 
-    async def generate_interview_questions(self, topic: str) -> list[str]:
-        return [q.format(topic=topic) for q in INTERVIEW_QUESTIONS]
+    async def generate_interview_questions(
+        self, topic: str, *, language: str = "vi"
+    ) -> list[str]:
+        templates = INTERVIEW_QUESTIONS_EN if language == "en" else INTERVIEW_QUESTIONS
+        return [q.format(topic=topic) for q in templates]
 
     async def generate_proposal(
-        self, topic: str, interview_questions: list[str], interview_answers: list[str]
+        self,
+        topic: str,
+        interview_questions: list[str],
+        interview_answers: list[str],
+        *,
+        language: str = "vi",
     ) -> ProposalPayload:
         seed = _hash_int(topic)
+        if language == "en":
+            focus = LEVEL_WORDS_EN[seed % len(LEVEL_WORDS_EN)]
+            answer_digest = (
+                " ".join(a[:40] for a in interview_answers if a).strip() or "beginner"
+            )
+            units = [
+                ProposalUnit(
+                    title=f"Unit 1 — {topic} Foundations",
+                    blurb=f"Essential concepts and building blocks of {topic}.",
+                    lessonTitles=[
+                        f"What is {topic}?",
+                        f"Setting up for {topic}",
+                    ],
+                ),
+                ProposalUnit(
+                    title=f"Unit 2 — Practicing {topic}",
+                    blurb=f"Apply {topic} through concrete examples and exercises.",
+                    lessonTitles=[
+                        f"First exercise with {topic}",
+                        f"Common pitfalls when learning {topic}",
+                    ],
+                ),
+            ]
+            titles = [title for unit in units for title in unit.lessonTitles]
+            bloom = ["understand", "apply", "apply", "analyze"]
+            skills = [
+                CurriculumSkill(
+                    id=f"sk-{index + 1}",
+                    title=title,
+                    lesson=title,
+                    bloomLevel=bloom[min(index, len(bloom) - 1)],
+                    outcome=f"Apply '{title}' effectively when studying {topic}.",
+                )
+                for index, title in enumerate(titles)
+            ]
+            prerequisites = [
+                (skills[index].id, skills[index + 1].id)
+                for index in range(len(skills) - 1)
+            ]
+            return ProposalPayload(
+                name=f"{topic}: {focus} path",
+                objective=f"Help you ({answer_digest[:200]}) master {topic} at the {focus} level.",
+                units=units,
+                outcomes=[
+                    f"Explain the {focus} concepts of {topic}",
+                    f"Complete a small hands-on exercise using {topic}",
+                ],
+                skills=skills,
+                prerequisites=prerequisites,
+            )
+
         focus = LEVEL_WORDS[seed % len(LEVEL_WORDS)]
         answer_digest = " ".join(a[:40] for a in interview_answers if a).strip() or "người mới"
         units = [
@@ -104,9 +172,74 @@ class MockProvider(LLMProvider):
         lesson_title: str,
         previous_titles: list[str],
         source_context: list[SourceContextEntry] | None = None,
+        *,
+        language: str = "vi",
     ) -> LessonContent:
         seed = _hash_int(lesson_title)
         key_term = lesson_title.split("—")[-1].strip()
+
+        if language == "en":
+            source_line = (
+                f"Reference source: {source_context[0].title}."
+                if source_context
+                else ""
+            )
+            teach: TeachBlock = {
+                "type": "teach",
+                "title": lesson_title,
+                "paragraphs": [
+                    f"{key_term} is one of the core concepts when learning {topic}.",
+                    f"In '{unit_title}', you will walk through concrete examples step by step.",
+                    "Read the explanation carefully before completing the practice check.",
+                    *([source_line] if source_line else []),
+                ],
+            }
+            correct_opt = f"A core concept of {topic}"
+            mc = MCBlock(
+                type="mc",
+                question=f"Which statement best describes {key_term}?",
+                options=[
+                    correct_opt,
+                    "A piece of malware",
+                    "A hardware component",
+                    f"Unrelated to {topic}",
+                ],
+                answerIndex=0 if seed % 2 == 0 else 1,
+            )
+            mc.options = _rotate_options(mc.options, mc.answerIndex, seed)
+            mc.answerIndex = (
+                mc.options.index(correct_opt)
+                if correct_opt in mc.options
+                else mc.answerIndex
+            )
+            blank = BlankBlock(
+                type="blank",
+                sentence="Fill in the blank: I am currently learning ____.",
+                answer=topic,
+            )
+            order = OrderBlock(
+                type="order",
+                prompt="Put the learning steps in the right order.",
+                items=["Read theory", "Try examples", "Check understanding", "Review"],
+            )
+            match = MatchBlock(
+                type="match",
+                prompt="Match each concept with its description.",
+                pairs=[
+                    ("Theory", "Core principles"),
+                    ("Practice", "Hands-on application"),
+                    ("Review", "Spaced reinforcement"),
+                ],
+            )
+            short = ShortBlock(
+                type="short",
+                question="Which topic are you studying right now? (short answer)",
+                acceptedAnswers=[topic.lower()],
+            )
+            return LessonContent(
+                title=lesson_title,
+                blocks=[teach, mc, blank, order, match, short],
+            )
 
         # Nguồn chỉ ảnh hưởng phần diễn đạt, KHÔNG sinh citation/URL — server là
         # bên duy nhất tạo citation từ registry.

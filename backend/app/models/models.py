@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Float, ForeignKey, Index, Integer, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -171,6 +171,9 @@ class Course(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     topic: Mapped[str] = mapped_column(Text)
+    language: Mapped[str] = mapped_column(
+        String(16), default="vi", server_default="vi", nullable=False
+    )
     status: Mapped[CourseStatus] = mapped_column(
         Enum(CourseStatus, name="course_status"), default=CourseStatus.interview
     )

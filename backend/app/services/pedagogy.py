@@ -36,6 +36,16 @@ _LEVEL_BEGINNER = (
     "from scratch",
     "chưa có kinh nghiệm",
     "zero",
+    "no experience",
+    "never used",
+    "new to",
+    "just starting",
+    "complete beginner",
+    "absolute beginner",
+    "novice",
+    "basic knowledge",
+    "basics only",
+    "introductory",
 )
 _LEVEL_INTERMEDIATE = (
     "đã biết",
@@ -45,6 +55,19 @@ _LEVEL_INTERMEDIATE = (
     "intermediate",
     "có chút kinh nghiệm",
     "biết sơ",
+    "some experience",
+    "familiar with",
+    "comfortable with",
+    "working knowledge",
+    "used it before",
+    "work with",
+    "use it at work",
+    "regularly use",
+    "solid foundation",
+    "mid-level",
+    "1-2 years",
+    "2 years",
+    "3 years",
 )
 _LEVEL_ADVANCED = (
     "nâng cao",
@@ -55,6 +78,18 @@ _LEVEL_ADVANCED = (
     "đã có kinh nghiệm",
     "nhiều năm",
     "senior",
+    "years of experience",
+    "5+ years",
+    "production",
+    "proficient",
+    "deeply familiar",
+    "deep experience",
+    "architect",
+    "staff engineer",
+    "principal",
+    "lead engineer",
+    "mastery",
+    "seasoned",
 )
 
 _STYLE_HANDS_ON = (
@@ -65,19 +100,45 @@ _STYLE_HANDS_ON = (
     "coding",
     "thực chiến",
     "bài tập",
+    "examples",
+    "exercises",
+    "practice",
 )
-_STYLE_THEORY = ("lý thuyết", "đọc hiểu", "theory", "giải thích")
-_STYLE_PROJECT = ("dự án", "project", "sản phẩm", "ứng dụng thật")
-_STYLE_VISUAL = ("video", "hình ảnh", "sơ đồ", "đồ thị", "trực quan", "minh hoạ", "minh họa")
+_STYLE_THEORY = ("lý thuyết", "đọc hiểu", "theory", "giải thích", "conceptual")
+_STYLE_PROJECT = ("dự án", "project", "sản phẩm", "ứng dụng thật", "real-world")
+_STYLE_VISUAL = (
+    "video",
+    "hình ảnh",
+    "sơ đồ",
+    "đồ thị",
+    "trực quan",
+    "minh hoạ",
+    "minh họa",
+    "diagrams",
+    "charts",
+    "visual",
+)
 
-_DEPTH_BROAD = ("phủ rộng", "tổng quan", "bao quát", "rộng", "overview", "broad")
+_DEPTH_BROAD = (
+    "phủ rộng",
+    "tổng quan",
+    "bao quát",
+    "rộng",
+    "overview",
+    "broad",
+    "high-level",
+    "survey",
+)
 _DEPTH_DEEP = (
     "đi sâu",
     "hiểu sâu",
     "chuyên sâu",
     "chi tiết",
     "deep",
+    "deep dive",
     "in-depth",
+    "thorough",
+    "comprehensive",
     "nâng cao",
 )
 

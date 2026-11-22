@@ -28,6 +28,7 @@ from app.models import (
     Unit,
 )
 from app.providers import SchemaInvalidError, get_provider
+from app.providers.base import accepts_language
 from app.providers.usage import collect_usage
 from app.providers.validation import validate_lesson
 from app.schemas.schemas import ProposalPayload
@@ -263,8 +264,9 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
                 raise RuntimeError("SUPERSEDED")
 
             lesson_index += 1
+            course_language = getattr(course, "language", "vi") or "vi"
             try:
-                content = await asyncio.wait_for(
+                lesson_coro = (
                     provider.generate_lesson(
                         course.topic,
                         proposal,
@@ -272,7 +274,20 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
                         lesson_title,
                         previous_titles,
                         source_context or None,
-                    ),
+                        language=course_language,
+                    )
+                    if accepts_language(provider.generate_lesson)
+                    else provider.generate_lesson(
+                        course.topic,
+                        proposal,
+                        proposal_unit.title,
+                        lesson_title,
+                        previous_titles,
+                        source_context or None,
+                    )
+                )
+                content = await asyncio.wait_for(
+                    lesson_coro,
                     timeout=settings.generation_lesson_timeout_seconds,
                 )
             except asyncio.TimeoutError:

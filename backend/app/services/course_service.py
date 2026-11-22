@@ -21,6 +21,7 @@ from app.models import (
     Unit,
 )
 from app.providers import LLMProvider, ProviderError, SchemaInvalidError
+from app.providers.base import accepts_language
 from app.providers.usage import collect_usage
 from app.schemas.schemas import ProposalPayload
 from app.services import llm_usage_service, pedagogy
@@ -75,7 +76,13 @@ async def get_owned_course(db: AsyncSession, course_id: str, user_id: uuid.UUID)
 
 
 async def create_course(
-    db: AsyncSession, user_id: uuid.UUID, topic: str, client_course_id: str, provider: LLMProvider
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    topic: str,
+    client_course_id: str,
+    provider: LLMProvider,
+    *,
+    language: str = "vi",
 ) -> tuple[Course, bool]:
     """Trả về (course, created). Idempotent theo (user_id, client_course_id)."""
     result = await db.execute(
@@ -87,14 +94,24 @@ async def create_course(
     if existing is not None:
         return existing, False
 
-    course = Course(user_id=user_id, topic=topic, client_course_id=client_course_id)
+    course = Course(
+        user_id=user_id,
+        topic=topic,
+        client_course_id=client_course_id,
+        language=language or "vi",
+    )
     db.add(course)
     await db.flush()
 
     # Interview questions do NOT consume provider tokens for mock provider, but do
     # for real providers — record usage so cost reports don't silently omit it.
     with collect_usage() as usage:
-        questions = await provider.generate_interview_questions(topic)
+        if accepts_language(provider.generate_interview_questions):
+            questions = await provider.generate_interview_questions(
+                topic, language=course.language
+            )
+        else:
+            questions = await provider.generate_interview_questions(topic)
     await llm_usage_service.record_standalone(usage, user_id=user_id)
     interview = CourseInterview(
         course_id=course.id, questions=questions[:INTERVIEW_QUESTIONS_COUNT], answers=[], completed_count=0
@@ -151,9 +168,17 @@ async def _generate_proposal(
     try:
         with collect_usage() as harness:
             try:
-                payload = await provider.generate_proposal(
-                    course.topic, interview.questions or [], clean_answers
-                )
+                if accepts_language(provider.generate_proposal):
+                    payload = await provider.generate_proposal(
+                        course.topic,
+                        interview.questions or [],
+                        clean_answers,
+                        language=getattr(course, "language", "vi") or "vi",
+                    )
+                else:
+                    payload = await provider.generate_proposal(
+                        course.topic, interview.questions or [], clean_answers
+                    )
             finally:
                 # Chi phí đã phát sinh kể cả khi provider lỗi/sai schema. Ghi bằng
                 # session riêng: request này có thể rollback sau đó.
@@ -393,6 +418,7 @@ async def list_courses(
                 "id": f"crs_{course.id}",
                 "topic": course.topic,
                 "status": course.status.value,
+                "language": getattr(course, "language", "vi") or "vi",
                 "createdAt": course.created_at.isoformat() if course.created_at else None,
                 "updatedAt": course.updated_at.isoformat() if course.updated_at else None,
                 "progress": {
@@ -462,6 +488,7 @@ async def get_course_detail(db: AsyncSession, course: Course, user_id: uuid.UUID
         "id": f"crs_{course.id}",
         "topic": course.topic,
         "status": course.status.value,
+        "language": getattr(course, "language", "vi") or "vi",
         "units": units_out,
         "progress": {"completed": completed, "total": total, "percent": 0 if total == 0 else round(completed / total * 100)},
     }

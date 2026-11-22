@@ -72,6 +72,112 @@ def _norm(text: str) -> str:
     return " ".join(text.strip().casefold().split())
 
 
+# Các dấu hiệu cắt cụt giữa chừng thường gặp khi LLM chạm trần token (P1-CONTENT-TRUNC).
+_TRAILING_DANGLING_CHARS = (",", "=", "(", "[", "{", "\\", "+", "-")
+_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_UNCLOSED_BACKTICK_RE = re.compile(r"(?<!`)`(?!`)")
+
+
+def _brackets_balanced(snippet: str) -> bool:
+    """Kiểm tra ngoặc (), [], {} cân bằng trong đoạn code ngắn (bỏ qua chuỗi trong nháy)."""
+    pairs = {")": "(", "]": "[", "}": "{"}
+    stack: list[str] = []
+    in_quote: str | None = None
+    escaped = False
+    for ch in snippet:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and in_quote is not None:
+            escaped = True
+            continue
+        if in_quote is not None:
+            if ch == in_quote:
+                in_quote = None
+            continue
+        if ch in ("'", '"'):
+            in_quote = ch
+            continue
+        if ch in "([{":
+            stack.append(ch)
+        elif ch in pairs:
+            if not stack or stack[-1] != pairs[ch]:
+                return False
+            stack.pop()
+    return not stack and in_quote is None
+
+
+def check_text_completeness(text: str, label: str) -> str | None:
+    """Lint deterministic phát hiện văn bản/đoạn code bị cắt cụt giữa chừng.
+
+    Trả thông điệp lỗi nếu có dấu hiệu cắt cụt rõ ràng, ngược lại trả None.
+    Thiết kế cẩn trọng để tránh false positive trên văn bản tiếng Việt/Anh bình thường.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    # 1. Fenced code block chưa đóng (số lượng ``` lẻ).
+    if stripped.count("```") % 2 != 0:
+        return f"{label}: nội dung bị cắt cụt (khối code ``` chưa đóng)."
+    # 2. Dấu backtick inline lẻ (bỏ qua các khối ``` đã kiểm ở trên).
+    without_fences = stripped.replace("```", "")
+    if len(_UNCLOSED_BACKTICK_RE.findall(without_fences)) % 2 != 0:
+        return f"{label}: nội dung bị cắt cụt (inline code ` chưa đóng)."
+    # 3. Ngoặc chưa đóng bên trong inline code span (vd: `diem = [7, 8,`).
+    for match in _INLINE_CODE_RE.finditer(without_fences):
+        code_span = match.group(1).strip()
+        if any(c in code_span for c in "([{}])") and not _brackets_balanced(code_span):
+            return f"{label}: đoạn code bị cắt cụt (ngoặc/chuỗi chưa đóng)."
+    # 4. Ký tự treo rõ ràng ở cuối câu/đoạn (vd: kết thúc bằng dấu `,`, `=`, `(`, `[`, `{`).
+    if stripped.endswith(_TRAILING_DANGLING_CHARS) and not stripped.endswith("--"):
+        return f"{label}: nội dung kết thúc lơ lửng ('{stripped[-1]}'), nghi bị cắt cụt."
+    return None
+
+
+def check_lesson_completeness(content: LessonContent) -> list[str]:
+    """Trả danh sách lỗi cắt cụt trên toàn bộ blocks của một bài học."""
+    errors: list[str] = []
+    title_err = check_text_completeness(content.title, "Tiêu đề bài học")
+    if title_err:
+        errors.append(title_err)
+    for index, block in enumerate(content.blocks):
+        btype = block.type
+        if btype == "teach":
+            for p_idx, paragraph in enumerate(block.paragraphs):
+                err = check_text_completeness(
+                    paragraph, f"Block {index} (teach đoạn {p_idx})"
+                )
+                if err:
+                    errors.append(err)
+        elif btype == "mc":
+            err = check_text_completeness(block.question, f"Block {index} (mc question)")
+            if err:
+                errors.append(err)
+            for o_idx, option in enumerate(block.options):
+                o_err = check_text_completeness(
+                    option, f"Block {index} (mc option {o_idx})"
+                )
+                if o_err:
+                    errors.append(o_err)
+        elif btype == "blank":
+            err = check_text_completeness(block.sentence, f"Block {index} (blank)")
+            if err:
+                errors.append(err)
+        elif btype == "order":
+            err = check_text_completeness(block.prompt, f"Block {index} (order)")
+            if err:
+                errors.append(err)
+        elif btype == "match":
+            err = check_text_completeness(block.prompt, f"Block {index} (match)")
+            if err:
+                errors.append(err)
+        elif btype == "short":
+            err = check_text_completeness(block.question, f"Block {index} (short)")
+            if err:
+                errors.append(err)
+    return errors
+
+
 def validate_interview_questions(questions: list[str]) -> list[str]:
     if len(questions) != INTERVIEW_QUESTIONS_COUNT:
         raise SchemaInvalidError(
@@ -238,4 +344,9 @@ def validate_lesson(content: LessonContent) -> LessonContent:
     ]
     if len(set(paragraphs)) != len(paragraphs):
         raise SchemaInvalidError("Bài học có đoạn giảng bị lặp nguyên văn.")
+
+    # P1-CONTENT-TRUNC — chặn bài học có đoạn giảng/code/câu hỏi bị cắt dở.
+    truncation_errors = check_lesson_completeness(content)
+    if truncation_errors:
+        raise SchemaInvalidError(truncation_errors[0])
     return content

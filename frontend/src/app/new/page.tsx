@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { api, newClientId } from "@/lib/api";
+import { api, newClientId, type CourseLanguage } from "@/lib/api";
 import { useRequireAuth } from "../providers";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -13,6 +13,7 @@ interface CourseOut {
   id: string;
   topic: string;
   status: string;
+  language?: CourseLanguage;
 }
 
 const SUGGESTIONS = [
@@ -22,10 +23,16 @@ const SUGGESTIONS = [
   "Nhạc lý cơ bản",
 ];
 
+const LANGUAGES: { value: CourseLanguage; label: string }[] = [
+  { value: "vi", label: "Tiếng Việt" },
+  { value: "en", label: "English" },
+];
+
 export default function NewCoursePage() {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
   const [topic, setTopic] = useState("");
+  const [language, setLanguage] = useState<CourseLanguage>("vi");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +44,7 @@ export default function NewCoursePage() {
     try {
       const course = await api<CourseOut>("/v1/courses", {
         method: "POST",
-        body: { topic: finalTopic, clientCourseId: newClientId("cc") },
+        body: { topic: finalTopic, clientCourseId: newClientId("cc"), language },
       });
       router.push(`/new/interview?courseId=${encodeURIComponent(course.id)}`);
     } catch (e) {
@@ -76,6 +83,38 @@ export default function NewCoursePage() {
           onChange={(e) => setTopic(e.target.value)}
           autoFocus
         />
+        <div className="field" role="group" aria-labelledby="course-language-label">
+          <span id="course-language-label" className="field-label">
+            Ngôn ngữ khóa học
+          </span>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {LANGUAGES.map((opt) => {
+              const active = language === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className="quick-chip"
+                  aria-pressed={active}
+                  disabled={loading}
+                  style={
+                    active
+                      ? {
+                          borderColor: "var(--ember)",
+                          background: "var(--ember-wash)",
+                          color: "var(--ink)",
+                          fontWeight: 600,
+                        }
+                      : undefined
+                  }
+                  onClick={() => setLanguage(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         {error && (
           <div className="error-box" role="alert">
             {error}

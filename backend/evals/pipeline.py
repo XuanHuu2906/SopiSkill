@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.providers.base import LLMProvider
+from app.providers.base import LLMProvider, accepts_language
 from app.providers.usage import collect_usage
 from app.schemas.schemas import LessonContent, ProposalPayload
 from app.services import pedagogy
@@ -98,11 +98,21 @@ async def run_case(
 
     with collect_usage() as usage:
         try:
-            questions = await provider.generate_interview_questions(case.topic)
+            questions = (
+                await provider.generate_interview_questions(case.topic, language=case.language)
+                if accepts_language(provider.generate_interview_questions)
+                else await provider.generate_interview_questions(case.topic)
+            )
             result.interview_ok = len(questions) == 5
 
-            proposal_payload = await provider.generate_proposal(
-                case.topic, questions, list(case.answers)
+            proposal_payload = (
+                await provider.generate_proposal(
+                    case.topic, questions, list(case.answers), language=case.language
+                )
+                if accepts_language(provider.generate_proposal)
+                else await provider.generate_proposal(
+                    case.topic, questions, list(case.answers)
+                )
             )
             proposal_payload.learnerProfile = pedagogy.extract_learner_profile(
                 questions, list(case.answers)
@@ -118,8 +128,19 @@ async def run_case(
             for unit in proposal_payload.units:
                 for title in unit.lessonTitles:
                     try:
-                        lesson = await provider.generate_lesson(
-                            case.topic, proposal_payload, unit.title, title, previous
+                        lesson = (
+                            await provider.generate_lesson(
+                                case.topic,
+                                proposal_payload,
+                                unit.title,
+                                title,
+                                previous,
+                                language=case.language,
+                            )
+                            if accepts_language(provider.generate_lesson)
+                            else await provider.generate_lesson(
+                                case.topic, proposal_payload, unit.title, title, previous
+                            )
                         )
                     except Exception as exc:  # noqa: BLE001 — ghi từng bài lỗi
                         result.lesson_failures.append(

@@ -351,10 +351,29 @@ def evaluate_course(
         )
     )
 
-    # 9. Ngôn ngữ: với case tiếng Việt, phải còn dấu tiếng Việt trong nội dung.
+    # 9. P1-CONTENT-TRUNC: deterministic completeness (không bài học nào cắt dở).
+    from app.providers.validation import check_lesson_completeness
+
+    truncation_errors: list[str] = []
+    for lesson in lessons:
+        truncation_errors.extend(check_lesson_completeness(lesson))
+    report.metrics["truncatedLessons"] = len(truncation_errors)
+    report.criteria.append(
+        CriterionResult(
+            id="completeness",
+            passed=not truncation_errors,
+            severity="error",
+            detail="; ".join(truncation_errors[:3])[:300] or "không phát hiện nội dung cắt cụt",
+            value=0.0 if not truncation_errors else float(len(truncation_errors)),
+        )
+    )
+
+    # 10. Ngôn ngữ: với `vi` phải có dấu tiếng Việt; với `en` không rò tiếng Việt.
+    vietnamese = re.compile(
+        r"[ăâđêôơưàáảãạằắẳẵặèéẻẽẹìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]", re.I
+    )
+    sample = " ".join(_block_text(b) for b in all_blocks)
     if language == "vi":
-        vietnamese = re.compile(r"[ăâđêôơưàáảãạằắẳẵặèéẻẽẹìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]", re.I)
-        sample = " ".join(_block_text(b) for b in all_blocks)
         has_vi = bool(vietnamese.search(sample))
         report.criteria.append(
             CriterionResult(
@@ -363,6 +382,18 @@ def evaluate_course(
                 severity="warning",
                 detail="có dấu tiếng Việt" if has_vi else "thiếu dấu tiếng Việt",
                 value=1.0 if has_vi else 0.0,
+            )
+        )
+    elif language == "en":
+        vi_chars = len(vietnamese.findall(sample))
+        is_clean_en = vi_chars == 0 and bool(sample.strip())
+        report.criteria.append(
+            CriterionResult(
+                id="language",
+                passed=is_clean_en,
+                severity="warning",
+                detail="clean English" if is_clean_en else f"phát hiện {vi_chars} ký tự dấu tiếng Việt trong khóa en",
+                value=1.0 if is_clean_en else 0.0,
             )
         )
 

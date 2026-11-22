@@ -8,8 +8,21 @@ Mọi adapter phải:
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+import inspect
 
 from app.schemas.schemas import LessonContent, ProposalPayload, SourceContextEntry
+
+
+def accepts_language(fn) -> bool:
+    """Kiểm tra provider method có nhận tham số `language` hay `**kwargs` không.
+
+    Giữ tương thích ngược với các stub/fake provider cũ trong unit tests chỉ khai
+    báo chữ ký trước P1-LANG.
+    """
+    sig = inspect.signature(fn)
+    return "language" in sig.parameters or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
 
 
 class ProviderError(Exception):
@@ -81,12 +94,19 @@ class LLMProvider(ABC):
     name: str = "base"
 
     @abstractmethod
-    async def generate_interview_questions(self, topic: str) -> list[str]:
-        """Sinh đúng 5 câu hỏi phỏng vấn cho topic."""
+    async def generate_interview_questions(
+        self, topic: str, *, language: str = "vi"
+    ) -> list[str]:
+        """Sinh đúng 5 câu hỏi phỏng vấn cho topic theo ngôn ngữ yêu cầu."""
 
     @abstractmethod
     async def generate_proposal(
-        self, topic: str, interview_questions: list[str], interview_answers: list[str]
+        self,
+        topic: str,
+        interview_questions: list[str],
+        interview_answers: list[str],
+        *,
+        language: str = "vi",
     ) -> ProposalPayload:
         """Sinh proposal có cấu trúc từ topic + câu trả lời phỏng vấn."""
 
@@ -99,6 +119,8 @@ class LLMProvider(ABC):
         lesson_title: str,
         previous_titles: list[str],
         source_context: list[SourceContextEntry] | None = None,
+        *,
+        language: str = "vi",
     ) -> LessonContent:
         """Sinh nội dung 1 bài học dạng blocks.
 

@@ -102,10 +102,13 @@ export async function registerRequest(
   });
 }
 
+export type CourseLanguage = "vi" | "en";
+
 export interface CourseListItem {
   id: string;
   topic: string;
   status: string;
+  language?: CourseLanguage;
   createdAt: string | null;
   updatedAt: string | null;
   progress: { completed: number; total: number; percent: number };

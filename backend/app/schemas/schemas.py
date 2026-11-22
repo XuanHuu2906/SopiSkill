@@ -518,9 +518,13 @@ class LessonContent(BaseModel):
 
 
 # ---------- API request/response ----------
+COURSE_LANGUAGE = Literal["vi", "en"]
+
+
 class CourseCreateRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=200)
     clientCourseId: str = Field(min_length=8, max_length=64)
+    language: COURSE_LANGUAGE = "vi"
 
 
 class CourseOut(BaseModel):
@@ -528,6 +532,7 @@ class CourseOut(BaseModel):
     topic: str
     status: str
     clientCourseId: str
+    language: COURSE_LANGUAGE = "vi"
 
 
 class InterviewOut(BaseModel):
@@ -587,6 +592,7 @@ class CourseListItemOut(BaseModel):
     id: str
     topic: str
     status: str
+    language: COURSE_LANGUAGE = "vi"
     createdAt: str | None = None
     updatedAt: str | None = None
     progress: dict
@@ -607,6 +613,7 @@ class CourseDetailOut(BaseModel):
     id: str
     topic: str
     status: str
+    language: COURSE_LANGUAGE = "vi"
     units: list[UnitOut]
     progress: dict
 

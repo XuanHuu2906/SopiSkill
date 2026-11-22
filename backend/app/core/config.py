@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = 2000
     llm_max_output_tokens_interview: int = 800
     llm_max_output_tokens_proposal: int = 4500
-    llm_max_output_tokens_lesson: int = 3000
+    llm_max_output_tokens_lesson: int = 4000
     # P2.2 — LLM-as-judge (rubric chấm chất lượng). Chỉ dùng khi eval, không
     # nằm trên đường đi của người học.
     llm_max_output_tokens_judge: int = 3000

@@ -56,13 +56,19 @@ async def create_course(
     verify_csrf(request)
     rate_limit(request, "create_course", limit=30, window_seconds=60)
     course, created = await course_service.create_course(
-        db, user.id, body.topic, body.clientCourseId, _provider()  # type: ignore[arg-type]
+        db,
+        user.id,
+        body.topic,
+        body.clientCourseId,
+        _provider(),  # type: ignore[arg-type]
+        language=body.language,
     )
     return CourseOut(
         id=f"crs_{course.id}",
         topic=course.topic,
         status=course.status.value,
         clientCourseId=course.client_course_id,
+        language=course.language,  # type: ignore[arg-type]
     )
 
 
