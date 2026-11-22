@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import Providers from "./providers";
+import AppFrame from "@/components/layout/AppFrame";
+import "./fonts.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI Learning Platform",
+  title: "SopiSkill",
   description: "Biến chủ đề thành khóa học có cấu trúc",
 };
 
@@ -15,7 +17,9 @@ export default function RootLayout({
   return (
     <html lang="vi">
       <body>
-        <Providers>{children}</Providers>
+        <Providers>
+          <AppFrame>{children}</AppFrame>
+        </Providers>
       </body>
     </html>
   );
