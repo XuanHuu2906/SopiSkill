@@ -24,11 +24,20 @@
   - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
   - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build` → exit `0` (`11/11` pages).
   - `cd frontend && npm run test:e2e` → **3 passed (8.6s)**, exit `0` (Chromium thật + `axe-core` 0 violations trên `1440`/`768`/`390`).
+- **Real-LLM Re-eval (`2026-11-23`, `deepseek-flash` @ `https://api.deepseek.com/v1`, commit `0ceea69`, 12 topics + `--judge --yes`):**
+  - Report (gitignored): `backend/evals/reports/p22_openai_compatible_20261123_002444.json` — `121` requests, `94.098` prompt / `243.906` completion tokens (`costKnown=False`).
+  - **Deterministic rubric:** **`11/12` topics PASS (`92%`)**, **`89/91` bài học** sinh thành công; **`0/89` bài cắt cụt (`truncatedLessons=0`)**; **`0/89` lỗi multi-blank**; **`6/6` topic `en` = `clean English`** (`0` dấu tiếng Việt); **`6/6` topic `vi`** hợp lệ. (1 topic fail: `en-beginner-excel` đạt `7/9` bài do 2 bài trả JSON lỗi cú pháp từ model).
+  - **LLM-as-judge (`N=7/12` scored, `5` lượt `error` do `llm_max_output_tokens_judge=3000/4800` chạm trần reasoning tokens):**
+    - Tổng trung bình: **`3.54 / 4`** (tăng **`+0.37`** so với baseline `3.17 / 4`).
+    - `language_quality`: **`2.273 → 3.571 (+1.299)`** (đạt gate `≥ 3.0`).
+    - `level_fit`: **`2.364 → 3.429 (+1.065)`** (đạt gate `≥ 3.0`).
+    - `answer_consistency`: **`2.818 → 3.286 (+0.468)`** (đạt gate `≥ 3.0`).
+    - `structural_logic`: **`3.545 → 4.000 (+0.455)`**.
+  - **Phát hiện quan trọng ở harness `evals/judges.py`:** `judges.py` nối 6–9 bài rồi cắt `[:MAX_JUDGE_CHARS]` và `openai_compatible_provider.py` cắt tiếp ở `max_input_chars=12_000` ⇒ bản thân **input gửi judge bị cắt giữa Bài 4–6** (không phải bài học thực sự bị cắt cụt). Cần nâng `max_input_chars` cho judge (hoặc chấm theo từng unit) và nâng `llm_max_output_tokens_judge` cho reasoning model.
 - **NOT TESTED:**
-  - Real-LLM 12-topic re-evaluation (dừng chờ owner duyệt model & ngân sách theo quyết định `/grill-me` D6).
   - PostgreSQL migration/race tests (`31 skipped` do chạy SQLite cục bộ không có `POSTGRES_TEST_URL` và không cài optional OCR engines).
   - Docker container rebuild/live E2E (Docker daemon đang tắt).
-  - Screen reader thật (NVDA/VoiceOver).
+  - Screen reader thật (NVDA/VoiceOver); human rubric chấm bởi người thật.
 
 ## 2026-11-04 — P1-QUIZ-BLANK — một blank block chỉ được có đúng một chỗ trống, một đáp án
 
