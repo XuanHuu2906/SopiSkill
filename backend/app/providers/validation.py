@@ -5,6 +5,8 @@ phỏng vấn, đáp án nằm trong bounds, không rỗng, không trùng lặp 
 Vi phạm ⇒ `SchemaInvalidError` (không retry tự động, tránh đốt tiền).
 """
 
+import re
+
 from app.providers.base import SchemaInvalidError
 from app.schemas.schemas import LessonContent, ProposalPayload
 
@@ -16,9 +18,30 @@ MAX_LESSONS_PER_UNIT = 12
 BLANK_MARKERS = ("____", "___", "[...]", "...", "…")
 BLANK_FILL = "____"
 
+# Hợp đồng quiz hiện tại chỉ hỗ trợ ĐÚNG MỘT chỗ trống với MỘT đáp án:
+#   - `BlankBlock` có một trường `answer: str` (không có `blanks[]`)
+#   - `grade_blank` so nguyên chuỗi đã chuẩn hoá với `block["answer"]`
+#   - frontend render đúng một <input> và gửi một chuỗi
+#   - `public_block` chỉ gửi `sentence`, không gửi đáp án
+# Vì vậy câu 2+ chỗ trống là *không thể trả lời*, phải từ chối thay vì lưu `ready`.
+BLANK_SLOT_COUNT = 1
+
 
 def _has_blank_marker(sentence: str) -> bool:
     return any(marker in sentence for marker in BLANK_MARKERS)
+
+
+def _count_blank_slots(sentence: str) -> int:
+    """Đếm số chỗ trống theo marker rõ ràng trước, chỉ đoán mờ khi không có marker rõ.
+
+    `_` (3+) và `[...]` là marker do prompt sinh ra. `...` / `…` chỉ được tính khi
+    câu không có marker rõ — trong dữ liệu thật `...` xuất hiện như cú pháp code
+    (`conn.execute(...)`) chứ không phải chỗ trống.
+    """
+    strict = len(re.findall(r"_{3,}", sentence)) + sentence.count("[...]")
+    if strict:
+        return strict
+    return len(re.findall(r"…", sentence)) + len(re.findall(r"(?<!\.)\.\.\.(?!\.)", sentence))
 
 
 def _mask_answer_in_sentence(sentence: str, answer: str) -> str:
@@ -30,20 +53,14 @@ def _mask_answer_in_sentence(sentence: str, answer: str) -> str:
     if not sentence or not answer:
         return sentence
     if _has_blank_marker(sentence):
-        # Đã có chỗ trống: chỉ cần đảm bảo đáp án không nằm ngoài chỗ trống.
-        masked = _replace_ci(sentence, answer, BLANK_FILL)
-        return masked if masked != sentence else sentence
-
-    masked = _replace_ci(sentence, answer, BLANK_FILL)
-    if masked != sentence:
-        return masked
-    return sentence
+        # Đã có chỗ trống: KHÔNG tạo thêm chỗ trống thứ hai. Che đáp án đang lộ ở
+        # đây sẽ biến câu 1 chỗ trống thành 2 chỗ trống và làm câu không trả lời được.
+        return sentence
+    return _replace_ci(sentence, answer, BLANK_FILL)
 
 
 def _replace_ci(text: str, needle: str, replacement: str) -> str:
     """Thay thế không phân biệt hoa/thường, an toàn với ký tự đặc biệt."""
-    import re
-
     needle = needle.strip()
     if not needle:
         return text
@@ -144,10 +161,13 @@ def _validate_block(block, index: int) -> None:
         # Repair thay vì fail: nếu đáp án xuất hiện trong câu thì thay chỗ đó bằng
         # chỗ trống. Fail ở đây sẽ đốt thêm request LLM mà không cải thiện nội dung.
         block.sentence = _mask_answer_in_sentence(block.sentence, answer)
-        if not _has_blank_marker(block.sentence):
-            # Không có marker và đáp án cũng không nằm trong câu → không rõ chỗ điền.
+        slots = _count_blank_slots(block.sentence)
+        if slots != BLANK_SLOT_COUNT:
+            # 0 chỗ trống → không rõ điền vào đâu; 2+ chỗ trống → hợp đồng hiện tại
+            # chỉ có một `answer`/một input nên câu không thể trả lời trọn vẹn.
             raise SchemaInvalidError(
-                f"Block {index}: câu blank không có chỗ trống (____ / [...])."
+                f"Block {index}: câu blank phải có đúng {BLANK_SLOT_COUNT} chỗ trống "
+                f"(____ / [...]), nhận {slots}."
             )
         return
 

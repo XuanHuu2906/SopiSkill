@@ -13,6 +13,8 @@ Dữ liệu curriculum nằm trong `ProposalPayload` (JSON), không cần bảng
 
 import logging
 import re
+import unicodedata
+from functools import lru_cache
 
 from app.providers.base import SchemaInvalidError
 from app.schemas.schemas import CurriculumSkill, LearnerProfile, ProposalPayload
@@ -55,15 +57,52 @@ _LEVEL_ADVANCED = (
     "senior",
 )
 
-_STYLE_HANDS_ON = ("thực hành", "làm ví dụ", "hands-on", "coding", "thực chiến", "bài tập")
+_STYLE_HANDS_ON = (
+    "thực hành",
+    "làm ví dụ",
+    "ví dụ thực tế",
+    "hands-on",
+    "coding",
+    "thực chiến",
+    "bài tập",
+)
 _STYLE_THEORY = ("lý thuyết", "đọc hiểu", "theory", "giải thích")
 _STYLE_PROJECT = ("dự án", "project", "sản phẩm", "ứng dụng thật")
-_STYLE_VISUAL = ("video", "hình ảnh", "sơ đồ", "trực quan")
+_STYLE_VISUAL = ("video", "hình ảnh", "sơ đồ", "đồ thị", "trực quan", "minh hoạ", "minh họa")
 
 _DEPTH_BROAD = ("phủ rộng", "tổng quan", "bao quát", "rộng", "overview", "broad")
-_DEPTH_DEEP = ("đi sâu", "chuyên sâu", "chi tiết", "deep", "in-depth", "nâng cao")
+_DEPTH_DEEP = (
+    "đi sâu",
+    "hiểu sâu",
+    "chuyên sâu",
+    "chi tiết",
+    "deep",
+    "in-depth",
+    "nâng cao",
+)
 
-_TIME_UNIT_MINUTES = {"phút": 1, "giờ": 60, "tiếng": 60, "h": 60, "hour": 60, "min": 1}
+_TIME_UNIT_MINUTES = {
+    "phút": 1,
+    "phut": 1,
+    "mins": 1,
+    "min": 1,
+    "giờ": 60,
+    "gio": 60,
+    "tiếng": 60,
+    "tieng": 60,
+    "hours": 60,
+    "hour": 60,
+    "hrs": 60,
+    "hr": 60,
+    "h": 60,
+}
+
+# Khớp trên văn bản đã bỏ dấu; số đứng trước phải là ranh giới token để "4th"
+# không bị đọc thành "4 giờ".
+_TIME_UNIT_PATTERN = re.compile(
+    r"(?<![0-9a-z])(\d+(?:[.,]\d+)?)\s*(?:-|–|den|to)?\s*(\d+(?:[.,]\d+)?)?\s*"
+    r"(phut|gio|tieng|mins|min|hours|hour|hrs|hr|h)(?![a-z])"
+)
 
 _BLOOM_LEVELS = ("remember", "understand", "apply", "analyze", "evaluate", "create")
 _BLOOM_ORDER = {level: index for index, level in enumerate(_BLOOM_LEVELS)}
@@ -73,8 +112,41 @@ def _norm(text: str) -> str:
     return " ".join((text or "").casefold().split())
 
 
+def _fold(text: str) -> str:
+    """Bỏ dấu tiếng Việt để 'gio' khớp 'giờ' và ngược lại.
+
+    Chỉ dùng cho việc so khớp hồ sơ; KHÔNG dùng thay `_norm` ở `_slug`/`goal`
+    vì các chỗ đó cần giữ nguyên chữ có dấu.
+    """
+    decomposed = unicodedata.normalize("NFD", (text or "").casefold())
+    stripped = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+    return " ".join(stripped.replace("đ", "d").split())
+
+
+@lru_cache(maxsize=256)
+def _fold_needle(needle: str) -> str:
+    return _fold(needle)
+
+
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
-    return any(needle in text for needle in needles)
+    """Khớp có biên từ — chặn `rong` khớp trong `trong`, `h` trong `4th`.
+
+    Số được phép đứng ngay trước từ khoá (`6h`), chữ cái thì không.
+    """
+    folded = _fold(text)
+    for needle in needles:
+        target = _fold_needle(needle)
+        if not target:
+            continue
+        start = folded.find(target)
+        while start != -1:
+            end = start + len(target)
+            before = folded[start - 1] if start > 0 else ""
+            after = folded[end] if end < len(folded) else ""
+            if not (before and before.isalpha()) and not (after and after.isalpha()):
+                return True
+            start = folded.find(target, start + 1)
+    return False
 
 
 # ---------- learner profile ----------
@@ -83,24 +155,18 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
 def _parse_weekly_minutes(text: str) -> int | None:
     """Đọc '3 giờ/tuần', '90 phút', '5-6h mỗi tuần' → phút/tuần (ước lượng thấp).
 
-    Trả None nếu không có tín hiệu số + đơn vị thời gian.
+    Trả None nếu không có tín hiệu số + đơn vị thời gian. Đơn vị được so khớp
+    trên dạng đã bỏ dấu nên 'gio'/'gio' và 'giờ' cho cùng kết quả.
     """
-    pattern = re.compile(
-        r"(\d+(?:[.,]\d+)?)\s*(?:-|–|đến|to)?\s*(\d+(?:[.,]\d+)?)?\s*"
-        r"(phút|giờ|tiếng|tiếng/|h\b|hour|hours|min|mins|phut|gio)",
-        re.IGNORECASE,
-    )
-    match = pattern.search(text)
+    match = _TIME_UNIT_PATTERN.search(_fold(text))
     if not match:
         return None
-    first = float(match.group(1).replace(",", "."))
-    amount = first  # lấy cận dưới của khoảng để không thổi phồng thời gian
-    unit = _norm(match.group(3)).rstrip("/")
-    factor = 1
-    for name, value in _TIME_UNIT_MINUTES.items():
-        if unit.startswith(name):
-            factor = value
-            break
+    amount = float(match.group(1).replace(",", "."))
+    # lấy cận dưới của khoảng để không thổi phồng thời gian
+    unit = match.group(3)
+    factor = _TIME_UNIT_MINUTES.get(unit)
+    if factor is None:
+        return None
     minutes = int(round(amount * factor))
     if minutes <= 0 or minutes > 10_080:
         return None
@@ -138,14 +204,16 @@ def _detect_styles(text: str) -> list[str]:
     return styles[:6]
 
 
-def _detect_depth(text: str) -> str:
+def _detect_depth(text: str) -> tuple[str, list[str]]:
     deep = _contains_any(text, _DEPTH_DEEP)
     broad = _contains_any(text, _DEPTH_BROAD)
-    if deep and not broad:
-        return "deep"
-    if broad and not deep:
-        return "broad"
-    return "balanced"
+    if deep and broad:
+        return "balanced", ["Câu trả lời vừa muốn 'hiểu sâu' vừa muốn 'phủ rộng'; tạm xếp cân bằng."]
+    if deep:
+        return "deep", []
+    if broad:
+        return "broad", []
+    return "balanced", []
 
 
 def _detect_goal(answers: list[str]) -> str:
@@ -166,7 +234,8 @@ def extract_learner_profile(
     joined = _norm(" \n ".join(a for a in answers if a))
     level, warnings = _detect_level(joined)
     weekly = _parse_weekly_minutes(joined)
-    depth = _detect_depth(joined)
+    depth, depth_warnings = _detect_depth(joined)
+    warnings.extend(depth_warnings)
 
     if weekly is not None and depth == "deep" and weekly < 60:
         warnings.append("Thời gian mỗi tuần rất ít so với mong muốn đi sâu; lộ trình sẽ được rút gọn.")

@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     generation_retry_backoff_seconds: int = 2
     generation_dispatch_timeout_seconds: float = 5.0
     generation_dispatch_grace_seconds: int = 10
+    # Broker đã ack nhưng chưa worker nào claim: sau ngưỡng này reconciler coi là
+    # message thất lạc và gửi lại. Phải lớn hơn hẳn grace để không giành với worker
+    # vừa nhận message (claim nguyên tử vẫn là chốt chặn cuối nên gửi lại an toàn).
+    generation_stale_dispatch_seconds: int = 300
     generation_max_dispatch_attempts: int = 5
     generation_lesson_timeout_seconds: float = 60.0
     generation_reconcile_interval_seconds: int = 30

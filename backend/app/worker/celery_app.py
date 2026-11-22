@@ -8,8 +8,9 @@ P1.2:
     đã commit DB nhưng chưa tới broker (outbox) và job có lease hết hạn.
   - `task_acks_late` + `worker_prefetch_multiplier=1` (task không idempotent
     tuyệt đối, nhưng claim nguyên tử đảm bảo chỉ một lần chạy thực sự).
-  - `visibility_timeout` lớn hơn thời gian generation tối đa để không
-    redeliver khi task còn chạy.
+  - `broker_transport_options.visibility_timeout` lớn hơn thời gian generation
+    tối đa để không redeliver khi task còn chạy. (Biến `worker_visibility_timeout`
+    không tồn tại trong Celery 5 và bị bỏ qua im lặng.)
 """
 
 from app.core.config import get_settings
@@ -35,7 +36,12 @@ if _settings.redis_url:
         worker_prefetch_multiplier=1,
         task_time_limit=int(_settings.generation_lesson_timeout_seconds * 40),
         task_soft_time_limit=int(_settings.generation_lesson_timeout_seconds * 30),
-        worker_visibility_timeout=int(_settings.generation_lesson_timeout_seconds * 60),
+        # `worker_visibility_timeout` KHÔNG phải setting hợp lệ của Celery và bị
+        # bỏ qua im lặng. Redis chỉ đọc giá trị này qua broker_transport_options.
+        # Đặt lớn hơn task_time_limit để broker không redeliver khi task còn chạy.
+        broker_transport_options={
+            "visibility_timeout": int(_settings.generation_lesson_timeout_seconds * 60),
+        },
         beat_schedule={
             "recover-stuck-generation-jobs": {
                 "task": "app.worker.reconcile.reconcile_jobs",

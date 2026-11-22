@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.providers import SchemaInvalidError, get_provider
 from app.providers.usage import collect_usage
+from app.providers.validation import validate_lesson
 from app.schemas.schemas import ProposalPayload
 from app.services import citation_service, source_evaluation, source_service
 from app.services import llm_usage_service
@@ -283,6 +284,9 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
                 ) from None
             if content is None or not content.blocks:
                 raise SchemaInvalidError(f"Lesson không hợp lệ: '{lesson_title}'")
+            # Ranh giới hệ thống: provider thật đã tự validate, nhưng hợp đồng phải
+            # được thực thi ở đây để không lưu nội dung sai schema thành `ready`.
+            validate_lesson(content)
 
             new_blocks = content.model_dump()["blocks"]
             if lesson_by_order.get(l_idx) is None:
