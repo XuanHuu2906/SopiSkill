@@ -1,37 +1,30 @@
 # 10 — AI Tutor: Context Grounding, SSE, Tools & Usage
 
-**Trạng thái:** **P3.0 = IMPLEMENTED + TESTED (mock streaming)**; **P3.1 lát A (cancel/allowance/replay
-semantics/safety/UI quota) = IMPLEMENTED + TESTED**; **P3.1 lát B (tool allowlist + audit) = IMPLEMENTED + TESTED
-(mock planner)**.
-
-Đã có code: `tutor_threads`/`tutor_messages` (revision `0008_p30_tutor_core`), `tutor_usage_events` +
-`tutor_messages.cancel_requested_at` (revision `0009_p31_tutor_controls`), `tutor_tool_calls` (revision
-`0010_p31_tutor_tools`), `POST .../tutor/messages` (SSE), `POST .../tutor/messages/{messageId}/stop`,
-`GET .../tutor/usage`, `GET .../tutor/threads[/{id}]`, provider `stream_tutor_reply` + `plan_tutor_tool`
-(mock deterministic + OpenAI-compatible), TutorPanel trong lesson.
-**Không** hỗ trợ `Last-Event-ID` replay (quyết định tường minh). Sự thật đã kiểm chứng nằm ở
-`docs/development-progress.md` (mục `P3.0`, `P3.1 lát A`, `P3.1 lát B`).
+**Trạng thái (`2026-11-22`):**
+- **P3.0** (`0008_p30_tutor_core`), **P3.1 lát A** (`0009_p31_tutor_controls`), **P3.1 lát B** (`0010_p31_tutor_tools`), **P4.1 `read_source` wiring**, và **FR-5 docked Tutor rail** đều đã **IMPLEMENTED · REPORTED TESTED (mock)**.
+- **Trạng thái vận hành mặc định:** **DEFAULT-OFF** (`TUTOR_ENABLED=false`, `TUTOR_TOOLS_ENABLED=false`, `RAG_ENABLED=false`).
+- **Gate `TUTOR-MOCK-01` (`2026-11-04`):** `PRODUCT_E2E_PASS` trên mock (`71/71` E2E + `31/31` raw SSE probes + disconnect probe). **NOT TESTED:** streaming với LLM thật, tool quality với LLM thật, browser UI E2E tự động.
 
 ## 1. Scope & user goal
 
-Người học đặt câu hỏi khi đang học lesson, nhận giải thích gắn đúng block, có lịch sử sau reload và quota rõ. Tutor ưu tiên **gợi mở từng bước**, đặt câu hỏi kiểm tra hiểu, không luôn đưa đáp án quiz đang làm; từ chối bịa citation hoặc giả vờ biết tài liệu.
+Người học đặt câu hỏi ngay trong bài học (`/lesson/[lessonId]`) với `TutorPanel` (dock cạnh phải `400px` ở desktop `≥1024px`, overlay modal có focus trap + `inert` ở `<1024px`). Tutor trả lời có ngữ cảnh đúng block, lưu lịch sử bền vững theo owner, có quota và nút dừng rõ ràng; tuyệt đối không bịa citation hay tiết lộ answer key.
 
 ## 2. Requirements
 
-| ID | Yêu cầu | Phase |
+| ID | Yêu cầu | Trạng thái (2026-11-22) |
 |---|---|---|
-| TUTOR-001 | Thread & messages lưu bền vững và owner-scoped | P3.0 |
-| TUTOR-002 | `contextRef` gồm `lessonId`, `blockIndex`, được resolve từ DB qua course owner | P3.0 |
-| TUTOR-003 | SSE `delta`, `done`, `error`, ordering/id rõ ràng, heartbeat | P3.0 |
-| TUTOR-004 | `clientMessageId` unique, duplicate requests không sinh 2 messages/calls | P3.0 |
-| TUTOR-005 | Lesson + bounded history grounding, chưa có source thì không cite | P3.0 |
-| TUTOR-006 | Tool allowlist read-only, validate từng tool call, audit | P3.1 lát B — DONE |
-| TUTOR-007 | Stop/cancel best-effort với status server minh bạch | P3.1 lát A — DONE |
-| TUTOR-008 | Usage limits/rate limit, không gọi model khi quota hết | P3.1 lát A — DONE |
-| TUTOR-009 | Replay/resume chỉ nếu có persisted ordered event log | P3.1 — **quyết định: explicit restart, không resume** |
-| TUTOR-010 | Khi RAG ready, `read_source` có citation verified | Sau P4.1 |
+| TUTOR-001 | Thread & messages lưu bền vững và owner-scoped | **IMPLEMENTED · TESTED (mock)** |
+| TUTOR-002 | `contextRef {lessonId, blockIndex}` resolve từ DB qua course owner | **IMPLEMENTED · TESTED** |
+| TUTOR-003 | SSE `delta`, `done`, `error`, `cancelled`, `heartbeat`, `tool` với `seq` đơn điệu | **IMPLEMENTED · TESTED (mock)** |
+| TUTOR-004 | `clientMessageId` unique, duplicate replay không gọi LLM lần 2 | **IMPLEMENTED · TESTED** |
+| TUTOR-005 | Lesson + bounded history grounding, chưa có source thì không cite | **IMPLEMENTED · TESTED** |
+| TUTOR-006 | Tool allowlist read-only, validate args/bounds, audit metadata-only | **IMPLEMENTED · TESTED (mock)** |
+| TUTOR-007 | Stop/cancel best-effort với trạng thái server minh bạch (`providerStopGuaranteed=false`) | **IMPLEMENTED · TESTED** |
+| TUTOR-008 | Allowance 24h (messages, tokens, concurrent streams) chặn trước khi gọi provider | **IMPLEMENTED · TESTED** |
+| TUTOR-009 | Replay/resume semantics | **DECIDED (DEC-P31-A1):** explicit restart, `replaySupported=false`, không hỗ trợ `Last-Event-ID` |
+| TUTOR-010 | Khi `RAG_ENABLED=true`, `read_source` & RAG grounding trả citation verified (`chk_*`) | **IMPLEMENTED · TESTED (offline baseline, flag OFF)** |
 
-## 3. Proposed API contract
+## 3. API contract thực tế (`backend/app/api/v1/tutor.py`)
 
 ```http
 POST /v1/courses/{courseId}/tutor/messages
@@ -41,100 +34,56 @@ Accept: text/event-stream
 Content-Type: application/json
 
 {
-  "clientMessageId":"uuid",
-  "threadId":null,
-  "text":"Vì sao vòng lặp này dừng?",
-  "contextRef":{"lessonId":"lsn_<id>","blockIndex":3}
+  "clientMessageId": "uuid-8..64",
+  "threadId": null,
+  "text": "Vì sao vòng lặp này dừng?",
+  "contextRef": {"lessonId": "lsn_<id>", "blockIndex": 3}
 }
 ```
+- Headers response gồm `X-Tutor-Thread-Id`, `X-Tutor-Message-Id` trước byte SSE đầu tiên.
+- `TutorMessageRequest` đặt `extra="forbid"`: từ chối `userId`, `courseId`, `systemPrompt`, `lessonContent`, `sources`, `ownerId`.
+- Khi `TUTOR_ENABLED=false` → tất cả 5 endpoints trả `503 TUTOR_DISABLED`.
+- 4 endpoints còn lại: `POST .../messages/{messageId}/stop`, `GET .../tutor/usage`, `GET .../tutor/threads`, `GET .../tutor/threads/{threadId}`.
 
-- Server kiểm tra message text length/rate limits, course owner, lesson.course_id, block index valid, thread user/course match.
-- **Không nhận** `systemPrompt`, `toolResults`, raw lesson content, ownerId hay user-supplied citations trong request.
-- Response `Content-Type: text/event-stream` với ví dụ tại `examples/tutor-stream.proposed.sse`.
-- Thread history `GET /v1/courses/{courseId}/tutor/threads/{threadId}`; user A→B 404.
+## 4. SSE events (IMPLEMENTED)
 
-## 4. Proposed SSE events
-
-| Event | JSON data required | Semantics |
+| Event | Payload chính | Semantics |
 |---|---|---|
-| `delta` | `streamId`, `messageId`, `seq`, `text` | Incremental text; seq tăng đơn điệu |
-| `done` | `streamId`, `messageId`, `seq`, `finishReason`, `usage?` | Terminal success; final message persisted |
-| `error` | `streamId`, `messageId?`, `seq`, `code`, `message`, `retryable` | Terminal failure, no raw exception |
-| `heartbeat` | timestamp/empty payload | Keepalive; không chứa user content |
-| `cancelled` | `streamId`, `messageId`, `seq`, `reason`, `partial` | Terminal do stop/abort; phần đã nhận được giữ |
-| `tool` | `name`, `status` (ok/failed), `summary`, `durationMs`, `code?` | **P3.1 lát B**: tool read-only đã chạy/bị từ chối; không gửi raw args/nội dung nhạy cảm |
-| `confirm` (P3.1 lát B, nếu có hành động cần user) | action metadata | Chưa bật khi chỉ read-only tools |
+| `delta` | `streamId`, `messageId`, `seq`, `text` | Incremental text; `seq` tăng đơn điệu, `id = streamId:seq` |
+| `tool` | `name`, `status` (`ok`/`failed`), `summary`, `durationMs`, `code?` | Chỉ xuất hiện khi `TUTOR_TOOLS_ENABLED=true`; không chứa raw args/nội dung nhạy cảm |
+| `done` | `streamId`, `messageId`, `seq`, `finishReason`, `replayed?`, `usage?`, `citations?` | Terminal success; persisted DB |
+| `error` | `streamId`, `messageId?`, `seq`, `code`, `message`, `retryable`, `replayed?` | Terminal failure, không raw exception |
+| `cancelled` | `streamId`, `messageId`, `seq`, `reason`, `partial` | Terminal do stop/disconnect; giữ nội dung đã nhận |
+| `heartbeat` | keepalive | Tránh idle timeout (mặc định 15s) |
 
-**SSE frames** phải escape newlines đúng chuẩn, UTF-8, no-store, proxy buffering disabled ở path stream khi deploy.
+## 5. Persistence, Idempotency & Replay
 
-## 5. Persistence & idempotency semantics
+- Transaction tạo user message (`clientMessageId` unique) + pending assistant message và kiểm quota **trước** khi gọi provider.
+- Retry cùng `clientMessageId`: `completed` → replay không gọi provider; `failed`/`cancelled` → trả error terminal; `pending`/`running` → `409 MESSAGE_IN_PROGRESS`.
+- Message `pending`/`running` quá `TUTOR_STALE_STREAM_SECONDS=180` bị reap thành `failed/TUTOR_STALE`.
+- Client disconnect ⇒ generator hủy và detached task `_persist_cancelled` ghi `cancelled` + phần nội dung đã nhận (đã chứng minh live trong `TUTOR-MOCK-01` `probe_tutor_disconnect.py`).
 
-- Transaction tạo user message (`clientMessageId` unique) + pending assistant message, reserve quota **trước** provider call.
-- Duplicate same id + message completed: trả kết quả đã lưu qua history hoặc một deterministic completed response theo contract được chọn; **không gọi LLM lần hai**.
-- Duplicate while in progress: HTTP `409 MESSAGE_IN_PROGRESS` hoặc attach existing stream **chỉ khi thực sự có multiplexing**; P3 MVP chọn 409 + GET history để đơn giản và an toàn.
-- Disconnect không tự tuyên bố cancel server-side; status pending/running được reconciliation; retry same id không sinh double charge.
-- **Quyết định P3.1.5 (đã chốt): KHÔNG hỗ trợ `Last-Event-ID` replay.** Không có event log bền
-  vững, nên resume sẽ phải giả vờ. `id` frame vẫn là `streamId:seq` (đơn điệu) để sau này có thể
-  thêm nếu thật sự lưu log; `replaySupported=false` trả trong thread detail; UI hướng dẫn "tải lại
-  lịch sử". Muốn đổi quyết định này phải thêm bảng event log + test reconnect trước khi tuyên bố.
+## 6. Tools (P3.1 lát B + P4.1 — IMPLEMENTED, `TUTOR_TOOLS_ENABLED=false`)
 
-## 6. Tutor grounding & teaching rules
-
-- Build context từ **server-owned** course, lesson title, current block, progress snapshot nếu cần, và số message history giới hạn.
-- Không chuyển nguyên toàn bộ bài/hồ sơ sang provider nếu không cần; cap tokens và redact metadata.
-- Answer nên: hỏi làm rõ nếu cần, gợi ý, giải thích theo mức học viên, ví dụ mới, check understanding. Không bịa học lực, không để user text override system/tools.
-- Khi user hỏi không liên quan bài: phân biệt general knowledge với lesson-grounded; với RAG yêu cầu evidence thì nói không có evidence.
-
-## 7. Tools P3.1 lát B — IMPLEMENTED (server-side deterministic)
-
-| Tool | Read-only contract | Authorization | Trạng thái |
+| Tool | Contract read-only | Authorization | Trạng thái (`tutor_tools.py`) |
 |---|---|---|---|
-| `read_lesson` | Đọc public blocks của lesson hiện tại (hoặc một `blockIndex`) | course + lesson owner (resolve trước ở `prepare_turn`); `blockIndex` trong biên | DONE |
-| `explain_deeper` | Mở rộng giải thích từ block được chọn + các đoạn `teach` lân cận | đúng lesson/block | DONE |
-| `read_source` | Chỉ sau P4.1 (chunk ownership + provenance) | source owner + retrieval IDs allowlist | Allowlisted nhưng `TUTOR_TOOL_NOT_AVAILABLE` |
+| `read_lesson` | Đọc public blocks của lesson hiện tại (không answer key) | Course + lesson owner; `blockIndex` trong biên | `available = True` |
+| `explain_deeper` | Mở rộng giải thích cho `blockIndex` + các đoạn `teach` lân cận | Đúng lesson/block | `available = True` |
+| `read_source` | Tìm trong tài liệu đã ingest của khóa học (`query?`) | Scope owner + course trong SQL; chỉ chạy khi `RAG_ENABLED=true` và có `source_reader`, ngược lại từ chối sạch không bịa | `available = True` (từ P4.1) |
 
-- **Không dùng native `tool_calls`**: model trả JSON `{tool, args}` qua `plan_tutor_tool`; server
-  parse → validate → execute. Lý do: mock/provider thật dùng chung contract, server luôn quyết định.
-- Tên tool ngoài allowlist ⇒ `TUTOR_TOOL_NOT_ALLOWED`, **không execute**, vẫn ghi audit.
-- Args sai schema (`extra=forbid`) hoặc `blockIndex` ngoài biên ⇒ `TUTOR_TOOL_INVALID_ARGS`.
-- Bounded loop: `TUTOR_TOOL_MAX_CALLS` (2), `TUTOR_TOOL_TIMEOUT_SECONDS` (3s) cho planner; dừng sau
-  1 kết quả để không lặp vô hạn.
-- Không execute code, không fetch URL, không ghi lesson/progress. Kết quả tool vào prompt trong
-  delimiter `<<<TOOL_BAT_DAU>>>` và được dặn là dữ liệu không tin cậy.
-- Audit `tutor_tool_calls`: name/ok/duration_ms/summary (server dựng)/error_code. **Không** lưu
-  nội dung tool trả về hay prompt.
-- Flag `TUTOR_TOOLS_ENABLED=false` (mặc định) ⇒ không gọi planner, không frame `tool`.
+- Dùng **server-side deterministic JSON** qua `plan_tutor_tool`, không dùng native `tool_calls` (DEC-P31-B1).
+- Giới hạn: `TUTOR_TOOL_MAX_CALLS=2`, `TUTOR_TOOL_TIMEOUT_SECONDS=3.0`, `TUTOR_TOOL_MAX_RESULT_CHARS=3000`.
+- Audit lưu tại `tutor_tool_calls` (chỉ metadata, không lưu nội dung bài/tài liệu).
 
-## 8. Stop, quotas, errors (P3.1 lát A — IMPLEMENTED)
+## 7. Stop & Quota (IMPLEMENTED)
 
-- `POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop` → ghi `cancel_requested_at`
-  (owner-scoped, 404 `TUTOR_STOP_NOT_FOUND` nếu không thuộc user/course hoặc không phải assistant).
-  Response: `{messageId, status: cancel_requested|completed|failed|cancelled,
-  providerStopGuaranteed: false, notice}`. Endpoint **không** tự ghi `cancelled`; task stream còn sống
-  mới ghi trạng thái cuối + nội dung đã nhận. Stop trên message đã xong trả trạng thái thật.
-- Vòng stream kiểm cờ **theo thời gian** (`TUTOR_CANCEL_POLL_SECONDS`, mặc định 1s), không chỉ khi
-  queue timeout — nếu không, provider trả token liên tục sẽ không bao giờ thấy stop.
-- "Dừng" khi client đóng tab: `finally` của generator ghi `cancelled` (đường P3.0 giữ nguyên).
-- Allowance: `TUTOR_MESSAGES_PER_DAY` (lượt/24h), `TUTOR_TOKENS_PER_DAY` (token/24h, từ
-  `tutor_usage_events`), `TUTOR_MAX_CONCURRENT_STREAMS` (stream đồng thời/user). Kiểm **trước** khi
-  tạo message/gọi provider; 429 kèm `detail.quota` có cấu trúc.
-- `GET /v1/courses/{courseId}/tutor/usage` → `{used, limits, remaining, runningStreams, tokensKnown}`.
-  `remaining: null` = không có trần; `tokensKnown=false` = provider chưa báo token ⇒ trần token
-  **không** phản ánh chi phí thật.
-- Message `pending/running` quá `TUTOR_STALE_STREAM_SECONDS` bị reap thành `failed/TUTOR_STALE`
-  (server restart), tránh khóa user ở `MESSAGE_IN_PROGRESS` vĩnh viễn.
-- Bảo đảm stop không hoàn trả giả chi phí đã phát sinh; token đã generated có thể tính phí bên provider.
+- `POST .../stop` ghi `cancel_requested_at` (owner-scoped, 404 `TUTOR_STOP_NOT_FOUND`); vòng stream poll cờ mỗi `TUTOR_CANCEL_POLL_SECONDS=1.0`.
+- Allowance (`0` = không giới hạn, **không phải** "cấm dùng"): `TUTOR_MESSAGES_PER_DAY=0`, `TUTOR_TOKENS_PER_DAY=0`, `TUTOR_MAX_CONCURRENT_STREAMS=2`. Khi vượt trần trả `429` kèm `detail.quota`.
+- `GET .../usage` không tiêu quota; `tokensKnown=false` cảnh báo trung thực khi provider chưa báo token usage.
 
-## 9. Acceptance tests (gate)
+## 8. Mở rộng đề xuất từ đối chiếu PolySkill (`PROPOSAL — NOT IMPLEMENTED`)
 
-- Stream full `delta`→`done` và history reload; invalid blockIndex/course/foreign lesson reject.
-- Hai user dùng cùng `threadId` giả không lộ data; concurrent same clientMessageId chỉ 1 message/LLM call.
-- Disconnect/duplicate/timeout/invalid SSE/stop+done race có kết quả rõ, không orphaned running forever.
-- Quota 0 không gọi provider; tool allowlist block arbitrary calls; no raw prompts/keys trong logs.
-- P3.1: stop giữa stream (provider trả liên tục) ⇒ frame `cancelled`, phần đã nhận giữ nguyên, trạng
-  thái DB `cancelled`; stop-vs-completed race không ghi đè nội dung; quota token/lượt chặn trước
-  provider; stale running được reap; usage event không chứa nội dung.
-- P3.1 lát B: tool ngoài allowlist/args sai/blockIndex ngoài biên bị chặn **trước** execute và vẫn
-  audit; planner lỗi hoặc không hỗ trợ ⇒ lượt hỏi vẫn trả lời bình thường; prompt chứa kết quả tool
-  **không** chứa answer key; audit không chứa nội dung bài.
-- Real provider streaming chỉ đánh dấu TESTED khi có quyền API, output & usage; test mock không thay thế chứng cứ real.
+Xem `polyskill-analysis-report.md` §5.6 và `docs/frontend-reference/api-gap-register.md` (`GAP-07`, `GAP-08`, `GAP-20`):
+- 3 loại thread (`course` / `anchor` / `task`) và 6 entry points (`tab`, `wrong_answer`, `teach_block`, `term`, `path_harder`, `proposal`).
+- Tools mở rộng có ghi dữ liệu với **confirm gate**: `revise_proposal`, `flag_question` (`contentFlag`), và `regenerate_unit` (SSE `confirm` → `ChangeCard` → `POST .../actions/{actionId}/{confirm|decline}` → background rewrite job).
+- Các mở rộng này đòi hỏi migration mới, bảng trạng thái action và review bảo mật riêng — **chưa triển khai**.

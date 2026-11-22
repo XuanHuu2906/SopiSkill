@@ -1,82 +1,78 @@
 # 08 — Generation Jobs, LLM Provider & Curriculum DAG
 
-**Trạng thái:** P1.2 job reliability và P2.0 adapter được **báo cáo đã triển khai/test**. P2.1/P2.2 ở đây là **đề xuất triển khai mới**.
+**Trạng thái (`2026-11-22`):** **P1.2**, **P2.0**, **P2.1**, **P2.2**, **`P1-QUIZ-BLANK`** và **`RELIABILITY-CELERY-01/02`** đều đã **IMPLEMENTED · REPORTED TESTED**. Các vấn đề chất lượng ở provider thật (**`P1-CONTENT-TRUNC`**, **`P1-LANG`**, **`P1-LEVEL-FIT`**) là backlog ưu tiên tiếp theo.
 
-## 1. Current provider capabilities (reported)
+## 1. Provider capabilities (IMPLEMENTED)
 
-- `LLM_PROVIDER=mock` mặc định, deterministic và **không gọi API AI thật**.
-- Registry `mock | openai | openai_compatible`; thiếu cấu hình provider thật hoặc provider lạ → `503 PROVIDER_NOT_CONFIGURED`, **không fallback mock**.
-- Adapter OpenAI-compatible `/chat/completions` với `response_format=json_object`, parse → Pydantic → semantic lint; timeout, retries bounded, backoff+jitter/`retry-after`, cắt input, output token budget và redacted metadata logs.
-- Real smoke **3 requests được duyệt** qua Deploy.com với `deepseek-ai/deepseek-v4.1-flash-1017` và HTTP 200; **không** chứng minh hierarchical generation, tutor streaming, chi phí đầy đủ hoặc second provider.
+- `LLM_PROVIDER=mock` mặc định: deterministic, offline, **không gọi AI thật** (`MockProvider` không thay thế bằng chứng LLM thật).
+- Registry `mock | openai | openai_compatible`: thiếu key/base URL/model hoặc provider lạ → `503 PROVIDER_NOT_CONFIGURED`, **không fallback mock**.
+- Adapter OpenAI-compatible (`/chat/completions` + `response_format=json_object`): parse → Pydantic → semantic lint; timeout (`45s`), bounded retries (`LLM_MAX_RETRIES=2`, `LLM_MAX_SCHEMA_RETRIES=1`), input cap (`12_000` chars), output token budgets tách theo từng bước (`interview: 800`, `proposal: 4500`, `lesson: 3000`, `judge: 3000`, `tutor: 900`), redacted logs.
+- **Real-LLM evaluation baseline (`2026-11-04`):** đã chạy 12 topics trên `deepseek-ai/deepseek-v4.1-flash-1017` (149 calls, `N=11` scored, 1 hit `PROVIDER_BUDGET_EXCEEDED`), mean **3.17/4**. Phát hiện 4 lỗi lặp lại:
+  - `P1-QUIZ-BLANK` (multi-blank 5/11): **đã sửa trong code** (`validate_lesson` ở worker + `BLANK_SLOT_COUNT=1`).
+  - `P1-CONTENT-TRUNC` (cắt cụt bài học 7/11 ở trần output token): **OPEN — chưa sửa**.
+  - `P1-LANG` (6/6 topic tiếng Anh bị trả tiếng Việt): **OPEN — chưa sửa**.
+  - `P1-LEVEL-FIT` (8/11 lệch trình độ): **OPEN — chưa sửa**.
 
 ## 2. Requirements
 
-| ID | Yêu cầu | Phase |
+| ID | Yêu cầu | Trạng thái (2026-11-22) |
 |---|---|---|
-| GEN-001 | Mock output deterministic, offline tests không network | P0 / regression |
-| GEN-002 | Real provider config fail-fast, key chỉ server | P2.0 / regression |
-| GEN-003 | Validate interview/proposal/lesson schema + semantic rules | P2.0 |
-| GEN-004 | Approve tạo job outbox; claim nguyên tử, lease, recovery | P1.2 / regression |
-| GEN-005 | Retry bounded, idempotent upsert; superseded job không overwrite | P1.2 / regression |
-| GEN-006 | Learner profile từ 5 answers, objective dựa Bloom, DAG acyclic | P2.1 |
-| GEN-007 | Hierarchical generation dùng snapshot approved proposal | P2.1 |
-| GEN-008 | Cost/token/latency/job metrics, per-user budget controls | P2.2 |
-| GEN-009 | Eval ≥10 topics, cấu trúc/giá trị sư phạm/hallucination | P2.2 |
+| GEN-001 | Mock output deterministic, offline tests không network | **IMPLEMENTED · TESTED** |
+| GEN-002 | Real provider config fail-fast, key chỉ server | **IMPLEMENTED · TESTED** |
+| GEN-003 | Validate interview/proposal/lesson schema + semantic rules (`validate_lesson` tại worker) | **IMPLEMENTED · TESTED** (`P1-QUIZ-BLANK`) |
+| GEN-004 | Approve tạo job outbox; claim nguyên tử, lease, stale-dispatch recovery | **IMPLEMENTED · TESTED · DEPLOYED** (`RELIABILITY-CELERY-01/02`) |
+| GEN-005 | Retry bounded, idempotent upsert; superseded job không overwrite | **IMPLEMENTED · TESTED** |
+| GEN-006 | Learner profile từ 5 answers, Bloom outcomes, DAG acyclic | **IMPLEMENTED · TESTED** (`P1-PEDAGOGY` uncommitted) |
+| GEN-007 | Hierarchical generation dùng snapshot approved proposal | **IMPLEMENTED · TESTED** |
+| GEN-008 | Cost/token/latency/job metrics (`llm_usage_events`), per-job budget caps | **IMPLEMENTED · TESTED** (`0007_p22_eval_cost`) |
+| GEN-009 | Eval ≥10 topics, cấu trúc/sư phạm/hallucination | **IMPLEMENTED · MEASURED** (`3.17/4` — cần sửa P1 & đo lại sau khi duyệt budget) |
 
-## 3. Hierarchical pipeline P2.1 — PROPOSAL
+## 3. Pipeline hiện hữu (P2.1–P2.2)
 
 ```text
-answers[5] → validated learner_profile snapshot
-            → curriculum plan (learning outcomes + prerequisite DAG)
-            → validated proposal vN → USER APPROVE
-            → generate job pins (courseId, profileVersion, proposalVersion, model/promptVersion)
-            → per-unit outline → per-lesson typed blocks
-            → semantic checks & server-only answer keys
-            → persist versions + progress → ready
+answers[5] → deterministic LearnerProfile (pedagogy.py)
+           → ProposalPayload (units + outcomes + Bloom skills + acyclic prerequisites DAG)
+           → USER APPROVE (pin proposalVersion, create queued job in txn)
+           → Celery worker atomic claim + lease
+           → per-lesson generation (bounded output tokens + per-job token/cost budget)
+           → validate_lesson() at worker boundary (incl. BLANK_SLOT_COUNT=1, unique options, teach+quiz)
+           → persist private Lesson.content + llm_usage_events + backfill skills (if P5.0) → ready
 ```
 
-Các bước có thể gộp network calls nếu tiết kiệm chi phí, nhưng **không** bỏ validation hoặc snapshot/pinning. Không tự ý gọi model trong DB transaction dài.
+## 4. Semantic validation & error taxonomy
 
-## 4. Semantic validation (ít nhất theo P2.0)
-
-- Interview: đúng 5 câu, ≤400 ký tự/câu, không rỗng/trùng.
-- Proposal: 2–6 units, không trùng title/lesson vô nghĩa, có outcomes; limits chi tiết theo current schema.
-- Lesson: có ≥1 `teach` và ≥1 quiz; `mc.answerIndex` nằm trong options; options unique; `blank` che đáp án bằng `____` (repair được nếu an toàn), order/match không duplicate keys.
-- P2.1: prerequisite DAG no cycle/missing nodes, lesson-outcome alignment, difficulty consistency, progression hợp lý; test theo file `19-PEDAGOGY-AND-EVALUATION.md`.
-
-**Phân loại lỗi:**
+- **Interview:** đúng 5 câu, ≤400 ký tự/câu, không rỗng/trùng.
+- **Proposal:** 2–6 units, 2–8 outcomes, DAG acyclic, không duplicate title vô nghĩa.
+- **Lesson (`backend/app/providers/validation.py` + `worker/generation.py`):**
+  - Ít nhất 1 `teach` và 1 quiz block.
+  - `mc.answerIndex` trong biên, options không trùng.
+  - `blank`: **đúng 1 chỗ trống** (`BLANK_SLOT_COUNT = 1`, kiểm bằng `_count_blank_slots()`), không tạo thêm chỗ trống khi câu đã có marker; `order`/`match` không trùng key; `short` bắt buộc có `acceptedAnswers` (`1..10`).
+  - Worker gọi `validate_lesson(content)` trước khi ghi `ready` — nội dung sai schema không bao giờ được lưu `ready`.
 
 | Code | Retry? | Ý nghĩa |
 |---|---|---|
 | `PROVIDER_TIMEOUT`, `PROVIDER_RATE_LIMITED`, `PROVIDER_TRANSIENT` | Có, bounded | Lỗi tạm thời |
 | `PROVIDER_AUTH_FAILED`, `PROVIDER_NOT_CONFIGURED` | Không | Cấu hình/quyền |
-| `PROVIDER_BUDGET_EXCEEDED` | Không | Budget guard |
-| `PROVIDER_SCHEMA_INVALID` | Không (theo policy hiện hành) | Output không hợp contract; chỉnh prompt/offline trước |
+| `PROVIDER_BUDGET_EXCEEDED` / `BUDGET_EXCEEDED` | Không | Vượt trần token/chi phí job |
+| `PROVIDER_SCHEMA_INVALID` | Bounded schema retry (`LLM_MAX_SCHEMA_RETRIES=1`) rồi fail | Output không hợp contract |
+| `DISPATCH_EXHAUSTED` | Không | Quá `GENERATION_MAX_DISPATCH_ATTEMPTS=5` mà không worker claim |
 
-## 5. Job state and recovery
+## 5. Job state, Celery config & recovery (`RELIABILITY-CELERY-01/02`)
 
-- `queued`: DB commit, chưa chắc broker đã nhận; `dispatched=false` hiển thị trung thực.
-- `running`: worker atomic claim, có lease timeout/heartbeat; tăng `attempts_count` theo số worker claims, **không** bằng lượt user bấm retry.
-- `ready`: lessons đã được ghi hợp lệ; `failed`: error code an toàn.
-- `running → queued`: với recoverable failures còn retry budget; backoff có giới hạn.
-- Reconciler tìm outbox chưa dispatch / lease hết hạn, không tạo double effect; duplicate Celery delivery là no-op nếu job đã done.
-- Retry explicit tạo **job mới**, giữ lịch sử cũ; contentVersion chỉ tăng nếu nội dung thực thay đổi; attempts cũ không bị xóa.
+- **3 nhánh thu hồi của beat reconciler (`30s`):**
+  1. `queued` với `dispatched_at IS NULL` quá `GENERATION_DISPATCH_GRACE_SECONDS=10` → dispatch lại.
+  2. `running` hết `lease_expires_at` (`GENERATION_LEASE_SECONDS=180`) → reclaim/retry có giới hạn (`GENERATION_MAX_ATTEMPTS=3`).
+  3. `queued` có `dispatched_at` cũ hơn `GENERATION_STALE_DISPATCH_SECONDS=300` (message thất lạc / worker chết trước khi claim) → re-dispatch tới `GENERATION_MAX_DISPATCH_ATTEMPTS=5`, quá ngưỡng đánh `failed` / `DISPATCH_EXHAUSTED`.
+- **Celery Redis config đã sửa và xác minh live:** `broker_transport_options={"visibility_timeout": 3600}` (thay key sai `worker_visibility_timeout`), `task_time_limit=2400`, `task_acks_late=True`, `worker_prefetch_multiplier=1`.
 
-## 6. Token/cost policy
+## 6. Token/cost policy (IMPLEMENTED)
 
-- Global và per-job max output/input budget; max lessons per course; max request count; hard stop trước request vượt quota.
-- Log usage nếu provider cung cấp: `provider`, `model`, `prompt_version`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `job_id`; giá chính xác có thể **UNKNOWN** nếu provider không trả fee.
-- Đề xuất thêm `provider_usage`/`generation_usage` theo job và stage ở P2.2; idempotency keys tránh đếm chi phí hai lần do retry persistence, nhưng **không thể hứa** external provider không charge lại nếu network timeout sau khi request đã xử lý.
-- `LLM_PROVIDER=mock` khi chạy tests/local mặc định. Chỉ real E2E khi có budget cụ thể được duyệt.
+- Trần per-job cấu hình trong `config.py`: `GENERATION_MAX_TOKENS_PER_JOB=400000`, `GENERATION_MAX_COST_USD_PER_JOB=0` (0 = không giới hạn USD).
+- `LLM_PRICING_JSON` rỗng ⇒ `costEstimateUsd = null` và `costKnown = false` (tuyệt đối không báo `$0` giả).
+- Mọi lời gọi real LLM ngoài mock chỉ thực hiện khi owner duyệt rõ provider, model, tập topic và ngân sách.
 
-## 7. Acceptance for P2.1
+## 7. Hướng mở rộng tiếp theo (PROPOSAL)
 
-1. 10 topics offline fixtures; mỗi generated proposal hợp schema, DAG acyclic, IDs unique, mapping lessons/outcomes đúng.
-2. Mock end-to-end và existing E2E regression còn pass; backend not leak answer keys.
-3. Concurrency: duplicate approve/retry/worker không nhân đôi lessons; stale worker không overwrite content mới.
-4. Controlled errors: invalid JSON, schema invalid, 429, timeout, budget exceeded, fail-fast config có test.
-5. Real provider: chỉ đánh dấu **TESTED REAL** nếu được phép, có proof request/usage redacted, nội dung quan sát; nếu chưa phép → **BLOCKED**, không thay bằng mock để báo PASS.
-
-## 8. Không làm
-
-Không tự tạo key, sử dụng credential của coding agent, auto mua API, fine-tune, gọi API backend của PolySkill hay tuyên bố thuật toán backend của PolySkill.
+- **`P1-CONTENT-TRUNC`:** bắt `finish_reason == "length"` rõ ràng thay vì để JSON cắt cụt/bài cụt, đo & tinh chỉnh token budget hoặc chiến lược chia nhỏ sinh bài.
+- **Automated Validator / QA Agent (`OBSERVED_STATIC` từ PolySkill `fnd_`):** có thể cân nhắc thêm bước kiểm định chất lượng sau sinh (flag `ambiguous`, `weak_distractors`, `wrong_answer`) ở phase sau.
+- **Lazy / on-demand lesson generation:** sinh bài 1 trước cho người học vào học sớm, các bài sau chạy nền (`preparing`) — hiện chưa triển khai.

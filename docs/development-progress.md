@@ -2,6 +2,620 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-04 — P1-QUIZ-BLANK — một blank block chỉ được có đúng một chỗ trống, một đáp án
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Không commit, không push.
+- Git status trước/sau: 15 file modified + 8 path untracked **không bị chạm**. Phase này chỉ thêm
+  2 file test/scaratch và sửa 2 file backend (xem dưới). `frontend/**` modified là từ phase trước,
+  không thay đổi trong phase này.
+- **Vấn đề:** 7/333 blank block trong 338 bài đã lưu có **2 chỗ trống nhưng chỉ 1 đáp án** ⇒ câu
+  không thể trả lời trọn vẹn. Nguyên nhân: `_validate_block` không đếm số chỗ trống, và
+  `_mask_answer_in_sentence` có thể tạo **chỗ trống thứ hai** khi câu đã có marker mà đáp án còn
+  xuất hiện trong phần chữ.
+- **Vì sao chọn "reject" thay vì hỗ trợ multi-blank:** hợp đồng hiện tại chỉ hỗ trợ một chỗ trống ở
+  4 tầng độc lập — `BlankBlock.answer: str` (không có `blanks[]`), `grade_blank` so nguyên chuỗi,
+  frontend render đúng **một** `<input>` và gửi một chuỗi, `public_block` chỉ gửi `sentence`.
+  Hỗ trợ 2+ chỗ trống là thay đổi hợp đồng cỡ M, ngoài phạm vi phase này.
+- Files changed (production):
+  - `backend/app/providers/validation.py` — thêm `BLANK_SLOT_COUNT = 1` + `_count_blank_slots()`
+    (đếm marker rõ `_{3,}` / `[...]` trước, chỉ đoán `…`/`...` khi không có marker rõ — vì `...`
+    trong dữ liệu thật là cú pháp code); `_mask_answer_in_sentence` **không tạo thêm chỗ trống**
+    khi câu đã có marker; blank branch yêu cầu đúng 1 chỗ trống.
+  - `backend/app/worker/generation.py` — gọi `validate_lesson(content)` trước khi ghi lesson, buộc
+    "nội dung sai schema không được lưu `ready`" ở ranh giới hệ thống (trước đây chỉ provider
+    OpenAI tự validate; MockProvider và provider giả lập không).
+- Files added (test): `backend/tests/test_quiz_blank.py` (14 test offline), thêm
+  `test_invalid_blank_content_is_never_saved_ready` vào `backend/tests/test_job_reliability.py`.
+- **Tái hiện trước khi sửa:** 14 test mới → 4 fail (`2 gap/1 answer` được chấp nhận, `[...]` ×2
+  được chấp nhận, repair tạo `'____ là gì? Điền: ____'` 2 chỗ trống, 0-gap với đáp án ngoài câu
+  được chấp nhận). Sau sửa: 14/14 pass.
+- **Chống test rỗng:** tạm tắt `validate_lesson(content)` trong worker ⇒ test worker fail; bật lại
+  ⇒ pass.
+- **Lint dữ liệu thật (read-only, không sửa nội dung):** 346 bài, 341 blank / 7 sai số chỗ trống,
+  335 short / **0** thiếu `acceptedAnswers`. 8 bài mới sinh sau fix (từ E2E trên container mới)
+  **không** thêm blank sai nào ⇒ cùng 7 hàng cũ. 7 hàng này **không bị rewrite** (không đổi nghĩa
+  câu hỏi).
+- **Lint offline 12 topic eval:** 12 case → 48 bài → 48 blank, 0 sai, `validate_lesson` pass hết.
+- Kiểm chứng chạy thật: `pytest` → **714 passed, 29 skipped** (baseline 699 + 15 test mới, 0
+  regression); `npx tsc --noEmit` → 0 lỗi; `npm run build` → 11/11 route; `e2e_acceptance.py`
+  trên container rebuild (mock, `TUTOR_ENABLED=false`) → **61/61 PASS**, gồm quiz 5/5 (`xpEarned=70`),
+  replay `xpEarned=0`, progress 25 %, stale `contentVersion` → 409, tutor 503 `TUTOR_DISABLED`.
+- NOT TESTED: browser UI (không có harness); provider thật; benchmark pass-rate sau khi siết
+  validator trên nội dung **mới** (chỉ mock + dataset offline).
+- BLOCKED: không có gì chặn phase này. Vấn đề Celery worker host cũ vẫn mở — ghi ở báo cáo riêng,
+  **không kill process, không xóa dữ liệu**.
+- Ghi chú lệch chuẩn: audit `07-gap-backlog.md` đề xuất severity `warning` trước rồi mới `error`;
+  phase này làm `error` ngay theo chỉ đạo trực tiếp của người dùng. Nội dung cũ không bị ảnh hưởng
+  (validator chỉ chạy khi sinh mới/regenerate).
+- Báo cáo chi tiết: `docs/audits/p1-quiz-blank-2026-11-04/P1-QUIZ-BLANK-RESULT.md`.
+
+## 2026-11-04 — FRONTEND FR-5 — Tutor dock cạnh bài học thay vì phủ lên (sửa một FACT sai)
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Không tạo
+  commit (theo chỉ đạo của người dùng).
+- Git status: `M frontend/src/app/globals.css`, `M frontend/src/app/lesson/[lessonId]/page.tsx`,
+  `M frontend/src/app/lesson/[lessonId]/TutorPanel.tsx`, `M frontend/src/components/ui/useModalPanel.ts`,
+  `A frontend/src/components/ui/useMediaQuery.ts`; docs: `visual-comparison.md`, `decisions.md`,
+  `interaction-map.md`, `accessibility-review.md`, file này. Screenshot mới:
+  `local-tutor-docked-{1440x900, dark-1440x900}.png`, `local-tutor-{768x1024, 390x844}.png`.
+- Reference observed: `tutor-open-1440x900.png` (reference, 1440×900, light, cùng lesson h1
+  "Python cho người mới là gì?"). Quét từng hàng pixel bằng `pngscan.mjs`/`rowscan.mjs`.
+- NOT OBSERVED: trạng thái tutor-open của reference ở 768 và 390 — chỉ có ảnh 1440 nên
+  reference hành xử thế nào ở hai bề rộng đó là **UNKNOWN**.
+- Mục tiêu và phạm vi: hai tài liệu cũ của chính dự án ghi sai về tutor. `decisions.md` D-08
+  viết "sheet rộng ~360–380 px, chấp nhận sai lệch nhỏ"; `visual-comparison.md` ghi delta là
+  "chiều rộng". Đo lại thì cả hai đều sai: reference **dock** rail 400 px chứ không overlay,
+  và đó là khác biệt mô hình tương tác, không phải khác biệt kích thước. Phase này sửa code
+  theo đúng evidence đã đo.
+- Files changed:
+  - `globals.css` — thêm token `--dock-width: 400px`; khối `@media (min-width: 1024px)`:
+    `.app-content` đệm phải 400 px khi `.lesson-page.is-docked`, `.lesson-bar` đặt
+    `right: var(--dock-width)`, `.tutor-sheet.is-docked` rộng 400 px, `.tutor-backdrop.is-docked`
+    `display: none`. **Giữ nguyên `--shadow-rail`** — đo lại thì bóng ngược sang trái khớp
+    reference từng pixel, nên override `box-shadow: none` ban đầu là sai và đã bỏ.
+  - `components/ui/useMediaQuery.ts` — **mới**. `useSyncExternalStore` + `matchMedia`,
+    trả `false` khi SSR để markup và hydration khớp nhau.
+  - `components/ui/useModalPanel.ts` — thêm tham số `modal = true`. Khi `false`: không bẫy
+    Tab, không quét `inert`; vẫn giữ Escape và trả focus. Không fork hook.
+  - `lesson/[lessonId]/TutorPanel.tsx` — prop `docked?: boolean` → `modal: !docked`,
+    class `is-docked` cho backdrop và sheet, `aria-modal={docked ? undefined : "true"}`;
+    `<aside role="dialog">` → `<div role="dialog">` (xem mục sửa lỗi a11y bên dưới),
+    `sheetRef` đổi kiểu sang `HTMLDivElement`.
+  - `lesson/[lessonId]/page.tsx` — `useMediaQuery("(min-width: 1024px)")` → `tutorDocked`
+    → class `is-docked` trên `.lesson-page` và prop `docked` cho `TutorPanel`;
+    `OutlineSheet` cũng đổi `<aside>` → `<div>`, `sheetRef` sang `HTMLDivElement`.
+- IMPLEMENTED:
+  - Dock ở ≥1024 px: trang giữ nền paper, không scrim, vẫn tương tác được; cột đọc 720 px
+    dời sang trái và tái căn giữa vào 1040 px còn lại.
+  - Overlay giữ nguyên ở <1024 px (không đủ chỗ cho cả cột 720 px lẫn rail 400 px).
+  - Hai mô hình bàn phím: overlay modal (bẫy Tab + `inert` + `aria-modal`), dock phi modal
+    (Escape + trả focus, không bẫy).
+- TESTED (production build `next start` port 3001, `NEXT_PUBLIC_API_URL=http://localhost:8001`,
+  Chrome CDP 1440×900, `npx tsc --noEmit` exit 0):
+  - `docked: true`, `sheetDocked: true`, `aria-modal` **null**, `role: "dialog"`,
+    backdrop `display: none`, `appPadR: "400px"`, `pageBg: rgb(241,236,253)`.
+  - Hình học đóng → mở: cột `x 360 → 160`, track `x 345 → 145` (w 708 không đổi),
+    CTA `x 860 → 660`, bar `0..1440 → 0..1040`, sheet `x 1040 w 400`.
+  - Quét pixel `local-tutor-docked-1440x900.png` y=450: paper `241,236,253` đến x=1039,
+    hairline `230,222,250` tại x=1040, rail `252,250,255` từ x=1041.
+  - **Bóng rail khớp reference từng byte**: dải gradient từ x=993 (`240,235,252`) tới
+    x=1039 (`223,215,241`) trùng khít ảnh reference, kể cả hàng đáy y=884.
+  - Dark 1440×900: paper `18,14,32` → hairline `48,39,72` → rail `25,20,48`, bóng
+    `17,14,31 → 13,10,24`; hình học y hệt light.
+  - Overlay 768×1024: `docked: false`, `aria-modal: "true"`, backdrop phủ kín `768×1024`
+    màu `rgba(36,28,59,0.42)`, sheet x=388 w=380.
+  - Overlay 390×844: `docked: false`, `aria-modal: "true"`, sheet phủ kín x=0 w=390,
+    `scrollWidth = innerWidth = 390` (không tràn ngang).
+  - **Bàn phím (CDP `Input.dispatchKeyEvent`, không phải sự kiện tổng hợp):** từ
+    `#tutor-input`, `Tab` → `BODY` → `btn btn-icon` ×2 → `lesson-bar-secondary`, mọi bước đều
+    `inSheet: false`. Rail dock **không** bẫy Tab — đúng thiết kế phi modal.
+  - **Mặt ngược lại, overlay 768×1024 vẫn bẫy:** 8 lần Tab liên tiếp từ `#tutor-input` luân
+    phiên `#tutor-input ↔ .btn.btn-icon` (nút đóng), `inSheet: true` ở **cả 8** bước. Hai
+    hợp đồng bàn phím bổ sung nhau và cùng được đo sau khi đổi `<aside>` → `<div>`.
+  - **axe-core chạy lại sau khi đổi layout, 5 bề mặt** (`axe.run(document, {resultTypes:
+    ['violations']})`, bản production):
+
+    | Bề mặt | `tag` | `role` | `aria-modal` | violations |
+    |---|---|---|---|---|
+    | Rail dock 1440×900 light | `DIV` | `dialog` | null | `[]` |
+    | Rail dock 1440×900 dark | `DIV` | `dialog` | null | `[]` |
+    | Overlay 768×1024 | `DIV` | `dialog` | `true` | `[]` |
+    | Overlay 390×844 | `DIV` | `dialog` | `true` | `[]` |
+    | Outline sheet 1440×900 | `DIV` | `dialog` | `true` | `[]` |
+
+  - Sau khi đổi `<aside>` → `<div>`, đo lại hình học dock: cột `x 160 w 720`, track
+    `x 145 w 708`, CTA `x 660 w 220`, bar `0..1040`, sheet `x 1040 w 400`,
+    `appPadR "400px"`, `pageBg rgb(241,236,253)`, focus `tutor-input` — **không đổi số nào**.
+    Dark cũng vậy (paper `18,14,32`, hairline `48,39,72`, rail `25,20,48`).
+  - Hàng đáy y=884 của ảnh reference và ảnh local trùng khít từng byte cho tới rail:
+    `... 1038-1039 (2) 247,244,252 · 1040 (1) 230,222,250 · 1041-1439 rail`.
+- Lỗi a11y phát hiện và đã sửa trong entry này:
+  - `aria-allowed-role` — `"ARIA role dialog is not allowed for given element"` trên
+    `<aside class="tutor-sheet …" role="dialog">`. `<aside>` mang role ngầm `complementary`,
+    ARIA cấm ghi đè bằng `dialog`. Xuất hiện ở **cả 4** bề mặt (dock, 768, 390, outline).
+  - Điều này **bác bỏ** tuyên bố "0 violations" trong entry FR-4b. Đã thêm đính chính ở entry
+    đó và viết lại mục tương ứng trong `accessibility-review.md`.
+  - Sửa: cả hai sheet dùng `<div>` — kiểu phần tử giữ nguyên qua breakpoint nên resize không
+    remount panel; không có CSS nào bám vào tên thẻ `aside` (đã grep toàn `src/` và
+    `globals.css`, không match).
+- NOT TESTED: NVDA/VoiceOver chưa chạy; Playwright/E2E chưa có (mọi phép đo vẫn lái tay qua
+  CDP).
+- BLOCKED: không. Port 3000 bị container Docker `reverseengineer-frontend-1` giữ (proxy
+  Docker nên `netstat` trên Windows không thấy LISTENING) — đó là lý do mọi lần
+  `next start -p 3000` trả `EADDRINUSE` dù cổng "trông trống". Đo trên 3001 thay thế.
+- API contract / security review: không đổi `lib/api.ts`, query key, cookie/CSRF, polling,
+  `clientAttemptId`, hay chấm điểm phía server. Toàn bộ thay đổi nằm trong layout và hook UI.
+- Visual comparison: **MATCHED** ở 1440×900 (light + dark) cho mô hình tương tác và hình học.
+  <1024 px vẫn là overlay — lựa chọn có chủ đích, đã ghi trong `decisions.md` D-08.
+- Regression results: `tsc --noEmit` sạch; route lesson/quiz không đổi hành vi; outline sheet
+  vẫn modal (không truyền `docked`) và vẫn `aria-modal="true"` sau khi đổi thẻ; build
+  production exit 0.
+- Known limitations: reference chỉ có ảnh tutor-open ở 1440 nên ngưỡng 1024 px là **PROPOSAL**
+  của SopiSkill, không phải số đo. Shadow khớp trên ảnh PNG nhưng độ phân giải màu 8-bit
+  không chứng minh khớp tuyệt đối trên mọi điểm ảnh.
+- Rollback: revert diff frontend là đủ; không có migration, không đụng backend.
+- PHASE GATE: **PASS** cho phạm vi FR-5 kèm đính chính — code, hình học dock, 2 theme,
+  3 viewport, Tab rời rail, và axe-core trên 5 bề mặt đều đã đo. Không còn khoảng trống
+  nào trong phạm vi phase này. (Lỗi `aria-allowed-role` được phát hiện chính nhờ lần chạy
+  axe bổ sung — đây là lý do gate trước đó để PARTIAL.)
+- NEXT: (1) Playwright E2E phủ tạo → proposal → generating → lesson → quiz, kèm assertion
+  Tab rời rail ở ≥1024 px và Tab bị giữ trong overlay ở <1024 px; (2) smoke test NVDA thật
+  cho luồng lesson + quiz.
+
+## 2026-11-04 — FRONTEND FR-4b — Hợp đồng modal cho hai sheet của lesson
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Không tạo
+  commit (theo chỉ đạo của người dùng).
+- Git status: thêm `frontend/src/components/ui/useModalPanel.ts` (mới) và sửa
+  `lesson/[lessonId]/page.tsx`, `lesson/[lessonId]/TutorPanel.tsx`.
+- Reference observed: không khảo sát mới. Đây là lỗi a11y nội tại của bản dựng hiện tại,
+  không phải khoảng cách so với PolySkill.
+- Mục tiêu: đóng khoảng trống "focus trap chưa đo" mà entry FR-4 để lại, cho **cả hai**
+  overlay của lesson (tutor sheet và outline sheet) chứ không riêng tutor.
+- Files changed:
+  - `frontend/src/components/ui/useModalPanel.ts` — **mới**. Hook dùng chung: `Escape` đóng,
+    Tab/Shift+Tab quấn trong panel, focus ban đầu theo selector, quét `inert` ngược chuỗi
+    ancestor, trả focus về phần tử đã mở. `onClose` giữ trong ref để prop arrow inline không
+    làm effect chạy lại mỗi lần cha render.
+  - `lesson/[lessonId]/TutorPanel.tsx` — bỏ effect Escape-only; `<aside>` thành
+    `role="dialog" aria-modal="true" aria-labelledby="tutor-heading"`; focus ban đầu vào
+    `#tutor-input`; backdrop `tabIndex={-1}`.
+  - `lesson/[lessonId]/page.tsx` — cùng thay đổi cho `OutlineSheet`; focus ban đầu vào
+    `.outline-item.is-active` để người dùng bàn phím tiếp tục từ bước đang xem.
+  - Docs: `accessibility-review.md` (hàng bảng + mục mới "Overlay sheet modal contract"),
+    `component-mapping.md` (thêm hook vào inventory), file này.
+- IMPLEMENTED:
+  - `role="dialog"` + `aria-modal="true"` + `aria-labelledby` trên cả hai sheet.
+  - Tab và Shift+Tab quấn trong tập focusable của panel (lọc theo phần tử đang render).
+  - Quét `inert` dọc chuỗi ancestor của panel, bỏ qua `.tutor-backdrop` vì nó là target
+    click-để-đóng; gỡ sạch khi đóng.
+  - Trả focus về đúng phần tử đã mở sheet.
+- TESTED (production build, `next start` port 3001, Chrome CDP):
+  - Tutor sheet: `role=dialog`, `aria-modal=true`, `aria-labelledby=tutor-heading`, focus ban
+    đầu `TEXTAREA#tutor-input`, Tab chỉ chạy giữa composer và nút đóng, `Escape` trả focus về
+    `BUTTON|Hỏi trợ giảng`.
+  - Outline sheet: focus ban đầu `.outline-item.is-active` với `aria-current="step"`; vòng Tab
+    **7 phần tử** (bước 1→2→3→4→5→6→đóng→quấn về bước 1), `insideSheet: true` ở mọi bước,
+    không thoát ra trang.
+  - `inert` khi mở outline: 15 phần tử ngoài sheet, **14** có ancestor `inert`; phần tử còn
+    lại là nút đóng của chính sheet. `document.querySelectorAll('[inert]').length = 11`.
+  - Focus lập trình vào nút nền `Đóng bài học` khi sheet mở: **bị chặn**, `activeElement`
+    vẫn ở `.outline-item.is-active`.
+  - Sau `Escape`: `sheetPresent=false`, `inertLeft=0`, `restoredTo="Mục lục bài học"`,
+    `isOutlineTrigger=true`; sau đó nút nền focus được trở lại.
+  - axe-core (wcag2a/2aa/2.1a/2.1aa) ở ba trạng thái — trang nền, tutor mở, outline mở —
+    **0 vi phạm** ở cả ba. **[ĐÍNH CHÍNH 2026-11-04: kết quả này SAI.]** Chạy lại sau khi
+    dock (entry FR-5) phát hiện `aria-allowed-role` trên `<aside role="dialog">` ở **cả**
+    hai sheet và cả ba viewport — tức là vi phạm đã tồn tại ngay từ entry này. Lần chạy cũ
+    gần như chắc chắn không thực thi `axe.run` (script inject lỗi, kết quả rỗng bị đọc thành
+    "0 vi phạm"); đó là suy đoán, vì lần chạy đó không ghi lại danh tính phần tử được quét.
+    Đã sửa: cả hai sheet chuyển sang `<div role="dialog">`. Chi tiết ở entry FR-5.
+  - `npx tsc --noEmit` → không lỗi; `npm run lint` → không vấn đề; build production xanh
+    (route lesson 11.5 kB).
+  - Ảnh nốt các khoảng trống còn lại của lưới chụp (cùng ngày, cùng phiên test): dark cho
+    `/login`, `/new/interview`, `/new/proposal`, `/new/generating`; 390×844 cho
+    `/new/interview` và `/new/proposal`; và trạng thái **đang sinh** thật của
+    `/new/generating` (dark 1440 + light 390) trên khoá mới mint. Mỗi ảnh đã mở lại và xác
+    nhận đúng màn. `/new/generating` chỉ chụp được trạng thái chưa kết thúc — route tự
+    redirect sang `/course/{id}` ngay khi sinh xong.
+- Nguyên nhân gốc đã tìm và sửa:
+  1. **Escape-only, không trap.** Cả hai sheet đăng ký một handler `keydown` chỉ xử lý
+     `Escape`. `Tab` đi thẳng ra thanh điều hướng phía sau, nên người dùng bàn phím rời khỏi
+     sheet mà không hay.
+  2. **`aria-modal` chưa từng được đặt.** Không có `role="dialog"`, nên trình đọc màn hình
+     coi hai sheet là một khối `aside` trong luồng nội dung bình thường.
+  3. **`aria-modal` một mình là không đủ.** Nó chỉ là gợi ý cho AT; DOM vẫn để nền truy cập
+     được bằng focus lập trình. Phải thêm `inert` thật.
+  4. **Bẫy `onClose` trong deps.** Mọi call site truyền arrow inline, nên đưa `onClose` vào
+     dep array sẽ chạy lại effect mỗi lần cha render — với focus trap thì đó là kéo focus về
+     giữa lúc đang gõ. Giải bằng `onCloseRef`.
+- NOT TESTED:
+  - Screen-reader thật (NVDA/VoiceOver) — **NOT MEASURED**. Đã đo ở mức DOM, chưa đo thứ tự
+    announcement.
+  - Playwright/E2E; mọi bước trên vẫn lái tay qua CDP.
+  - Không thử sheet lồng nhau (hiện tại không có luồng nào mở hai sheet cùng lúc).
+- BLOCKED / API GAP: không thêm. Register giữ **15** mục; thay đổi này thuần client, không
+  chạm endpoint nào.
+- API contract / security review: không đổi `lib/api.ts`, không đổi payload, không đổi
+  query key. Network log trong phiên verify chỉ có call đọc lesson như trước.
+- Visual comparison: **không đổi**. Không có thay đổi CSS; `inert` và `role` là thuộc tính
+  hành vi, không ảnh hưởng hình học. Số đo 1440/768/390 của FR-4 vẫn đúng.
+- Known limitations:
+  - `inert` là thuộc tính HTML chuẩn nhưng Chrome/Safari hiện đại mới hỗ trợ đầy đủ; trên
+    trình duyệt cũ hơn focus trap Tab vẫn hoạt động nhưng nền có thể vẫn được AT đọc.
+  - Bộ chọn focusable là danh sách tĩnh; nếu sau này thêm `contenteditable` hoặc
+    `details/summary` tương tác vào sheet thì phải bổ sung selector.
+- Privacy: không có capture mới; phiên dùng tài khoản test `rea.verify@test.dev`.
+- Rollback: thuần Git. Xoá hook và khôi phục hai effect Escape-only là trạng thái trước
+  phase. Không migration, không đổi dữ liệu.
+- PHASE GATE: **PASS** cho mục tiêu của phase — hợp đồng modal đã đo được đầy đủ trên cả hai
+  sheet. Toàn dự án vẫn **PARTIAL** vì E2E tự động và screen-reader thật vẫn chưa có.
+- NEXT: (1) Playwright E2E cho creation → proposal → generating → lesson → quiz, có assertion;
+  (2) smoke test screen-reader trên luồng lesson + quiz. *(Hai mục ảnh dark `/login` `/new/*`
+  và 390 cho `/new/interview` `/new/proposal` đã đóng trong entry này — xem TESTED.)*
+- Báo cáo đầy đủ: `docs/frontend-reference/phase-reports/2026-11-04-overlay-modal-contract.md`.
+
+## 2026-11-04 — FRONTEND FR-4 — Lesson player dạng bước + đóng build production
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Vẫn không
+  tạo commit nào.
+- Git status: bắt đầu 15 file modified + untracked (`docs/`, `frontend/src/components/`);
+  kết thúc thêm `frontend/src/app/fonts.css` và `frontend/public/`.
+- Reference observed: không khảo sát mới; dùng lại bằng chứng FR-1 (S08, S08 stepping).
+- Mục tiêu: (1) lesson player chuyển sang **một block mỗi màn, có phân trang** đúng mô hình
+  tương tác của reference; (2) `npm run build` phải xanh để frontend được xác nhận là
+  artifact production thật.
+- Files changed:
+  - `frontend/src/app/lesson/[lessonId]/page.tsx`: player dạng bước, một block hiển thị,
+    counter và progress bar cùng suy ra từ index của block đang xem (1/6 … 6/6 theo đúng
+    `blocks[]`), outline sheet, trạng thái kết quả.
+  - `frontend/src/app/globals.css`: dải chrome của lesson, hàng header 872 px với overhang
+    −75 px, reset `.tutor-backdrop`, căn trái `.outline-item`.
+  - `frontend/src/app/layout.tsx`: bỏ `next/font/google`, import `fonts.css`.
+  - `frontend/src/app/fonts.css`: **mới** — 21 `@font-face` tự host + các biến `--font-*`.
+  - `frontend/public/fonts/*.woff2`: **mới** — 21 file, 644 KB.
+  - Docs: `component-mapping.md` (viết lại theo cây thật), `visual-comparison.md`,
+    `evidence-register.md`, `accessibility-review.md`, `api-gap-register.md`,
+    `screen-inventory.md`, `decisions.md` (D-12 thay thế), `phase-reports/2026-11-04-lesson-player-and-build.md`,
+    file này.
+- IMPLEMENTED:
+  - **Step model.** Player hiển thị đúng một block tại một thời điểm; counter và progress bar
+    đều lấy từ index của block đang hiển thị.
+  - **Cả sáu renderer đã chạy live:** `teach`, `mc`, `blank`, `order`, `match`, `short`.
+  - **Outline sheet** 380 px: liệt kê sáu block kèm type + prompt công khai, `aria-current="step"`,
+    đóng bằng chọn item / `Escape` / click backdrop.
+  - **Một lần submit ở cuối** — đúng contract: `grade_attempt` chấm cả bài một batch và
+    `public_block()` không bao giờ trả đáp án.
+  - **Font tự host** Manrope 700/800, Inter 400/500/600, JetBrains Mono 400/500, giữ nguyên
+    `unicode-range` chia subset latin / latin-ext / vietnamese.
+- TESTED (chạy trên `next start`, không phải `next dev` — lỗi build chỉ xuất hiện ở webpack path):
+  - `cd frontend && npx tsc --noEmit` → exit 0.
+  - `cd frontend && npm run lint` → exit 0 (`ESLint: No issues found`).
+  - `cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8001 npm run build` → exit 0, 11 route.
+  - `npx next start -p 3001` + `GET /` → HTTP 200.
+  - Font trong bundle đã build: 21 tham chiếu `/fonts/*.woff2` trong `f04118c76dbb7467.css`;
+    `document.fonts` báo các face Manrope/Inter `loaded`; chuỗi 24 px Inter chứa `ặệỡử` đo
+    khác `monospace` ⇒ subset tiếng Việt thực sự được áp dụng.
+  - Lesson ở 1440 / 768 / 390, light: header 872@x285 / 720@x24 / 366@x12; bottom bar
+    97 / 97 / 81 px; `scrollWidth == clientWidth` ở cả ba.
+  - Lesson ở 1440 / 768 / 390, dark: shell `rgb(18,14,32)`, title `rgb(239,233,252)`,
+    primary `rgb(155,123,255)`, bar `rgb(25,20,48)`.
+  - Contrast cả sáu block, light: **0 lỗi WCAG**; thấp nhất 4.69:1 (CTA primary) với ngưỡng 4.5.
+  - Outline sheet: mở (x=1060 w=380), 6 block, nhảy tới bước 4, đóng bằng `Escape` và backdrop.
+  - Submit → trạng thái kết quả: một POST, response đã chấm được render; lượt đúng hết hiện
+    dải `--moss-wash`.
+- Nguyên nhân gốc đã tìm và sửa trong phase này:
+  1. **`npm run build` — null dereference trong `next/font`.** `TypeError: Cannot read
+     properties of null (reading '1')` tại `@next/font/dist/google/loader.js:122:78`
+     (`/\.(woff|woff2|eot|ttf|otf)$/.exec(googleFontFileUrl)[1]`). Đã loại trừ bằng bisection:
+     khả năng truy cập Google Fonts, UA, `fetch` vs `node:https`, các parser CSS, và bản thân
+     loader (chạy standalone cho cả ba family → `['ok','ok','ok']`). Lỗi nằm trong webpack path.
+     Sửa bằng tự host (D-12).
+  2. **`NEXT_PUBLIC_API_URL` được inline lúc build.** Build production đầu tiên mặc định
+     `http://localhost:8000` (`lib/api.ts:1`) nên mọi call API fail và app đẩy về `/login`.
+     Build lại với biến đã export; `localhost:8001` hiện trong chunk phát hành.
+  3. **Rule `button` toàn cục rò vào hai overlay.** `.tutor-backdrop` là `<button>` full
+     viewport nên `border-radius: var(--radius-pill)` biến scrim thành ellipse tím; `.outline-item`
+     thừa hưởng `justify-content: center` nên các index pill lệch cột. Đã reset cả hai;
+     sau fix backdrop `border-radius: 0px`, mọi hàng outline thẳng tại x=1077.
+  4. **Header lesson thiếu một control.** Hàng được thiết kế cho close + progress + counter
+     (816 px), không còn chỗ cho nút outline. Đo theo reference (872 px tại x=285, vượt cột
+     720 khoảng 75 px mỗi bên) và sửa bằng `width: calc(100% + 152px); margin-left: -75px`.
+- NOT TESTED:
+  - Playwright/E2E: vẫn chưa có; mọi luồng ở trên đều lái tay qua CDP.
+  - Screen-reader (NVDA/VoiceOver) — **NOT MEASURED**.
+  - Focus trap / `aria-modal` của tutor sheet — `Escape` chạy, trapping chưa đo. *(Đã đo và
+    đóng ở entry FR-4b bên trên; dòng này giữ nguyên làm bản ghi lịch sử của phase.)*
+  - Ảnh dark cho `/login`, `/new/interview`, `/new/proposal`, `/new/generating`. *(Đã chụp,
+    đóng ở entry FR-4b; dòng này giữ nguyên làm bản ghi lịch sử của phase.)*
+  - Ảnh 390×844 cho `/new/interview` và `/new/proposal`. *(Đã chụp, đóng ở entry FR-4b.)*
+  - Pixel-diff tự động; mọi so sánh là số đo DOM + quan sát bằng mắt.
+  - `pytest` backend — không chạy phiên này (backend không bị sửa).
+- BLOCKED / API GAP: thêm 5 mục, register nay **15** (`api-gap-register.md`):
+  GAP-11 feedback từng câu (bất khả thi nếu không có endpoint chấm từng block), GAP-12
+  thời lượng/type tag/lock state/thứ tự unit của lesson, GAP-13 lưu offline, GAP-14 danh sách
+  từ vựng + summary sheet, GAP-15 cấu trúc 7 bước (SopiSkill có 6 block; counter báo đúng số
+  thật). Không thêm/đổi endpoint nào; không render dữ liệu giả.
+- API contract / security review: `frontend/src/lib/api.ts` không đổi; giữ HttpOnly cookie +
+  CSRF + `credentials: 'include'`; query key session-scoped, `clientAttemptId` và
+  `contentVersion` giữ nguyên; quét `solution`/`answerKey`/`correctOption`/`answer_key` trong
+  DOM trước submit → 0 hit, và outline sheet chỉ đọc `block.type` + prompt công khai nên
+  không thể lộ đáp án. Không gọi API PolySkill; font tự host là stack OFL chung, không phải
+  font của PolySkill.
+- Visual comparison: lesson player `MATCHED (metrics + flow model)` — một block mỗi màn,
+  chrome band cố định, header 872 px tại 1440, 0 overflow ngang tại 768 và 390, token dark
+  khớp bộ đã đo. Các route khác giữ `MATCHED (metrics)` như cũ; `PARTIAL` / `NOT IMPLEMENTED`
+  không đổi.
+- Known limitations:
+  - `NEXT_PUBLIC_API_URL` phải export **trước** `npm run build`; nó bị nướng vào bundle.
+  - Chạy `npm run build` khi `next dev` đang phục vụ cùng thư mục sẽ làm hỏng `.next`.
+  - `--ink-3` cố ý tối hơn reference để qua 4.5:1 (sai lệch có chủ đích, đã ghi).
+  - Tutor sheet 380 px so với ~360–380 px của reference.
+  - Không thể khớp cấu trúc 7 bước khi lesson chỉ có 6 block.
+- Privacy: không có capture mới chứa dữ liệu cá nhân. Phiên verify dùng tài khoản test
+  `rea.verify@test.dev`; không truy cập tài khoản owner. Redaction cũ giữ nguyên.
+- Rollback: thuần Git. Việc tự host font là additive (`fonts.css` + `public/fonts/`); hoàn
+  `layout.tsx` về `next/font/google` khôi phục hành vi cũ (kèm lỗi build). Không migration,
+  không đổi backend, không mutate dữ liệu.
+- PHASE GATE: **PASS** cho hai mục tiêu của phase — player dạng bước đã xác nhận với cả sáu
+  loại block ở ba viewport trong cả hai theme, và build production xanh với font chứng minh
+  được nạp từ bundle phát hành. Toàn dự án vẫn **PARTIAL** vì ba khoảng trống cũ (E2E tự động,
+  screen-reader, focus trap của tutor) — phase này không tuyên bố đóng chúng.
+- NEXT: (1) commit toàn bộ cây (đã tồn tại chưa commit qua hai phase); (2) Playwright E2E cho
+  creation → proposal → generating → lesson → quiz, có assertion; (3) focus trap +
+  `aria-modal` cho tutor sheet, đo bằng `activeElement` sau mỗi `Tab`; (4) ảnh dark cho
+  `/login`, `/new/*` và 390×844 cho `/new/interview`, `/new/proposal`.
+  *(Mục 3 và 4 đã đóng ở entry FR-4b bên trên.)*
+- Báo cáo đầy đủ: `docs/frontend-reference/phase-reports/2026-11-04-lesson-player-and-build.md`.
+
+## 2026-11-03 — FRONTEND FR-1 — Reconstruction from observed PolySkill UI
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78ee8392a354db79805fe73b1477bc0c531`.
+- Git status: bắt đầu sạch; kết thúc có 13 file modified + 4 mục untracked
+  (`docs/SOPISKILL_FRONTEND_REA_MASTER_PLAN.md`, `docs/frontend-reconstruction-log.md`,
+  `docs/frontend-reference/`, `frontend/src/components/`). Không tạo commit nào.
+- Reference observed: S01, S02, S03, S04/S05 (transcript hoàn chỉnh), S06 (terminal), S07,
+  S08, S09, S12–S14 một phần, S15, profile — tại 1440×900, 768×1024, 390×844.
+  Bằng chứng: `docs/frontend-reference/evidence/` (52 file) và `screenshots/` (47 ảnh).
+- NOT OBSERVED: interview đang diễn ra (khóa duy nhất đã trả lời xong), generation đang chạy
+  (chụp sau khi xong), `blank`/`order`/`match`/`short` như UI reference (bài mở chỉ tới blank),
+  proposal editing, source ingest UI, sign-up (reference chỉ có OAuth).
+- Mục tiêu và phạm vi: tái thiết kế frontend SopiSkill theo hành vi/token đo được từ reference,
+  giữ nguyên backend FastAPI, auth/CSRF, session cache và chấm điểm phía server.
+- Nhật ký chi tiết (lệnh, evidence, giới hạn): `docs/frontend-reconstruction-log.md`.
+- Hồ sơ thiết kế: `docs/frontend-reference/` — `README`, `reference-audit`, `screen-inventory`,
+  `evidence-register`, `interaction-map`, `design-tokens`, `component-mapping`,
+  `api-gap-register`, `visual-comparison`, `accessibility-review`, `decisions`,
+  `implementation-checklist`, `phase-reports/`, `evidence/`, `screenshots/`.
+- Scope & decisions:
+  - Khảo sát PolySkill bằng REA 6.7.0 CLI + Chrome CDP 9222 trên profile đã đăng nhập của
+    owner. Không dùng MCP server (chưa đăng ký); không cài engine native nào.
+  - Chỉ điều hướng và đọc màn hình đã có; **không** tạo khóa học, không nộp quiz sai,
+    không đổi dữ liệu tài khoản ⇒ không mutate bản ghi học tập của owner.
+  - Token lấy từ hai nguồn FACT: CSS custom properties đang inject trên trang và bảng
+    hằng số trong bundle `entry-a3803cab…js` (SHA-256 `e7f84aaf…`).
+  - **Không copy** logo/mascot/asset/prompt/string của PolySkill. Palette, thang chữ,
+    khoảng cách, radius, shadow, breakpoint là thuộc tính layout đo được nên được tái tạo;
+    nhận diện (tên, mark, copy) là của SopiSkill.
+  - Không thêm endpoint, không đổi contract backend, không gọi API PolySkill.
+- Files changed:
+  - Modified: `docs/development-progress.md`, `frontend/src/app/{globals.css, layout.tsx,
+    providers.tsx, page.tsx, login/page.tsx}`, `frontend/src/app/new/{page, interview/page,
+    proposal/page, generating/page}.tsx`, `frontend/src/app/course/[courseId]/page.tsx`,
+    `frontend/src/app/lesson/[lessonId]/{page,TutorPanel}.tsx`.
+  - Added: `frontend/src/components/{ui,layout}/`, toàn bộ `docs/frontend-reference/`,
+    `docs/frontend-reconstruction-log.md`.
+- IMPLEMENTED:
+  - `frontend/src/app/globals.css` viết lại: token light/dark + `prefers-color-scheme`,
+    thang chữ 20 biến thể, space 2–64, radius 6/10/16/22/28/999, shadow card/raised/glow/
+    overlay/sheet, motion 120–420 ms, shell/side-nav/tab-bar, card/button/badge/field/
+    progress/skeleton, lesson/quiz/tutor, responsive 1440/768/390.
+  - `frontend/src/app/layout.tsx`: `next/font` Manrope 700/800 + Inter 400/500/600 +
+    JetBrains Mono; gắn `Providers` và `AppFrame`.
+  - `components/ui/`: `Button` (9 variant, 3 size), `Card` (7 variant), `Field`
+    (`TextInput`/`TextArea` có label/hint/error bound), `Badge`, `Progress`
+    (`ProgressBar` + `ProgressRing`), `Skeleton`, `Icon` (bộ icon stroke nội bộ).
+  - `components/layout/`: `AppFrame` (side nav 264 + content 1040 + tab bar mobile +
+    focus mode cho lesson), `TabBar`, `ThemeToggle`, `ThemeProvider` (`sopiskill.theme`).
+  - `app/page.tsx` dashboard mới: lời chào theo giờ, resume hero ember + glow, course grid,
+    empty/loading/error/retry.
+  - `app/login/page.tsx`: panel canh giữa theo token; giữ `?next=` chống open redirect,
+    `useSessionRefresh`, thông báo lỗi `role="alert"`.
+  - `app/new/page.tsx`, `app/new/interview/page.tsx`, `app/new/proposal/page.tsx`,
+    `app/new/generating/page.tsx`: transcript bubble + progress, plan card + stat strip,
+    danh sách 4 giai đoạn có trạng thái; giữ resume sau reload và polling 2 s dừng ở terminal.
+  - `app/course/[courseId]/page.tsx`: hero tiến độ, unit sections, lesson rows 74 px,
+    mastery, sources, learning-path; giữ polling và xử lý 503 khi cờ P5.0 tắt.
+  - `app/lesson/[lessonId]/page.tsx`: focus mode (không nav, cột 720 căn giữa, header 872),
+    block teach/mc/blank/order/match/short, feedback dòng, `ResultSummary`.
+  - `app/lesson/[lessonId]/TutorPanel.tsx`: sheet phải + backdrop, bubble user/assistant,
+    tool badge, citation block, composer 50 px + gửi 48 px, đóng bằng `Escape`.
+- TESTED (local, Windows):
+  - `cd frontend && npx tsc --noEmit` → exit 0.
+  - `cd frontend && npm run lint` → exit 0 (`--max-warnings=0`).
+  - `cd frontend && npm run build` → ✓ Compiled successfully, 11 route.
+  - Backend throwaway: `docker exec … CREATE DATABASE ailp_ui_check` rồi
+    `DATABASE_URL=…ailp_ui_check python -m alembic upgrade head` → `0016_p52_exposure (head)`.
+    **Database chính không bị migrate.**
+  - Seed HTTP thật: register → `POST /v1/courses` → 5× `interview/answer` → `proposal` →
+    `approve` → generation `ready` (4/4 bài) → `GET /lessons/{id}` trả 6 block
+    `teach,mc,blank,order,match,short`.
+  - Đo DOM/computed style local ở 1440/768/390 và so với reference: shell 264/1040, hero
+    1040x155 `#7B5BE6` + glow, quiz option 68 px radius 16, selected `#EBE3FF`/`#7B5BE6`,
+    CTA disabled `#CDC1EF`, lesson column 720 tại x=353, header 872 tại x=277.
+  - Không overflow ngang ở 390 (`scrollWidth == 390`) cho home/course/lesson.
+  - Quét DOM trước khi nộp: `['solution','answerKey','correctOption','answer_key']` → 0 hit.
+  - Đổi tài khoản user1 → user2 trên local build: `leakedUser1=false`, `leakedCourse1=false`,
+    `ownCourse=true`; user2 mở lesson của user1 → server trả thông điệp ownership, UI không
+    lộ nội dung.
+  - A11y lesson: 20 control hiển thị, `unnamed=0`, `tabReachable=20`, focus ring `#7b5be6`;
+    đã bổ sung `id` cho input blank/short. Trước khi sửa, input blank/short chỉ có
+    `aria-label` (vẫn đọc được) nhưng thiếu `id` để `label[for]` — nay đủ cả hai.
+- NOT TESTED:
+  - Playwright/E2E tự động (dự án không có Playwright; không thêm dependency).
+  - `pytest` backend trong phiên này (không sửa backend).
+  - Docker image build frontend/backend với UI mới.
+  - Dark mode local mới chụp dashboard (`local-home-dark-1440x900.png`); các route còn lại
+    chưa chụp ở dark. Token dark là FACT đo từ reference và khớp giá trị local.
+    *(Nay đã phủ dark cho mọi route — xem entry FR-4 và FR-4b; dòng này giữ nguyên làm bản
+    ghi lịch sử của phase.)*
+- BLOCKED / API GAP (không tự phát minh endpoint): 10 mục trong
+  `docs/frontend-reference/api-gap-register.md` — thời lượng bài, unit tone/paywall,
+  milestone/league/weekly chart, quick-answer chips cho interview, `prefetch=1`,
+  `terms[]` glossary, tên tool của tutor, proposal editing, source ingest theo reference,
+  hình thức dark toggle. Không thêm/đổi endpoint nào; không gọi API PolySkill.
+- API contract / security review: `frontend/src/lib/api.ts` không đổi (839 dòng); giữ
+  HttpOnly cookie + CSRF + `credentials: 'include'`; query key vẫn session-scoped; giữ
+  `clientAttemptId` và `contentVersion`; không render đáp án trước khi server trả `results`;
+  ownership do server quyết định. `providers.tsx` chỉ thêm `ThemeProvider` và chuyển
+  `AuthBar` sang `AppFrame` — không mất logic auth nào.
+- Visual comparison: `MATCHED` cho khung shell, token, thang chữ, kích thước card/quiz,
+  cột đọc lesson; `PARTIAL` cho tutor sheet (380 vs ~360) và cấu trúc proposal/interview
+  (khác contract); `NOT OBSERVED` cho 5 màn đã liệt kê; không có `NOT MATCHED` nào được
+  tuyên bố và **không có pixel-diff tự động** — so sánh ở mức số đo DOM.
+- Regression results: 0 hồi quy trong phần đã chạy; `tsc`/`lint`/`build` pass; session
+  isolation, ownership và quét answer-key đều pass trên môi trường throwaway.
+- Known limitations:
+  - `next/font/google` cần mạng ở lần build đầu (CI offline sẽ fail).
+  - Tutor sheet 380 px rộng hơn reference (~360) — chấp nhận, ghi PARTIAL.
+  - Interview/proposal khác cấu trúc reference do contract backend khác — ghi PARTIAL,
+    không tuyên bố pixel-perfect.
+  - `/new`, interview, proposal và generating mới chụp ở 1440; chưa có 390/768.
+- Rollback: hoàn nguyên thuần Git — `git checkout -- frontend/src/app docs/development-progress.md`,
+  `rm -rf frontend/src/components docs/frontend-reference`; không có migration hay thay đổi
+  backend; DB throwaway `ailp_ui_check` drop độc lập.
+- PHASE GATE: **PARTIAL** — code, build, typecheck, lint và các luồng đã lái đều đạt; chưa
+  PASS vì thiếu E2E có assertion và chưa audit contrast/screen-reader.
+- NEXT: (1) thêm Playwright E2E cho login → course → quiz → đổi tài khoản; (2) chạy contrast
+  + screen-reader audit; (3) chụp `/new`, interview, proposal, generating ở 390/768.
+
+### 2026-11-03 — FRONTEND FR-2 — Review pass: PII, hồ sơ thiếu, restyle `/review` + `/sources`
+
+- Repository / branch / HEAD: giữ nguyên `feat/p6.0-ci-pipeline` · `d747e78`; vẫn không commit.
+- Files changed: `docs/development-progress.md`, `docs/frontend-reference/` (thêm `README`,
+  `evidence-register`, `api-gap-register`, `accessibility-review`, `decisions`,
+  `phase-reports/`; sửa `implementation-checklist`, `evidence-register`), `frontend/src/app/review/page.tsx`,
+  `frontend/src/app/sources/page.tsx`, `frontend/src/app/globals.css` (+3 rule).
+- Reference observed: không khảo sát mới; chỉ dùng lại bằng chứng FR-1.
+- NOT OBSERVED: như FR-1.
+- Mục tiêu: đóng các khoảng trống tuân thủ MASTER_PLAN và làm hai route còn lại đồng bộ.
+- IMPLEMENTED:
+  - Redact tên chủ tài khoản khỏi 7 file JSON, 1 file Markdown và 4 ảnh PNG (thay bằng
+    "Người học" / phủ màu nền). JSON được `json.load` lại để xác nhận hợp lệ.
+  - Tạo 5 hồ sơ còn thiếu + `phase-reports/` theo template §11; sửa `development-progress.md`
+    sang đúng 17 mục của template (gồm `PHASE GATE` và `Rollback`).
+  - Restyle `/review` và `/sources` sang `Button`/`ButtonLink`/`Card`/`Badge`/`TextInput`/
+    `Skeleton`; thêm `.source-item`, `.web-ingest`, `.source-create-btn`.
+  - Sửa 2 lỗi thật trên `/sources`: input thiếu `type` nên không khớp selector CSS (viền mặc
+    định trình duyệt), và `flex` đặt trực tiếp lên input trong `.field` (flex column) khiến
+    `flex-basis` thành chiều cao 260 px.
+- TESTED:
+  - `npx tsc --noEmit` → exit 0; `npm run lint` → exit 0; `npm run build` → 0, 11 route.
+  - Đo lại `/sources`: input cao 53 px, radius 16, viền `1px #E6DEFA`, font 17 px.
+  - Chụp 768×1024: course, lesson, quiz, review, sources (và 1440 cho review/sources);
+    `scrollWidth == clientWidth` ở tất cả.
+- NOT TESTED: contrast/screen-reader; E2E tự động; `/new`–generating ở 390/768.
+- BLOCKED / API GAP: không thay đổi so với FR-1 (10 mục).
+- API contract / security review: hai trang được restyle nhưng logic mutation/query/polling/
+  session-scope invalidate giữ nguyên từng dòng; không đổi `lib/api.ts`.
+- Visual comparison: `/review` và `/sources` giờ dùng cùng token/primitive với phần còn lại;
+  `/review` hiển thị trạng thái 503 (tính năng tắt) đúng như backend trả.
+- Regression results: 0; gates xanh sau khi sửa.
+- Known limitations: như FR-1, trừ hai mục đã đóng (restyle 2 route, ảnh 768 cho các màn học).
+- Rollback: như FR-1; riêng redaction không thể hoàn tác từ repo (bản gốc chỉ tồn tại ngoài
+  repo trong phiên) — điều này là chủ đích.
+- PHASE GATE: **PARTIAL** — vẫn thiếu E2E có assertion và audit contrast/screen-reader.
+- NEXT: (1) Playwright E2E; (2) contrast + screen-reader audit; (3) ảnh 390/768 cho
+  `/new` → generating.
+
+### 2026-11-03 — FRONTEND FR-3 — Accessibility closure, contrast audit và ma trận ảnh chụp
+
+- Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Vẫn không tạo
+  commit nào.
+- Git status: 15 file modified + 4 mục untracked (như FR-2, thêm các file được liệt kê dưới).
+- Reference observed: không khảo sát PolySkill mới. Toàn bộ số đo trong phase này là **local
+  build** tại `localhost:3000`, Chrome CDP `127.0.0.1:9222`.
+- NOT OBSERVED: như FR-1/FR-2.
+- Mục tiêu và phạm vi: đóng ba mục NEXT của FR-2 — audit contrast thật, audit accessibility
+  thật, và lấp ma trận ảnh chụp 768/390/dark. Không đổi logic nghiệp vụ, không đổi
+  `lib/api.ts`, không đổi backend.
+- Files changed:
+  - `frontend/src/app/globals.css`: `--ink-3` light `#8a82a6 → #645c81`, dark
+    `#8479a8 → #9f94c5` (cả block `[data-theme="dark"]` và block `prefers-color-scheme`);
+    bỏ `opacity` ở `.hero-card .eyebrow` / `.hero-kicker` / `.hero-step`; `.profile-box h3`
+    → `.profile-box h2`.
+  - `frontend/src/components/layout/AppFrame.tsx`: nhánh `/login` bọc `children` trong
+    `<main>`.
+  - `frontend/src/app/new/page.tsx`: advice card `h3 → h2`.
+  - `frontend/src/app/new/proposal/page.tsx`: plan name `h2 → h1`, `Hồ sơ học viên`
+    `h3 → h2`; trạng thái thiếu `courseId` render `H1` + nút quay lại thay cho `<p>`.
+  - `frontend/src/app/new/interview/page.tsx`: `flow-header-title` và nhãn "đã xong"
+    thành `H1`; trạng thái thiếu `courseId` render `H1` + nút quay lại.
+  - Docs: `docs/frontend-reference/accessibility-review.md` (viết lại theo số đo),
+    `implementation-checklist.md` (thêm phase UI-7 + đính chính),
+    `design-tokens.md` (bảng deviation), `decisions.md` (D-10 đóng lại),
+    `phase-reports/2026-11-03-frontend-reconstruction.md`, `frontend-reconstruction-log.md`,
+    file này.
+- IMPLEMENTED (trạng thái a11y):
+  - Mọi route có đúng một `<main>`; `/login` trước đây nằm ngoài landmark.
+  - Mọi route bắt đầu bằng `H1`, không nhảy cấp; `/new/interview` và `/new/proposal` không
+    còn khả năng render không có heading ở ba trạng thái khác nhau.
+  - Chữ trên `.hero-card` (ember `#7b5be6`) hết bị làm mờ bằng `opacity`.
+- TESTED (local, Windows, đã chạy thật):
+  - `npx tsc --noEmit` → exit 0.
+  - `npm run lint` → exit 0 (`--max-warnings=0`).
+  - `npm run build` → exit 0, ✓ Compiled successfully, 11 route.
+  - **axe-core** (`axe.run(document, {resultTypes:['violations']})`, inject từ
+    `frontend/node_modules/axe-core/axe.min.js`) trên 9 route (`/`, `/login`, `/course/{id}`,
+    `/lesson/{id}`, `/new`, `/new/interview`, `/new/proposal`, `/review`, `/sources`),
+    chạy hai lần: light và `data-theme="dark"` → **0 violations cả 18 lượt**.
+  - Hai lỗi thật do axe phát hiện và đã sửa trước khi xanh: `color-contrast` trên `/`
+    (`.hero-kicker` 4.23:1, `.hero-step` 3.36:1 do `opacity` composite trên `--ember`) và
+    `landmark-one-main` + `region` trên `/login`.
+  - Probe tên control / thứ tự heading trên 7 route: 0 control không tên, 100 %
+    tab-reachable, 0 `tabindex` âm, 0 `input` thiếu `type`, 0 `img` thiếu `alt`. Bảng chi
+    tiết trong `accessibility-review.md`.
+  - Overflow ngang: 9 route × 3 viewport (1440×900, 768×1024, 390×844) = **27 phép đo**,
+    `scrollWidth == clientWidth` ở tất cả → 0/27 lỗi.
+  - Zoom 200 % (viewport CSS 720×450, DPR 2) trên `/`, `/course`, `/lesson`, `/new`,
+    `/review`, `/sources` → `overflowX = 0`, không có phần tử tràn.
+  - Ảnh chụp local: 768×1024 cho **10/10 route**; 390×844 cho 9 route (thiếu
+    interview/proposal); dark 1440×900 cho 6 route (/, /course, /lesson, /new, /review,
+    /sources) cộng 2 ảnh trạng thái quiz (MC + match). Tổng 69 file trong
+    `docs/frontend-reference/screenshots/`.
+- NOT TESTED:
+  - Playwright/E2E tự động — dự án vẫn không có Playwright, không thêm dependency.
+  - `pytest` backend — backend không bị chạm trong phase này.
+  - Screen-reader thật (NVDA/VoiceOver) — **NOT MEASURED**, chỉ có axe.
+  - Focus trap / `aria-modal` của Tutor sheet — chỉ xác nhận `Escape` đóng được; trapping
+    chưa đo.
+  - Dark-mode capture cho `/login`, `/new/interview`, `/new/proposal`, `/new/generating`.
+  - 390×844 cho `/new/interview` và `/new/proposal`.
+- BLOCKED / API GAP: không đổi so với FR-1 (10 mục trong `api-gap-register.md`).
+- API contract / security review: không sửa `frontend/src/lib/api.ts`; không đổi auth, CSRF,
+  session-scoped query key, `clientAttemptId`, `contentVersion` hay thứ tự submit. Các thay
+  đổi chỉ là CSS token và thẻ ngữ nghĩa (`h1`/`h2`/`main`).
+- Visual comparison: `MATCHED` cho shell/token/thang chữ (không đổi từ FR-1); việc tăng độ
+  đậm `--ink-3` làm chữ phụ đậm hơn reference một chút — đánh đổi có chủ đích để đạt 4.5:1,
+  ghi nhận là deviation chứ không phải sai số.
+- Regression results: 0 hồi quy. Ảnh chụp sau khi sửa được kiểm kích thước file để tránh
+  hai ảnh trùng nhau do điều hướng chưa xong — lỗi này đã thực sự xảy ra một lần (một "trang
+  quiz bước 4" thực chất vẫn là trang lesson) và được sửa bằng cách cuộn tới `#block-N`.
+- Known limitations:
+  - `next/font/google` vẫn cần mạng ở lần build đầu.
+  - `--ink-3` light/dark đậm hơn reference (xem Visual comparison).
+  - Script CDP dùng để audit nằm ngoài repo
+    (`%TEMP%/opencode/ps-recon/*.mjs`) — không tái lập được chỉ từ repo; muốn chạy lại phải
+    viết lại. axe-core thì có sẵn trong `node_modules`.
+- Rollback: như FR-2. Riêng `--ink-3`/opacity/heading là thay đổi thuần CSS+JSX nên
+  `git checkout -- frontend/src` hoàn tác được toàn bộ.
+- PHASE GATE: **PARTIAL** — typecheck/lint/build xanh, axe 0 violation trên 9 route × 2 theme,
+  overflow 0/27 và ma trận ảnh chụp đã đủ; chưa PASS vì vẫn không có E2E có assertion, không
+  có screen-reader thật, và focus trap của Tutor sheet chưa được đo.
+- NEXT: (1) Playwright E2E cho luồng tạo 5 câu → proposal → generating → lesson → quiz, có
+  assertion; (2) focus trap + `aria-modal` cho Tutor sheet, đo bằng `activeElement` sau
+  `Tab`; (3) dark capture cho `/login` + `/new/*` và 390 cho interview/proposal.
+
 ## 2026-11-02 — P6.1 CI pipeline, static security & dependency gates
 
 - Base commit: `8afc688` (branch `feat/p5.2-adaptive-readiness`); branch

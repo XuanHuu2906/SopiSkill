@@ -1,0 +1,556 @@
+{
+  "base": "http://127.0.0.1:8001",
+  "email": "audit_g_1793792328@example.test",
+  "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+  "documentId": "doc_63a1bf5a-ee41-4c03-8797-0de7e26a121b",
+  "statuses": [
+    {
+      "n": 0,
+      "http": 200,
+      "status": "queued"
+    },
+    {
+      "n": 1,
+      "http": 200,
+      "status": "ready"
+    }
+  ],
+  "documents": {
+    "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+    "items": [
+      {
+        "id": "doc_63a1bf5a-ee41-4c03-8797-0de7e26a121b",
+        "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+        "status": "ready",
+        "origin": "upload",
+        "originUrl": null,
+        "mime": "application/pdf",
+        "byteSize": 57921,
+        "pageCount": 3,
+        "pipelineVersion": "p4.0-v1",
+        "originalFilename": "rag_synthetic_v1.pdf",
+        "chunkCount": 3,
+        "preview": null,
+        "error": null,
+        "attempts": 1,
+        "rightsConfirmed": false,
+        "textSource": "native",
+        "ocrPages": 0,
+        "ocrEngine": null,
+        "ocrVersion": null,
+        "ingestedAt": "2026-11-04T11:38:49.547074+00:00",
+        "createdAt": "2026-11-04T11:38:49.164193+00:00"
+      }
+    ],
+    "total": 1,
+    "contentIngested": true,
+    "notice": null
+  },
+  "document_detail": {
+    "id": "doc_63a1bf5a-ee41-4c03-8797-0de7e26a121b",
+    "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+    "status": "ready",
+    "origin": "upload",
+    "originUrl": null,
+    "mime": "application/pdf",
+    "byteSize": 57921,
+    "pageCount": 3,
+    "pipelineVersion": "p4.0-v1",
+    "originalFilename": "rag_synthetic_v1.pdf",
+    "chunkCount": 3,
+    "preview": "Trang 1 — Quy trình LUMORA-731 Tài liệu thử nghiệm hư cấu; không phải kiến thức thực tế. LUMORA-731 là một quy trình hư cấu gồm đúng ba giai đoạn, thực hiện theo thứ tự cố định: 1. Giai đoạn 1: Chuẩn ",
+    "error": null,
+    "attempts": 1,
+    "rightsConfirmed": false,
+    "textSource": "native",
+    "ocrPages": 0,
+    "ocrEngine": null,
+    "ocrVersion": null,
+    "ingestedAt": "2026-11-04T11:38:49.547074+00:00",
+    "createdAt": "2026-11-04T11:38:49.164193+00:00"
+  },
+  "search": {
+    "positive": {
+      "detail": {
+        "code": "RAG_NOT_ENABLED",
+        "message": "Tìm kiếm tài liệu (RAG) chưa được bật trên hệ thống này."
+      }
+    },
+    "negative": {
+      "detail": {
+        "code": "RAG_NOT_ENABLED",
+        "message": "Tìm kiếm tài liệu (RAG) chưa được bật trên hệ thống này."
+      }
+    }
+  },
+  "evaluation": {
+    "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+    "criteria": [
+      {
+        "key": "authority",
+        "label": "Authority — tác giả/tổ chức xuất bản",
+        "status": "weak",
+        "score": 0.45,
+        "reasons": [
+          "Loại nguồn 'user_document' (không phải bằng chứng độ tin cậy).",
+          "Có tác giả được ghi tên: SopiSkill audit.",
+          "Chưa cấu hình allowlist ⇒ không thể xác nhận uy tín tổ chức."
+        ]
+      },
+      {
+        "key": "relevance",
+        "label": "Relevance — mức phù hợp chủ đề",
+        "status": "unknown",
+        "score": null,
+        "reasons": [
+          "Chưa có chủ đề khóa học để so khớp."
+        ]
+      },
+      {
+        "key": "freshness",
+        "label": "Freshness — thời điểm xuất bản/cập nhật",
+        "status": "unknown",
+        "score": null,
+        "reasons": [
+          "Không có ngày xuất bản/cập nhật."
+        ]
+      },
+      {
+        "key": "evidence",
+        "label": "Evidence — khả năng kiểm chứng nội dung",
+        "status": "moderate",
+        "score": 0.65,
+        "reasons": [
+          "Có content hash (phát hiện thay đổi nguồn).",
+          "Có nội dung đã ingest để kiểm tra locator.",
+          "Kiểm chứng locator KHÔNG đồng nghĩa nội dung hỗ trợ claim."
+        ]
+      },
+      {
+        "key": "consistency",
+        "label": "Consistency — mâu thuẫn với nguồn khác",
+        "status": "unknown",
+        "score": null,
+        "reasons": [
+          "Chưa so sánh với nguồn khác — không suy đoán."
+        ]
+      },
+      {
+        "key": "licensing",
+        "label": "Licensing — quyền sử dụng/lưu trữ",
+        "status": "moderate",
+        "score": 0.6,
+        "reasons": [
+          "License được khai báo: Self-authored test fixture (chưa xác minh với văn bản license gốc)."
+        ]
+      }
+    ],
+    "knownWeight": 0.55,
+    "totalWeight": 1.0,
+    "weightedScore": 0.55,
+    "verdict": "moderate",
+    "suggestedVerificationStatus": "pending_review",
+    "limitations": [
+      "Điểm phản ánh metadata, KHÔNG phải độ đúng nội dung hay độ tin cậy tuyệt đối.",
+      "Tiêu chí thiếu dữ liệu được đánh dấu unknown và loại khỏi mẫu số.",
+      "Relevance chỉ so khớp keyword bề mặt; consistency mặc định unknown."
+    ],
+    "evaluator": {
+      "kind": "deterministic_metadata",
+      "version": "p3.0-v1",
+      "minCoverage": 0.5,
+      "weights": {
+        "authority": 0.25,
+        "relevance": 0.2,
+        "freshness": 0.15,
+        "evidence": 0.2,
+        "consistency": 0.1,
+        "licensing": 0.1
+      }
+    }
+  },
+  "steps": [
+    {
+      "label": "register",
+      "http": 201,
+      "payload": {
+        "id": "usr_0dd44331-e3e5-429f-90a9-0509f0a616a8",
+        "email": "audit_g_1793792328@example.test",
+        "displayName": "audit_g_1793792328",
+        "xp": 0
+      }
+    },
+    {
+      "label": "ingest_config",
+      "http": 200,
+      "payload": {
+        "ingestEnabled": true,
+        "storageConfigured": true,
+        "maxPdfBytes": 20971520,
+        "maxPdfPages": 300,
+        "pipelineVersion": "p4.0-v1",
+        "embeddingEnabled": true,
+        "embeddingConfigured": true,
+        "embeddingProvider": "hashing",
+        "embeddingModel": "hashing-ngram-v1",
+        "embeddingDimension": 256,
+        "ragEnabled": false,
+        "webEnabled": false,
+        "webAllowedHostCount": 0,
+        "webMaxFetchBytes": 5242880,
+        "webRespectRobots": true,
+        "arxivEnabled": false,
+        "ocrEnabled": false,
+        "ocrConfigured": false,
+        "ocrEngine": "",
+        "ocrVersion": "",
+        "ocrMaxPages": 20,
+        "ocrDpi": 200
+      }
+    },
+    {
+      "label": "create_source",
+      "http": 201,
+      "payload": {
+        "id": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+        "sourceType": "user_document",
+        "title": "Audit synthetic fixture (self-authored)",
+        "canonicalUrl": null,
+        "author": "SopiSkill audit",
+        "publisher": null,
+        "publicationDate": null,
+        "sourceUpdatedAt": null,
+        "retrievedAt": null,
+        "language": "vi",
+        "version": null,
+        "visibility": "private",
+        "licenseInfo": "Self-authored test fixture",
+        "contentHash": null,
+        "verificationStatus": "unverified",
+        "ownerId": "usr_0dd44331-e3e5-429f-90a9-0509f0a616a8",
+        "createdAt": "2026-11-04T11:38:49.139927+00:00"
+      }
+    },
+    {
+      "label": "upload_document",
+      "http": 202,
+      "payload": {
+        "id": "doc_63a1bf5a-ee41-4c03-8797-0de7e26a121b",
+        "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+        "status": "queued",
+        "origin": "upload",
+        "originUrl": null,
+        "mime": "application/pdf",
+        "byteSize": 57921,
+        "pageCount": 3,
+        "pipelineVersion": "p4.0-v1",
+        "originalFilename": "rag_synthetic_v1.pdf",
+        "chunkCount": 0,
+        "preview": null,
+        "error": null,
+        "attempts": 0,
+        "rightsConfirmed": false,
+        "textSource": null,
+        "ocrPages": 0,
+        "ocrEngine": null,
+        "ocrVersion": null,
+        "ingestedAt": null,
+        "createdAt": "2026-11-04T11:38:49.164193+00:00"
+      }
+    },
+    {
+      "label": "documents_final",
+      "http": 200,
+      "payload": {
+        "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+        "items": [
+          {
+            "id": "doc_63a1bf5a-ee41-4c03-8797-0de7e26a121b",
+            "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+            "status": "ready",
+            "origin": "upload",
+            "originUrl": null,
+            "mime": "application/pdf",
+            "byteSize": 57921,
+            "pageCount": 3,
+            "pipelineVersion": "p4.0-v1",
+            "originalFilename": "rag_synthetic_v1.pdf",
+            "chunkCount": 3,
+            "preview": null,
+            "error": null,
+            "attempts": 1,
+            "rightsConfirmed": false,
+            "textSource": "native",
+            "ocrPages": 0,
+            "ocrEngine": null,
+            "ocrVersion": null,
+            "ingestedAt": "2026-11-04T11:38:49.547074+00:00",
+            "createdAt": "2026-11-04T11:38:49.164193+00:00"
+          }
+        ],
+        "total": 1,
+        "contentIngested": true,
+        "notice": null
+      }
+    },
+    {
+      "label": "document_detail",
+      "http": 200,
+      "payload": {
+        "id": "doc_63a1bf5a-ee41-4c03-8797-0de7e26a121b",
+        "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+        "status": "ready",
+        "origin": "upload",
+        "originUrl": null,
+        "mime": "application/pdf",
+        "byteSize": 57921,
+        "pageCount": 3,
+        "pipelineVersion": "p4.0-v1",
+        "originalFilename": "rag_synthetic_v1.pdf",
+        "chunkCount": 3,
+        "preview": "Trang 1 — Quy trình LUMORA-731 Tài liệu thử nghiệm hư cấu; không phải kiến thức thực tế. LUMORA-731 là một quy trình hư cấu gồm đúng ba giai đoạn, thực hiện theo thứ tự cố định: 1. Giai đoạn 1: Chuẩn ",
+        "error": null,
+        "attempts": 1,
+        "rightsConfirmed": false,
+        "textSource": "native",
+        "ocrPages": 0,
+        "ocrEngine": null,
+        "ocrVersion": null,
+        "ingestedAt": "2026-11-04T11:38:49.547074+00:00",
+        "createdAt": "2026-11-04T11:38:49.164193+00:00"
+      }
+    },
+    {
+      "label": "create_course_for_search",
+      "http": 201,
+      "payload": {
+        "id": "crs_6c9a24e9-b55c-426c-b626-745d8d92fcd1",
+        "topic": "Audit ingest grounding probe",
+        "status": "interview",
+        "clientCourseId": "audit-g-1793792330"
+      }
+    },
+    {
+      "label": "link_source_to_course",
+      "http": 201,
+      "payload": {
+        "courseId": "crs_6c9a24e9-b55c-426c-b626-745d8d92fcd1",
+        "source": {
+          "id": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+          "sourceType": "user_document",
+          "title": "Audit synthetic fixture (self-authored)",
+          "canonicalUrl": null,
+          "author": "SopiSkill audit",
+          "publisher": null,
+          "publicationDate": null,
+          "sourceUpdatedAt": null,
+          "retrievedAt": null,
+          "language": "vi",
+          "version": null,
+          "visibility": "private",
+          "licenseInfo": "Self-authored test fixture",
+          "contentHash": "fc333de6f9170d2db542185e6057008b7c3c4c851aa4ceb2f11cf0a452c41ee0",
+          "verificationStatus": "unverified",
+          "ownerId": "usr_0dd44331-e3e5-429f-90a9-0509f0a616a8",
+          "createdAt": "2026-11-04T11:38:49.139927+00:00"
+        },
+        "evaluation": {
+          "verdict": "moderate",
+          "criteria": [
+            {
+              "key": "authority",
+              "label": "Authority — tác giả/tổ chức xuất bản",
+              "score": 0.45,
+              "status": "weak",
+              "reasons": [
+                "Loại nguồn 'user_document' (không phải bằng chứng độ tin cậy).",
+                "Có tác giả được ghi tên: SopiSkill audit.",
+                "Chưa cấu hình allowlist ⇒ không thể xác nhận uy tín tổ chức."
+              ]
+            },
+            {
+              "key": "relevance",
+              "label": "Relevance — mức phù hợp chủ đề",
+              "score": 0.9,
+              "status": "moderate",
+              "reasons": [
+                "1/1 chủ đề khớp keyword trong metadata (chỉ là so khớp bề mặt)."
+              ]
+            },
+            {
+              "key": "freshness",
+              "label": "Freshness — thời điểm xuất bản/cập nhật",
+              "score": null,
+              "status": "unknown",
+              "reasons": [
+                "Không có ngày xuất bản/cập nhật."
+              ]
+            },
+            {
+              "key": "evidence",
+              "label": "Evidence — khả năng kiểm chứng nội dung",
+              "score": 0.65,
+              "status": "moderate",
+              "reasons": [
+                "Có content hash (phát hiện thay đổi nguồn).",
+                "Có nội dung đã ingest để kiểm tra locator.",
+                "Kiểm chứng locator KHÔNG đồng nghĩa nội dung hỗ trợ claim."
+              ]
+            },
+            {
+              "key": "consistency",
+              "label": "Consistency — mâu thuẫn với nguồn khác",
+              "score": null,
+              "status": "unknown",
+              "reasons": [
+                "Chưa so sánh với nguồn khác — không suy đoán."
+              ]
+            },
+            {
+              "key": "licensing",
+              "label": "Licensing — quyền sử dụng/lưu trữ",
+              "score": 0.6,
+              "status": "moderate",
+              "reasons": [
+                "License được khai báo: Self-authored test fixture (chưa xác minh với văn bản license gốc)."
+              ]
+            }
+          ],
+          "evaluator": {
+            "kind": "deterministic_metadata",
+            "version": "p3.0-v1",
+            "weights": {
+              "evidence": 0.2,
+              "authority": 0.25,
+              "freshness": 0.15,
+              "licensing": 0.1,
+              "relevance": 0.2,
+              "consistency": 0.1
+            },
+            "minCoverage": 0.5
+          },
+          "knownWeight": 0.75,
+          "limitations": [
+            "Điểm phản ánh metadata, KHÔNG phải độ đúng nội dung hay độ tin cậy tuyệt đối.",
+            "Tiêu chí thiếu dữ liệu được đánh dấu unknown và loại khỏi mẫu số.",
+            "Relevance chỉ so khớp keyword bề mặt; consistency mặc định unknown."
+          ],
+          "totalWeight": 1.0,
+          "weightedScore": 0.6433,
+          "suggestedVerificationStatus": "pending_review"
+        },
+        "linkedAt": "2026-11-04T11:38:50.433739+00:00"
+      }
+    },
+    {
+      "label": "rag_search",
+      "http": 503,
+      "payload": {
+        "detail": {
+          "code": "RAG_NOT_ENABLED",
+          "message": "Tìm kiếm tài liệu (RAG) chưa được bật trên hệ thống này."
+        }
+      }
+    },
+    {
+      "label": "rag_search_negative",
+      "http": 503,
+      "payload": {
+        "detail": {
+          "code": "RAG_NOT_ENABLED",
+          "message": "Tìm kiếm tài liệu (RAG) chưa được bật trên hệ thống này."
+        }
+      }
+    },
+    {
+      "label": "source_evaluation",
+      "http": 200,
+      "payload": {
+        "sourceId": "src_3c4e83fb-f7c2-46cd-aa43-6b5535120e2f",
+        "criteria": [
+          {
+            "key": "authority",
+            "label": "Authority — tác giả/tổ chức xuất bản",
+            "status": "weak",
+            "score": 0.45,
+            "reasons": [
+              "Loại nguồn 'user_document' (không phải bằng chứng độ tin cậy).",
+              "Có tác giả được ghi tên: SopiSkill audit.",
+              "Chưa cấu hình allowlist ⇒ không thể xác nhận uy tín tổ chức."
+            ]
+          },
+          {
+            "key": "relevance",
+            "label": "Relevance — mức phù hợp chủ đề",
+            "status": "unknown",
+            "score": null,
+            "reasons": [
+              "Chưa có chủ đề khóa học để so khớp."
+            ]
+          },
+          {
+            "key": "freshness",
+            "label": "Freshness — thời điểm xuất bản/cập nhật",
+            "status": "unknown",
+            "score": null,
+            "reasons": [
+              "Không có ngày xuất bản/cập nhật."
+            ]
+          },
+          {
+            "key": "evidence",
+            "label": "Evidence — khả năng kiểm chứng nội dung",
+            "status": "moderate",
+            "score": 0.65,
+            "reasons": [
+              "Có content hash (phát hiện thay đổi nguồn).",
+              "Có nội dung đã ingest để kiểm tra locator.",
+              "Kiểm chứng locator KHÔNG đồng nghĩa nội dung hỗ trợ claim."
+            ]
+          },
+          {
+            "key": "consistency",
+            "label": "Consistency — mâu thuẫn với nguồn khác",
+            "status": "unknown",
+            "score": null,
+            "reasons": [
+              "Chưa so sánh với nguồn khác — không suy đoán."
+            ]
+          },
+          {
+            "key": "licensing",
+            "label": "Licensing — quyền sử dụng/lưu trữ",
+            "status": "moderate",
+            "score": 0.6,
+            "reasons": [
+              "License được khai báo: Self-authored test fixture (chưa xác minh với văn bản license gốc)."
+            ]
+          }
+        ],
+        "knownWeight": 0.55,
+        "totalWeight": 1.0,
+        "weightedScore": 0.55,
+        "verdict": "moderate",
+        "suggestedVerificationStatus": "pending_review",
+        "limitations": [
+          "Điểm phản ánh metadata, KHÔNG phải độ đúng nội dung hay độ tin cậy tuyệt đối.",
+          "Tiêu chí thiếu dữ liệu được đánh dấu unknown và loại khỏi mẫu số.",
+          "Relevance chỉ so khớp keyword bề mặt; consistency mặc định unknown."
+        ],
+        "evaluator": {
+          "kind": "deterministic_metadata",
+          "version": "p3.0-v1",
+          "minCoverage": 0.5,
+          "weights": {
+            "authority": 0.25,
+            "relevance": 0.2,
+            "freshness": 0.15,
+            "evidence": 0.2,
+            "consistency": 0.1,
+            "licensing": 0.1
+          }
+        }
+      }
+    }
+  ]
+}

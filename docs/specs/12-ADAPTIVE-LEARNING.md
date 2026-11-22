@@ -1,60 +1,41 @@
 # 12 — Learner Profile, Skill Mastery, FSRS & Conditional ML
 
-**Trạng thái:** **PROPOSAL / P5**; không được mô tả như adaptive AI đã triển khai.
+**Trạng thái (`2026-11-22`):**
+- **P5.0 (Skill Mastery baseline + FSRS `/review` + Learning Path DAG):** **IMPLEMENTED · REPORTED TESTED** (`0015_p50_learner_profile`, `backend/app/api/v1/learner.py`, `frontend/src/app/review/page.tsx`), hiện **DEFAULT-OFF** (`P50_ENABLED=false`).
+- **P5.1 (BKT):** **IMPLEMENTED · REPORTED TESTED (research-only)** — **DEPLOY BLOCKED** do thiếu dữ liệu thật (`23-P51-BKT.md`).
+- **P5.2 (Adaptive Readiness + Exposure Logging):** **IMPLEMENTED · REPORTED TESTED** — readiness **BLOCKED** cho DKT/bandit; exposure logging (`0016_p52_exposure`) **DEFAULT-OFF** (`P52_EXPOSURE_ENABLED=false`, `24-P52-ADAPTIVE-READINESS.md`).
+
+> **Lợi thế kiến trúc của SopiSkill:** So với phân tích tĩnh PolySkill ngày `2026-11-22` (không có dấu vết BKT/IRT/FSRS phía client; cá nhân hóa nhìn thấy là LLM-driven), SopiSkill đã xây sẵn toàn bộ khung toán học FSRS + Skill DAG + BKT eval + Exposure logging một cách kỷ luật và không phóng đại năng lực ML.
 
 ## 1. Core principle
 
-Cá nhân hóa giai đoạn đầu dựa trên **5 câu interview, mục tiêu và kết quả quiz**; sau khi có đủ lịch sử mới ước lượng mastery và lên kế hoạch ôn tập. Không suy ra năng lực thực chỉ từ tự khai và không hứa có deep learning nếu chỉ dùng rules.
+Cá nhân hóa ban đầu dựa trên **5 câu interview (`LearnerProfile`), prerequisite DAG và kết quả quiz thật**; mastery baseline dùng luật minh bạch (`method="rule_based"`), ôn tập cách quãng dùng FSRS từ review event thật, và tuyệt đối không triển khai BKT/DKT/bandit khi dữ liệu thực chưa vượt qua held-out gate.
 
 ## 2. Requirements
 
-| ID | Description | Gate |
+| ID | Description | Trạng thái (2026-11-22) |
 |---|---|---|
-| ADAPT-001 | Skill IDs ổn định, lesson map vào outcomes + prereqs | Graph validated |
-| ADAPT-002 | Mastery baseline rule-based từ attempts theo skill/version | Reproducible rules |
-| ADAPT-003 | Gợi ý bài tiếp theo khi prerequisites đạt | Explainable recommendation |
-| ADAPT-004 | FSRS dựa trên review events có rating/timezone | Deterministic schedule tests |
-| ADAPT-005 | User biết lý do được gợi ý và có thể skip | UX review |
-| ADAPT-006 | BKT chỉ khi có dataset đủ và vượt baseline (research-only 2026-11-02: hạ tầng đo xong, dữ liệu chưa đủ) | Held-out calibration |
-| ADAPT-007 | LSTM/DKT/contextual bandit chỉ nghiên cứu, rollout có kiểm soát (2026-11-02: readiness BLOCKED; exposure logging có flag TẮT, chưa OPE) | Proof of value + privacy |
+| ADAPT-001 | Skill IDs ổn định (`skills`, `lesson_skills`), map vào outcomes + prerequisites DAG | **IMPLEMENTED · TESTED** (`0015`) |
+| ADAPT-002 | Mastery baseline rule-based (`skill_mastery`) có trọng số recency từ attempts | **IMPLEMENTED · TESTED** (`P50_ENABLED=false`) |
+| ADAPT-003 | Gợi ý bài tiếp theo (`GET /v1/courses/{id}/learning-path`) kèm `blockedBy` & lý do minh bạch | **IMPLEMENTED · TESTED** (`P50_ENABLED=false`) |
+| ADAPT-004 | FSRS (`fsrs` 6.3.x, `review_cards`, `review_events`, `/review`) idempotent theo `clientReviewId` | **IMPLEMENTED · TESTED** (`P50_ENABLED=false`) |
+| ADAPT-005 | UI hiển thị lý do gợi ý, không khóa cứng khóa học và nói rõ trạng thái khi cờ tắt (503) | **IMPLEMENTED** |
+| ADAPT-006 | BKT thuần Python + extractor + held-out eval (Brier/log loss/AUC/ECE/drift) | **IMPLEMENTED (research-only) · DEPLOY BLOCKED** (`0` chuỗi ≥5 event trên DB thật) |
+| ADAPT-007 | DKT/LSTM/contextual bandit readiness + HMAC exposure logging (`recommendation_events`) | **READINESS BLOCKED · EXPOSURE IMPLEMENTED (flag OFF, `opeSupported=false`)** |
 
-## 3. Rule-based baseline (P5.0 proposed)
+## 3. P5.0 Rule-based Mastery & FSRS (IMPLEMENTED — `P50_ENABLED=false`)
 
-- Mỗi skill có stable ID, prerequisites DAG không chu trình, lesson liên kết skills/outcomes.
-- Estimate ban đầu từ các attempt đúng/sai và contentVersion hiện hành, có min-evidence threshold; chưa đủ dữ liệu → `unknown`, không gán giả mastery cao.
-- Next lesson: thuộc course user, chưa hoàn thành, prerequisites đạt theo policy; sort theo curriculum order, có giải thích “đã hoàn thành X, cần học Y trước Z”.
-- User có thể học không theo gợi ý nếu product policy cho phép; không tự khóa course do model dự đoán.
+- **Endpoints:** `GET /v1/courses/{id}/mastery`, `GET /v1/courses/{id}/learning-path`, `GET /v1/reviews/due`, `POST /v1/reviews/{cardId}/grade`.
+- **Tham số cấu hình (`config.py`):** `MASTERY_PASS_THRESHOLD=0.7`, `MASTERY_RECENCY_HALF_LIFE_DAYS=30`, `FSRS_DESIRED_RETENTION=0.9`, `P50_BACKFILL_ENABLED=false`.
+- `stability`/`difficulty` nội bộ của FSRS cố tình **không** trả ra API để tránh gây hiểu nhầm là điểm số người học; không tự tạo synthetic review events từ quiz lịch sử.
 
-## 4. Spaced repetition FSRS (P5.0 proposed)
+## 4. P5.1 BKT & P5.2 Readiness / Exposure (IMPLEMENTED — RESEARCH / BLOCKED)
 
-- Chỉ bật khi có user review event (`skillId`, `lessonId?`, `rating`, `reviewedAt`, `schedulerVersion`, `nextDueAt`).
-- Tính thời gian theo timezone được chọn; lưu UTC, schedule version để tái tạo; tính lại lịch khi content/skill version thay đổi có chính sách rõ.
-- Không tự suy tạo review rating từ quiz cũ nếu không được product duyệt.
+- **BKT (`backend/app/services/bkt.py`, `backend/evals/bkt_eval.py`):** 4 tham số, mục tiêu mềm `score_correct/score_total`, kiểm leakage & chronological drift; runtime vẫn trả `method="rule_based"`.
+- **Readiness (`backend/evals/p52_readiness.py`):** đo ngưỡng dữ liệu thực (`usersGe10 ≥ 500`, `sequencesGe5 ≥ 200`, `exposures ≥ 5000`); hiện tại `0 / 0 / 0` ⇒ **BLOCKED**.
+- **Exposure logging (`POST /v1/courses/{id}/recommendation-events`):** chỉ chấp nhận `recommendationToken` ký HMAC do server phát (`P52_TOKEN_TTL_SECONDS=900`, `extra="forbid"`, version-scoped dedupe). Do policy deterministic nên `propensity=1.0` và `opeSupported=false`.
 
-## 5. Statistical models (conditional)
+## 5. Điều kiện kích hoạt tiếp theo
 
-- **BKT:** yêu cầu chuỗi event user-skill-timestamp-correct đủ dài, train/test split theo user hoặc thời gian tránh leakage, calibration (Brier/log loss), fairness review, shadow mode.
-  - **Trạng thái 2026-11-02 — RESEARCH-ONLY:** đã cài `backend/app/services/bkt.py`
-    (thuần Python, 4 tham số, mục tiêu mềm `score_correct/score_total`), extractor
-    read-only `backend/evals/mastery_dataset.py`, harness `backend/evals/bkt_eval.py`
-    (Brier/log loss/AUC/ECE/drift/leakage, baseline as-of). **Không** thay mastery
-    runtime: API vẫn trả `method="rule_based"`.
-  - Dữ liệu thật 2026-11-02: 127 attempt nhưng chỉ 37 đúng `contentVersion`, 21 user,
-    **0 chuỗi ≥5 event** ⇒ kết quả `INSUFFICIENT_DATA`; deploy **BLOCKED**.
-    Chi tiết: `docs/specs/23-P51-BKT.md`.
-- **DKT/LSTM, bandit:** chỉ khi baseline/BKT không đủ và dataset đủ; reward/bias rõ, offline evaluation và rollback trước online experimentation.
-  - **Trạng thái 2026-11-02 — CHƯA HUẤN LUYỆN:** `backend/evals/p52_readiness.py` đo
-    và kết luận **BLOCKED** cho cả hai (`usersGe10=0 < 500`, `sequencesGe5=0 < 200`,
-    `exposures=0 < 5000`).
-  - **Exposure logging (flag TẮT):** bảng `recommendation_events` + `POST
-    /v1/courses/{id}/recommendation-events` với token HMAC server-phát. Do policy
-    deterministic nên `propensity=1.0` ⇒ **`opeSupported=false`**; đây là thu thập dữ
-    liệu, KHÔNG phải bandit đã chạy. Chi tiết: `docs/specs/24-P52-ADAPTIVE-READINESS.md`.
-- Không tự đưa K-Means, XGBoost, full RL vào kiến trúc chỉ vì phổ biến.
-
-## 6. Acceptance
-
-- Rule-based recommendation deterministic, cùng history cho cùng suggestion; thiếu dữ liệu có lý do unknown.
-- ContentVersion update không làm lộ attempt user khác; cross-owner course/skill history chặn.
-- FSRS timezone boundary, missed reviews, duplicate events, reset schedule tested.
-- Chỉ chuyển phase ML khi báo cáo eval held-out chứng minh hơn baseline; không có data → NOT STARTED.
+- Bật `P50_ENABLED=true` (và tùy chọn `P52_EXPOSURE_ENABLED=true`) trên môi trường dev/staging sau quyết định của owner để bắt đầu thu thập dữ liệu học & review thật.
+- Chỉ mở lại gate BKT/DKT khi dữ liệu thực vượt ngưỡng readiness và chứng minh vượt baseline trên held-out split.

@@ -1,102 +1,53 @@
-# 16 — Roadmap & OpenCode Execution Specification
+# 16 — Roadmap & Execution Specification
 
-**Trạng thái:** DRAFT handoff, ưu tiên cập nhật theo progress 2026-10-30; không chạy code/migration/real API trong lần soạn specs.
+**Trạng thái (`2026-11-22`):** Đã cập nhật toàn diện sau khi hoàn tất mã nguồn `P0.5` → `P6.1` (migrations `0001`–`0016`), đợt tái thiết kế UI `FR-1..FR-5`, các gate `TUTOR-MOCK-01`, `P1-QUIZ-BLANK`, `RELIABILITY-CELERY-01/02`, `P1-PEDAGOGY` và đợt đối chiếu tĩnh PolySkill bằng Craft Anything `0.6.1`.
 
-## 1. Phase roadmap theo trạng thái tài liệu
+## 1. Bảng tiến độ các Phase (đến 2026-11-22)
 
-| Phase | Mục tiêu | Hiện trạng theo `development-progress.md` | Gate |
+| Phase | Mục tiêu | Trạng thái thực tế | Ghi chú / Gate còn mở |
 |---|---|---|---|
-| P0–P1 | Foundation + core course/quiz/auth | REPORTED IMPLEMENTED/TESTED | Regression |
-| G0 | Audit + Alembic consistency | REPORTED DONE | Verify HEAD |
-| P1.1 | Quiz/XP/progress/version | REPORTED DONE | Regression |
-| P1.2 | Celery reliability/outbox | REPORTED DONE | Regression |
-| P1.3 | Frontend/session isolation | REPORTED DONE | Regression |
-| P2.0 | Real LLM adapter infrastructure | REPORTED PARTIAL: mocked tested + 3 real smoke; CI real blocked | Regression / cost permission |
-| **P2.1** | **Course Generator thật + learner profile + DAG + hierarchical lessons** | **NEXT; chưa xác nhận có code** | Schema/DAG/Mock E2E/authorized real subset |
-| P2.2 | AI quality eval, costs & quality gates | TODO | Eval 10 topics, measured metrics |
-| P3.0 | Tutor thread/context/SSE | **DONE** (mock streaming; real provider NOT TESTED) | Session/cross-owner/stream E2E đã chạy |
-| P3.1 | Tools/limit/cancel/replay policy | TODO | Allowlist, quota, safety |
-| P4.0 | PDF text ingest, provenance | TODO | Owned PDF source correctly parsed |
-| P4.1 | Hybrid RAG/citation validation | TODO | 30 eval queries, valid citations |
-| P4.2/P4.3 | URL/arXiv, OCR | OPTIONAL | Rights/security/corpus |
-| P5 | Personalization, FSRS, BKT conditional | LATER | Evidence beyond rules |
-| P6 | Production readiness, CI/backup/security | TODO | Explicit approval |
-| P7 | Billing/gamification | FUTURE | Separate PRD/budget approval |
+| P0.5–P1.3 | Auth cookie/CSRF, core course→quiz, Celery outbox, session cache isolation | **IMPLEMENTED · REPORTED TESTED** | Regression xanh |
+| P2.0–P2.2 | OpenAI-compatible adapter, learner profile, DAG, usage/cost budget, eval 12 topics | **IMPLEMENTED · REPORTED TESTED** | Real eval `3.17/4` lộ 3 lỗi P1 còn mở (`TRUNC`, `LANG`, `LEVEL-FIT`) |
+| P2.SR | Source Research Agent offline (`0006`) | **IMPLEMENTED · DEFAULT-OFF** | `SOURCE_RESEARCH_ENABLED=false` |
+| P3.0–P3.1 | AI Tutor SSE, stop, quota, 3 read-only tools + audit (`0008`–`0010`) | **IMPLEMENTED · DEFAULT-OFF** | `TUTOR-MOCK-01` PASS mock (`71/71`); real streaming **NOT TESTED** |
+| P4.0–P4.3 | PDF/MinIO ingest, Hybrid RAG, Web/arXiv SSRF-safe, OCR `rapidocr`/`vietocr` (`0011`–`0014`) | **IMPLEMENTED · ĐA SỐ DEFAULT-OFF** | `SOURCE_INGEST_ENABLED=true`; `RAG`/`WEB`/`OCR` OFF; embedding là `hashing` |
+| P5.0–P5.2 | Skill Mastery, FSRS `/review`, BKT research, Readiness + HMAC exposure (`0015`–`0016`) | **IMPLEMENTED · DEFAULT-OFF / BLOCKED** | `P50_ENABLED=false`; BKT & DKT/bandit deploy **BLOCKED** (thiếu dữ liệu) |
+| P6.1 | CI Pipeline 5 jobs (tests, migrations, Postgres races, frontend, Bandit/audit) + HMAC shuffle | **IMPLEMENTED · REPORTED TESTED** | Actions run `41583115455`: 5/5 xanh |
+| FR-1..FR-5 | Redesign UI tokens light/dark, self-hosted fonts, step player, modal contract, docked tutor | **IMPLEMENTED (uncommitted)** | Verified CDP thủ công; thiếu Playwright E2E & screen-reader test |
+| Stability & P1 fixes | `TUTOR-MOCK-01`, `P1-QUIZ-BLANK`, `RELIABILITY-CELERY-01/02`, `P1-PEDAGOGY` | **IMPLEMENTED · REPORTED TESTED** | `RELIABILITY-CELERY-02` deployed; `P1-PEDAGOGY` **chưa deploy container** & chưa commit |
+| **Next — Wave 1** | **Repo hygiene + Deploy sync + Playwright E2E** | **NEXT (ưu tiên ngay)** | Commit sạch dirty tree, rebuild container kèm `P1-PEDAGOGY`, thêm Playwright smoke E2E |
+| **Next — Wave 2** | **Core AI Quality (`P1-CONTENT-TRUNC`, `P1-LANG`, `P1-LEVEL-FIT`)** | **TODO** | Sửa triệt để 3 lỗi eval thật rồi chạy lại 12-topic eval (cần duyệt budget) |
+| **Next — Wave 3** | **Feature Activation & Production Hardening (`P6.2+`)** | **TODO** | Chốt bật `TUTOR_ENABLED`, `P50_ENABLED`, semantic embedding + `RAG_ENABLED`; Redis rate-limit, staging TLS/CSP, backup-restore drill |
+| **Next — Wave 4** | **High-value Product Gaps vs. PolySkill (`GAP-01..GAP-23`)** | **PROPOSAL / BACKLOG** | Ưu tiên: Glossary + `termKey`, Proposal revision, per-block / AI `short` grading, Figures/MathJax, `source.brief`, `/v1/me/stats` & `PATCH /v1/me` |
+| Deferred (`P7+`) | Narrated Reel Engine, 5 Practice Formats (`SpeedRound`), Offline SQLite Outbox, Leagues, Polar+SePay Billing, Push | **DEFERRED** | Chỉ mở sau khi có PRD & quyết định kinh doanh riêng |
 
-## 2. Immediate implementation slice — P2.1
+## 2. Immediate next slices (theo thứ tự rủi ro → giá trị)
 
-**Context:** Existing `backend/`, `frontend/`, PostgreSQL 16, Redis/Celery; real-compatible adapter P2.0 + mock. Latest reported revision `0004_p12_job_reliability`.  
-**In scope:** profile normalization from 5 answers, versioned curriculum DAG/outcomes, hierarchical generation consistent with approved proposal, validation, metadata and test coverage.  
-**Out of scope:** Tutor/RAG, paid AI calls without approval, rewriting auth/jobs, new billing, modifying existing deployed migrations.
+### Slice A — Housekeeping, Deploy Sync & Browser E2E
+- Rà soát và tách commit sạch cho working tree hiện tại trên `feat/p6.0-ci-pipeline` (frontend FR-1..FR-5, `P1-QUIZ-BLANK`, `RELIABILITY-CELERY-01/02`, `P1-PEDAGOGY`, docs/specs/audits).
+- Rebuild container `backend`/`worker`/`beat` để đưa `P1-PEDAGOGY` vào bản chạy thực và xác minh `backend/e2e_acceptance.py` trên stack đồng nhất.
+- Bổ sung **Playwright E2E** tối thiểu (register/login → course → interview → proposal → generating → step lesson → quiz → docked/overlay tutor → đổi tài khoản) để đóng lỗ hổng `NOT TESTED browser UI`.
 
-### File/module targets (verify existence/paths first)
+### Slice B — Đóng 3 lỗi chất lượng LLM thật (P1 Quality Gate)
+1. **`P1-CONTENT-TRUNC`:** phát hiện rõ `finish_reason == "length"`, ngăn lưu bài học bị cắt cụt, điều chỉnh budget/retry có kiểm soát.
+2. **`P1-LANG`:** truyền tham số ngôn ngữ (`vi` mặc định, hỗ trợ `en` và từ chối/fallback rõ locale chưa hỗ trợ) xuyên suốt course → profile → proposal → lesson/quiz → tutor (expand-only migration nếu lưu cột `language` trên `courses`/`users`).
+3. **`P1-LEVEL-FIT`:** siết hướng dẫn và validator mức độ trong `pedagogy.py` + prompts để tránh tự ép trình độ sang `advanced` trái với interview.
+- **Gate:** Chạy lại real-provider eval (sau khi owner duyệt ngân sách) với mục tiêu `language_quality` & `level_fit` ≥ `3.0/4` và `0` lỗi truncation.
 
-- `backend/app/providers/` (base/mock/openai-compatible/validation).
-- `backend/app/services/course_service.py`, `job_service.py`, new `curriculum_service.py` only if necessary.
-- `backend/app/worker/generation.py`, `backend/app/schemas/schemas.py`, models/migration if schema added.
-- `frontend/src/app/new/interview`, `new/proposal`, `new/generating`; `frontend/src/lib/api.ts`.
-- `backend/tests/`, `backend/evals/` (new), `backend/e2e_acceptance.py`, docs.
+### Slice C — Kích hoạt có kiểm soát các phân hệ đã code & P6.2 Hardening
+- Chuyển rate-limiter từ in-memory sang **Redis distributed** (`M1-SEC-LIMITER`).
+- Bật & kiểm chứng live có kiểm soát: `TUTOR_ENABLED=true` (gồm real-provider streaming smoke), `P50_ENABLED=true`, và benchmark embedding thật trước khi bật `RAG_ENABLED=true`.
+- Hoàn thiện backup-restore drill, staging TLS/CSP và chính sách retention/deletion (`DELETE /v1/me`).
 
-### Ordered tasks
+### Slice D — Chọn lọc Product Gaps giá trị cao (additive, giữ server-authoritative)
+Theo thứ tự tác động người học cao nhất từ `docs/frontend-reference/api-gap-register.md`:
+1. **Glossary + inline `termKey`** (`GAP-06`, `GAP-14`) & **Proposal revision** (`GAP-08`: `PlanChat` + `revise_proposal` hoặc `PATCH /proposal` versioned).
+2. **Per-block grading + AI Short-Answer Rubric Grader** (`GAP-11`, giữ đáp án ở server).
+3. **Figures/Tables/MathJax** (`GAP-18`) + **Structured `source.brief`** (`P2-BRIEF`).
+4. **User stats & settings** (`GET /v1/me/stats`, `PATCH /v1/me` tách `appLanguage`/`lessonLanguage`, `GAP-03`, `GAP-21`).
 
-1. **Audit:** HEAD/branch/status, AGENTS.md, schema/routes/providers, existing tests; identify P2.1 changes already present, record no-op/reuse.
-2. **Design:** freeze existing contract; propose optional profile/DAG schema with backward compatibility and migration impact; no code until clear acceptance.
-3. **Test-first:** learner profile parsing, DAG cycle detection, schema invalid, lesson alignment, negative cases, old proposal compatibility.
-4. **Implement smallest slice:** profile normalization + graph validator + versioned mock proposal; maintain `LLM_PROVIDER=mock` for tests.
-5. **Integrate generator:** pinned proposal version, per-unit/lesson plan, no worker duplicate, answer key privacy, bounded costs/retries.
-6. **UI:** show valid graph/outcomes if data exists, fallback for legacy proposal; no fake proposal editing.
-7. **Verify:** pytest, frontend build, PostgreSQL race tests, Docker E2E, migration on temp DB, review secrets/data.
-8. **Report/checkpoint:** docs/development-progress.md with exact commands/results, files, Git SHA, risks, gate. Real provider subset ONLY after explicit budget/data approval.
+## 3. Phase exit gate protocol
 
-### P2.1 acceptance criteria
-
-- C1: 5 answers -> structured profile with unknown fields not fabricated.
-- C2: `curriculumGraph` DAG acyclic, every edge references known nodes, lesson mappings valid.
-- C3: Proposal version pinning means approving vN cannot silently generate vN+1.
-- C4: Generated lesson public API contains no grading keys; quiz progress unaffected.
-- C5: Duplicates / crash / timeout do not multiply persisted lessons or corrupt attempts.
-- C6: Offline tests/Mock E2E + frontend build pass; real provider evidence separately labeled, or BLOCKED.
-
-## 3. One-shot OpenCode kickoff prompt
-
-> Nội dung dưới đây có thể copy nguyên văn cho OpenCode, sau khi đặt folder `specs/` vào repository và kiểm tra `AGENTS.md` hiện có.
-
-```text
-Bạn đang làm việc trong repo SopiSkill trên Windows.
-Đọc AGENTS.md, specs/README.md, specs/00-STATUS-AND-SOURCES.md,
-specs/03-SYSTEM-ARCHITECTURE.md, specs/04-DATA-MODEL.md,
-specs/05-API-CONTRACTS.md, specs/06-AUTH-AND-SECURITY.md,
-specs/07-COURSE-INTERVIEW-PROPOSAL.md,
-specs/08-GENERATION-AND-LLM.md,
-specs/09-LESSON-QUIZ-PROGRESS.md,
-specs/15-TEST-PLAN.md, specs/16-ROADMAP-AND-OPENCODE.md,
-specs/19-PEDAGOGY-AND-EVALUATION.md và docs/development-progress.md.
-
-BẮT BUỘC audit git status, branch, HEAD, file tree, code/routes/tests thực tế.
-Đối chiếu trạng thái mới nhất thay vì làm lại P0/P1/P2.0 nếu code đã có.
-Chỉ bắt đầu phase P2.1, chia thành các task nhỏ theo specs/16 mục 2.
-
-Trước sửa: báo context, scope, module/files, thứ tự, API/schema impact,
-acceptance tests, rủi ro, rollback, thứ không làm. Giữ stack/contract hiện có.
-Không tự viết lại migration 0001–0004, không xóa volume/DB thật.
-Không dùng key từ OpenCode, không gửi dữ liệu hoặc trả phí API thật nếu
-chưa có duyệt về provider/model/budget/dataset; mặc định MOCK.
-Không làm Tutor/RAG/billing trong P2.1.
-
-Thực hiện test-first, implement tối thiểu, validate auth/owner/CSRF,
-private answer keys, idempotency/concurrency, JSON schema, DAG,
-provider timeout/cost guards, redacted logs. Chạy pytest, frontend build,
-PostgreSQL race tests, Docker E2E khi môi trường cho phép.
-
-Sau mỗi checkpoint cập nhật docs/development-progress.md, ghi chính xác
-IMPLEMENTED / TESTED / NOT TESTED / BLOCKED, lệnh/output/exit code,
-file/migration/Git SHA, known issues và phase gate. Không báo PASS nếu chưa
-thực chạy, không gọi mock là AI thật. Dừng ở quyết định rủi ro hoặc chi phí.
-```
-
-## 4. Phase exit gate protocol
-
-- Mỗi phase: audit → plan → contracts → failing tests → code → security → verify → review → report.
-- `GATE-PASS` khi toàn bộ criteria bắt buộc có evidence; `PARTIAL` khi còn test/permission; `BLOCKED` khi không có environment/decision.
-- Không tự push `main`, deploy, destructive migrations, gửi private PDF ra provider hoặc bật subscription.
-- Nếu OpenCode báo kết quả, reviewer phải đọc diff/commands/logs và cập nhật spec theo thực tế.
+- Quy trình chuẩn mọi slice: `audit → plan → contracts → failing tests → code → security → verify → review → report`.
+- `GATE-PASS` khi toàn bộ criteria bắt buộc có lệnh chạy & bằng chứng; `PARTIAL` khi còn hạng mục chưa chạy; `BLOCKED` khi thiếu môi trường/phê duyệt ngân sách.
+- Tuyệt đối không tự push `main`, deploy production, chạy migration phá dữ liệu, gửi tài liệu riêng tư ra provider ngoài hay bật billing khi chưa có phê duyệt tường minh.

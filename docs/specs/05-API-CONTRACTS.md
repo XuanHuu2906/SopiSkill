@@ -1,124 +1,132 @@
 # 05 — HTTP API & Contract Policy
 
-**Quy tắc:** Các route dưới mục 1 được **ghi nhận từ tài liệu dự án**, không phải OpenAPI đã kiểm tra ở HEAD. Ví dụ payload mục 2–4 là **PROPOSAL** nếu chưa có chứng cứ source; agent phải so với Pydantic/OpenAPI hiện tại trước khi tạo hoặc sửa.
+**Trạng thái (`2026-11-22`):** Danh mục **45 endpoints** ở mục 1 được đối chiếu trực tiếp từ `backend/app/main.py` và `backend/app/api/v1/{auth,routes,tutor,sources,research,learner}.py`. Các mục gắn nhãn `PROPOSAL` (mục 8) chưa có code và không phá backward compatibility hiện hành.
 
-## 1. Endpoint inventory đã được ghi nhận
+## 1. Danh mục đầy đủ 45 endpoints thực tế
 
-| Method & path | Ý nghĩa | Auth / trạng thái |
+### 1.1 Health & Auth (5 endpoints — `main.py`, `api/v1/auth.py`)
+
+| Method & path | Status | Auth / CSRF / Ghi chú |
 |---|---|---|
-| `POST /v1/auth/register` | Đăng ký | public; rate limit, CSRF policy xem code |
-| `POST /v1/auth/login` | Đăng nhập, phát HttpOnly JWT cookie | public; rate limit |
-| `POST /v1/auth/logout` | Đăng xuất | session/cookie, CSRF |
-| `GET /v1/me` | Profile identity + XP | authenticated |
-| `GET /v1/courses?limit=&offset=` | Danh sách course của user | authenticated, limit 1..50; offset ≥0 |
-| `POST /v1/courses` | Tạo course từ topic (idempotent) | authenticated; CSRF |
-| `POST /v1/courses/{courseId}/interview/answer` | Lưu một câu trả lời | owner, CSRF |
-| `GET /v1/courses/{courseId}/proposal` | Đề cương mới nhất | owner |
-| `POST /v1/courses/{courseId}/approve` | Approve proposal + tạo generation job | owner, CSRF |
-| `GET /v1/courses/{courseId}/generation` | Status/stage/job progress | owner |
-| `POST /v1/courses/{courseId}/retry` | Retry tạo job mới | owner, CSRF |
-| `GET /v1/courses/{courseId}` | Chi tiết course/units/lessons/progress | owner |
-| `GET /v1/lessons/{lessonId}` | Public lesson blocks | owner |
-| `POST /v1/lessons/{lessonId}/attempts` | Chấm và ghi attempt | owner, CSRF |
-| `GET /health` | Liveness | local health |
+| `GET /health` | `200` | Public; trả `{status, env, provider}` |
+| `POST /v1/auth/register` | `201` | Public; rate limit 10/phút; cấp HttpOnly JWT cookie + CSRF cookie |
+| `POST /v1/auth/login` | `200` | Public; rate limit 10/phút; Argon2id verify; cấp JWT + CSRF cookie |
+| `POST /v1/auth/logout` | `204` | CSRF; rate limit 30/phút; xóa JWT + CSRF cookie |
+| `GET /v1/auth/me` | `200` | Authenticated; trả `{id, email, displayName, xp}` *(lưu ý: path thực tế là `/v1/auth/me`, không phải `/v1/me`)* |
 
-`GET /v1/courses` không nhận `userId` từ client để tăng quyền. Tất cả GET details phải dùng identity từ session và kiểm tra owner; cross-owner trả 404 theo hành vi đã được báo cáo.
+### 1.2 Courses, Interview, Proposal, Generation, Lessons & Attempts (11 endpoints — `api/v1/routes.py`)
 
-## 2. Core request/response shapes cần xác nhận theo code
+| Method & path | Status | Auth / CSRF / Ghi chú |
+|---|---|---|
+| `POST /v1/courses` | `201` | Authenticated + CSRF; `{topic: 1..200, clientCourseId: 8..64}` (idempotent) |
+| `GET /v1/courses` | `200` | Authenticated; `?limit=&offset=`, owner-scoped |
+| `GET /v1/courses/{course_id}` | `200` | Owner (404 cross-user); trả `CourseDetailOut` (`units`, `lessons`, `progress`) |
+| `GET /v1/courses/{course_id}/interview` | `200` | Owner; trả `{questions[5], completedCount}` |
+| `POST /v1/courses/{course_id}/interview/answer` | `200` | Owner + CSRF; `{position: 0..4, answer: 1..2000}` |
+| `GET /v1/courses/{course_id}/proposal` | `200` | Owner; trả `{version, approved, payload}` (`learnerProfile`, `skills`, `prerequisites`, `units`, `outcomes`) |
+| `POST /v1/courses/{course_id}/approve` | `202` | Owner + CSRF; pin version, tạo active job `queued` |
+| `POST /v1/courses/{course_id}/retry` | `202` | Owner + CSRF; tạo job mới khi course `failed` |
+| `GET /v1/courses/{course_id}/generation` | `200` | Owner; trả `GenerationOut` (`status`, `stage`, `lessonsDone`, `lessonsTotal`, `attempts`, `dispatched`, `llmCalls`, `promptTokens`, `completionTokens`, `costEstimateUsd`, `costKnown`) |
+| `GET /v1/lessons/{lesson_id}` | `200` | Owner; `public_block()` không bao giờ lộ answer key; trả `grounding`, `citations[]`, `evidenceNotice` |
+| `POST /v1/lessons/{lesson_id}/attempts` | `201` | Owner + CSRF; `{clientAttemptId, contentVersion, durationMs?, answers: [{index, answer}]}` (idempotent; `409` nếu stale `contentVersion`; `reviewCardCreated` khi P5.0 bật) |
 
-### Create course (illustrative, theo architecture)
+### 1.3 AI Tutor — SSE & Controls (5 endpoints — `api/v1/tutor.py`, flag `TUTOR_ENABLED=false`)
 
+| Method & path | Status | Auth / CSRF / Ghi chú |
+|---|---|---|
+| `POST /v1/courses/{course_id}/tutor/messages` | `200` SSE | Owner + CSRF + rate limit; `{clientMessageId, threadId?, text, contextRef:{lessonId, blockIndex}}` (`extra=forbid`); `text/event-stream` (`delta`, `tool`, `done`, `error`, `cancelled`, `heartbeat`) |
+| `POST /v1/courses/{course_id}/tutor/messages/{message_id}/stop` | `200` | Owner + CSRF; best-effort cancel (`providerStopGuaranteed: false`), 404 `TUTOR_STOP_NOT_FOUND` |
+| `GET /v1/courses/{course_id}/tutor/usage` | `200` | Owner; không tiêu quota; trả `{courseId, windowSeconds, used, limits, remaining, runningStreams, tokensKnown}` |
+| `GET /v1/courses/{course_id}/tutor/threads` | `200` | Owner; `?limit=&offset=` |
+| `GET /v1/courses/{course_id}/tutor/threads/{thread_id}` | `200` | Owner; lịch sử + `replaySupported: false` |
+
+### 1.4 Sources, Ingestion, Hybrid RAG & OCR (15 endpoints — `api/v1/sources.py`)
+
+| Method & path | Status | Auth / CSRF / Ghi chú |
+|---|---|---|
+| `POST /v1/sources` | `201` | Authenticated + CSRF; đăng ký metadata nguồn |
+| `GET /v1/sources` | `200` | Authenticated; danh sách nguồn thuộc user/public |
+| `GET /v1/sources/discover` | `200` | Authenticated; discovery offline (`curated`/`mock`) |
+| `GET /v1/sources/ingest-config` | `200` | Authenticated; cấu hình công khai cho UI (ingest, embedding, RAG, web, OCR — không lộ secrets) |
+| `GET /v1/sources/{source_id}` | `200` | Owner/accessible |
+| `GET /v1/sources/{source_id}/evaluation` | `200` | Owner; đánh giá nguồn theo tiêu chí |
+| `DELETE /v1/sources/{source_id}` | `204` | Owner + CSRF |
+| `POST /v1/courses/{course_id}/sources` | `201` | Owner + CSRF; liên kết source vào course |
+| `GET /v1/courses/{course_id}/sources` | `200` | Owner; danh sách nguồn đã gắn + `groundingAvailable`/`contentIngested` |
+| `POST /v1/sources/{source_id}/document` | `202` | Owner + CSRF; upload PDF stream (max 20 MB, 300 trang, MinIO/S3 private) |
+| `POST /v1/sources/{source_id}/web-document` | `202` | Owner + CSRF; `{url? \| arxivId?, userConfirmedRights: true, title?}` (`WEB_INGEST_ENABLED=false`) |
+| `GET /v1/sources/{source_id}/documents` | `200` | Owner; danh sách documents & trạng thái ingest/OCR |
+| `GET /v1/sources/{source_id}/documents/{document_id}` | `200` | Owner; chi tiết document (không trả raw text hay `storage_key`) |
+| `DELETE /v1/sources/{source_id}/documents/{document_id}` | `204` | Owner + CSRF |
+| `POST /v1/courses/{course_id}/sources/search` | `200` | Owner + CSRF; `{query, sourceIds?, topK}` → `RagSearchOut` (`RAG_ENABLED=false` → 503) |
+
+### 1.5 Source Research Agent (4 endpoints — `api/v1/research.py`, flag `SOURCE_RESEARCH_ENABLED=false`)
+
+| Method & path | Status | Auth / CSRF / Ghi chú |
+|---|---|---|
+| `POST /v1/courses/{course_id}/research-runs` | `201` | Owner + CSRF; `{maxSources, learningGoals?, learnerLevel?}` (`extra=forbid`) |
+| `GET /v1/courses/{course_id}/research-runs` | `200` | Owner; `?limit=&offset=` |
+| `GET /v1/courses/{course_id}/research-runs/{run_id}` | `200` | Owner |
+| `POST /v1/courses/{course_id}/research-runs/{run_id}/accept` | `200` | Owner + CSRF; chấp nhận nguồn đã chọn để liên kết vào course |
+
+### 1.6 Learner Mastery, Learning Path, FSRS & Exposure (5 endpoints — `api/v1/learner.py`, flag `P50_ENABLED=false`)
+
+| Method & path | Status | Auth / CSRF / Ghi chú |
+|---|---|---|
+| `GET /v1/courses/{course_id}/mastery` | `200` | Owner; `MasteryOut` (`method="rule_based"`, `coursePercent`, `reviewDueCount`) |
+| `GET /v1/courses/{course_id}/learning-path` | `200` | Owner; `LearningPathOut` (`nextLesson`, `blockedBy`, `prerequisitesDag`, `recommendationToken?`) |
+| `POST /v1/courses/{course_id}/recommendation-events` | `200` | Owner + CSRF; `{recommendationToken}` (`extra=forbid`; flag `P52_EXPOSURE_ENABLED=false`) |
+| `GET /v1/reviews/due` | `200` | Authenticated; `?courseId=&limit=`, hàng đợi FSRS đến hạn |
+| `POST /v1/reviews/{card_id}/grade` | `200` | Owner + CSRF; `{rating: 1..4, clientReviewId, durationMs?}` (idempotent) |
+
+## 2. Core request shapes (đối chiếu Pydantic `schemas.py`)
+
+### Create course
 ```json
-{"topic":"Python cho người mới","clientCourseId":"uuid-from-client"}
+{"topic": "Python cho người mới", "clientCourseId": "uuid-from-client"}
 ```
 
-Response về mặt nghiệp vụ: course ID, status `interview`, danh sách/đầu mối lấy interview questions. **Không coi field names sau là API chắc chắn** cho đến khi so với Pydantic output.
-
-### Generation status (conceptual)
-
-```json
-{"status":"running","stage":"lessons","lessonsDone":2,"lessonsTotal":4,"attempts":1,"dispatched":true,"lastErrorCode":null}
-```
-
-Job status `queued/running/ready/failed`; response chỉ trả tiến độ thực (không hiển thị tỷ lệ giả). Poll 2s là hành vi frontend, không phải nghĩa vụ backend realtime.
-
-### Attempt submission (conceptual)
-
+### Submit attempt (`POST /v1/lessons/{lessonId}/attempts`)
 ```json
 {
-  "clientAttemptId":"attempt-uuid",
-  "contentVersion":1,
-  "results":[{"blockIndex":1,"type":"mc","answer":2}]
+  "clientAttemptId": "attempt-uuid",
+  "contentVersion": 1,
+  "durationMs": 42000,
+  "answers": [{"index": 1, "answer": 2}]
 }
 ```
+- `AttemptAnswer` đặt `extra="forbid"` và từ chối `bool` ở trường `answer` (tránh coerce `true → 1`).
+- Server luôn bỏ qua/từ chối mọi trường `correct`/`score` tự gửi; trả `409` nếu stale `contentVersion`, `422` nếu schema sai.
 
-**Cần đối chiếu** field `blockIndex`/`index`, mapping `order/match` theo public block IDs, answer types và response `solution`. Server bỏ qua hoặc reject mọi trường `correct` do client gửi; response 422 nếu invalid schema, 409 nếu stale version.
+## 3. HTTP semantics & error codes
 
-## 3. Contract cho thay đổi P2.1 (PROPOSED)
+- `201` tạo resource mới; `200` đọc/xử lý/replay; `202` job/ingest accepted; `204` xóa/logout; `401` unauthenticated; `403` CSRF/forbidden; `404` không tồn tại hoặc cross-owner; `409` conflict (`JOB_ALREADY_ACTIVE`, stale `contentVersion`, `MESSAGE_IN_PROGRESS`); `413` vượt kích thước file; `422` validation failed (`TUTOR_CONTEXT_INVALID`, thiếu `userConfirmedRights`); `429` rate limit / tutor quota (`TUTOR_LIMIT_REACHED`, `TUTOR_TOKEN_LIMIT_REACHED`, `TUTOR_CONCURRENCY_LIMIT`); `503` feature flag tắt hoặc cấu hình thiếu (`TUTOR_DISABLED`, `RAG_NOT_ENABLED`, `STORAGE_NOT_CONFIGURED`, `PROVIDER_NOT_CONFIGURED`, `EMBEDDING_NOT_CONFIGURED`, `OCR_NOT_CONFIGURED`).
 
-Đề xuất **không tạo endpoint mới** khi có thể dùng đường hiện có. Thêm optional versioned response fields từ `GET /proposal`: `learnerProfileSummary` (non-sensitive), `curriculumGraph` (nodes/edges), `schemaVersion`, `generationEstimate` nếu có cách tính. Lưu ý:
+## 4. Idempotency & concurrency matrix
 
-- Legacy proposals không có graph vẫn hiển thị; server phải support version cũ trong quá trình rollout.
-- Editing/revising proposal là yêu cầu product chưa chốt: **không tự tạo** `PUT /proposal` trước khi thống nhất version conflict/idempotency/approval resets.
-- Approve chỉ chấp nhận phiên bản proposal hiện hành, không phê duyệt nội dung đã đổi sau khi user xem.
-
-## 4. New endpoints — PROPOSED ONLY
-
-### Tutor P3 (P3.0 + P3.1 lát A — IMPLEMENTED)
-
-| Method & path | Request | Response / note |
+| Operation | Idempotency key / invariant | Quy tắc |
 |---|---|---|
-| `POST /v1/courses/{courseId}/tutor/messages` | `{clientMessageId,threadId?,text,contextRef:{lessonId,blockIndex}}` | `text/event-stream`: `delta`,`tool`,`done`,`error`,`heartbeat`,`cancelled` |
-| `POST /v1/courses/{courseId}/tutor/messages/{messageId}/stop` | body rỗng | `{messageId,status,providerStopGuaranteed:false,notice}`; 404 `TUTOR_STOP_NOT_FOUND`; CSRF |
-| `GET /v1/courses/{courseId}/tutor/usage` | none | `{courseId,windowSeconds,used,limits,remaining,runningStreams,tokensKnown}` |
-| `GET /v1/courses/{courseId}/tutor/threads` | pagination params | owner-scoped list |
-| `GET /v1/courses/{courseId}/tutor/threads/{threadId}` | path | thread/messages, no cross-owner data; `replaySupported=false` |
+| Create course | `(userId, clientCourseId)` | Retry trả lại cùng course |
+| Submit attempt | `(lessonId, userId, clientAttemptId)` | Replay cùng kết quả & `xpEarned`, không nhân XP |
+| Approve | `(courseId, activeJob)` + pinned `proposalVersion` | Concurrent approve không tạo 2 active jobs |
+| Generation job | `generationJobId` + atomic claim + lease | Redelivery no-op; upsert ổn định |
+| Tutor message | `(userId, threadId, clientMessageId)` | Completed → replay không gọi LLM; running → `409 MESSAGE_IN_PROGRESS` |
+| Source ingest | `(sourceId, checksum, pipelineVersion)` | Retry không nhân chunks |
+| FSRS grade | `(userId, cardId, clientReviewId)` | Replay không tính lại lịch hai lần |
+| Exposure log | Version-scoped dedupe trên signed token | Không ghi khống hoặc ghi trùng |
 
-> Frame `tool` (P3.1 lát B): `{name,status,durationMs,summary,code?}`. Chỉ xuất hiện khi
-> `TUTOR_TOOLS_ENABLED=true`; không phải tool-calling native.
-> Usage scope theo course trong path (đã chốt), không dùng `GET /v1/tutor/usage` toàn cục ở P3.1 lát A.
-> `remaining: null` = không có trần. 429 khi hết allowance: `TUTOR_LIMIT_REACHED`,
-> `TUTOR_TOKEN_LIMIT_REACHED`, `TUTOR_CONCURRENCY_LIMIT`, mỗi lỗi kèm `quota` có cấu trúc.
+## 5. API evolution policy
 
-### Source & RAG P4
+- Mọi thay đổi contract phải cập nhật đồng bộ `schemas.py`, `frontend/src/lib/api.ts` và spec trong cùng PR.
+- Không lộ raw provider error, secrets, prompt hay stacktrace trong response/logs.
+- Mọi mutating endpoint dùng cookie auth bắt buộc gọi `verify_csrf(request)`.
 
-| Method & path | Ý nghĩa |
-|---|---|
-| `POST /v1/sources` | Upload PDF (multipart/stream) và tạo ingestion job |
-| `GET /v1/sources` | Danh sách private sources của user |
-| `GET /v1/sources/{sourceId}` | Status/metadata, owner-scoped |
-| `DELETE /v1/sources/{sourceId}` | Soft-delete/revocation semantics phải chốt |
-| `GET /v1/sources/{sourceId}/pages/{pageNumber}` | Authorized source/page access qua private storage, nếu thực sự cần |
+## 6. Đối chiếu contract tham chiếu PolySkill (2026-11-22 — `OBSERVED_STATIC`, `PROPOSAL`)
 
-Không đặt search endpoint public cho raw chunks. API trả citation pointers **đã validate** theo user/course/source.
+Đợt reverse bằng Craft Anything `0.6.1` (`polyskill-analysis-report.md`) ghi nhận thêm các mẫu contract ở sản phẩm tham chiếu để cân nhắc **additive** ở các phase sau (chưa cam kết triển khai, không phá contract SopiSkill hiện hành):
 
-## 5. HTTP semantics & errors
-
-- `201` create resource mới; `200` read/retry replay; `202` job accepted; `400/422` bad input; `401` unauthenticated; `403` CSRF/forbidden action; `404` not found hoặc không sở hữu; `409` conflict (`JOB_ALREADY_ACTIVE`, stale content version, proposal-version mismatch); `429` quota/rate limit; `503` provider/broker unavailable tùy policy.
-- Tài liệu `llm-provider.md` đã ghi `503 PROVIDER_NOT_CONFIGURED` khi provider lạ/thiếu key/base URL/model, **không mock fallback**.
-- **Proposed** normalized error envelope cho API mới:
-
-```json
-{"error":{"code":"TUTOR_LIMIT_REACHED","message":"Đã hết lượt hỏi trong kỳ này.","requestId":"req_abc"}}
-```
-
-Trước khi áp dụng, audit error envelope hiện hữu và giữ backward compatibility; không thay global format chỉ vì ví dụ này.
-
-## 6. Idempotency and concurrency
-
-| Operation | Key | Quy tắc |
-|---|---|---|
-| Create course | `(userId, clientCourseId)` | Retry trả lại cùng course; không sinh course mới |
-| Submit attempt | `(userId, lessonId, clientAttemptId)` | Same ID → same recorded result/reward; unique DB |
-| Approve | `(courseId, activeJob)` + pinned proposal | Concurrent approve không tạo 2 active jobs; 409 hoặc safe replay theo current contract |
-| Generation job | `generationJobId`, atomic claim + lease | Redelivery no-op; effects upsert theo stable ordering |
-| Tutor message P3 | `(userId, threadId, clientMessageId)` | Không tạo user message/LLM call trùng |
-| Source ingest P4 | `(sourceId, checksum, pipelineVersion)` | Retry không nhân chunks |
-
-## 7. API evolution policy
-
-- OpenAPI/Pydantic/TS client đều cập nhật trong cùng PR khi thay contract.
-- List pagination stable ordering + capped limit; filter user scope phía DB.
-- Không cung cấp raw error từ provider, secrets, prompt hay stacktrace; dùng requestId tương quan.
-- Dùng `429 Retry-After` cho rate-limit nếu có cơ sở, không gửi mốc thời gian giả.
-- Mọi mutating endpoint dùng cookie auth phải qua CSRF theo implementation hiện hữu.
+- **Header đàm phán tính năng:** `x-client-platform` và `x-client-blocks` (`GAP-19`).
+- **Short-answer AI grading & dispute:** `POST /v1/lessons/{id}/blocks/{index}/grade` (`got_it | almost | not_yet`, `keyPoints[]`, `feedback`) và `POST /v1/lessons/{id}/grades/{gradeId}/dispute` (`GAP-11`); giữ nguyên chính sách server-authoritative của SopiSkill cho `mc`/`blank`/`order`/`match`.
+- **Proposal revision qua Tutor:** `PlanChat` (`entryPoint: 'proposal'`) + tool `revise_proposal` hoặc `PATCH /proposal` versioned (`GAP-08`).
+- **Confirmable Tutor Action:** SSE `confirm` + `POST /v1/courses/{id}/tutor/actions/{actionId}/{confirm|decline}` cho `regenerate_unit` (`GAP-20`).
+- **Mở rộng bài học & người dùng:** `GET /v1/courses/{id}/glossary`, `lesson.terms[]`, `lesson.estimatedMinutes`, `lesson.format`, `teach.figure` (`formula`/`table`/`visual`/`diagram`), `lesson.reel`, `GET /v1/me/stats`, `PATCH/DELETE /v1/me` tách `appLanguage`/`lessonLanguage` (`GAP-01`..`GAP-23` trong `docs/frontend-reference/api-gap-register.md`).

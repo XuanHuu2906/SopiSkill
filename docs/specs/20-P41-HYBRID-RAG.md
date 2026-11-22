@@ -1,7 +1,6 @@
 # 20 — P4.1 Hybrid RAG, Embeddings & Verified Citations (offline-first)
 
-**Trạng thái:** IMPLEMENTED (working tree, chưa commit). Quyết định kiến trúc do người
-dùng phê duyệt 2026-10-31: **phương án A — offline-first baseline**.
+**Trạng thái (`2026-11-22`):** **IMPLEMENTED · REPORTED TESTED (offline hashing baseline; `RAG_ENABLED=false` mặc định)**. Quyết định kiến trúc do người dùng phê duyệt `2026-10-31`: **phương án A — offline-first baseline**. Chưa bật semantic embedding thật / `pgvector`.
 
 ## 1. Phạm vi & quyết định
 
