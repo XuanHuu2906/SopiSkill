@@ -50,7 +50,13 @@ _LEVEL_BEGINNER = (
 _LEVEL_INTERMEDIATE = (
     "đã biết",
     "đã học qua",
+    "đã học",
     "đã từng",
+    "đã viết",
+    "đã làm",
+    "đã dùng",
+    "2 năm",
+    "3 năm",
     "trung bình",
     "intermediate",
     "có chút kinh nghiệm",
@@ -61,6 +67,7 @@ _LEVEL_INTERMEDIATE = (
     "working knowledge",
     "used it before",
     "work with",
+    "work in",
     "use it at work",
     "regularly use",
     "solid foundation",
@@ -68,6 +75,8 @@ _LEVEL_INTERMEDIATE = (
     "1-2 years",
     "2 years",
     "3 years",
+    "can write",
+    "read a lot about",
 )
 _LEVEL_ADVANCED = (
     "nâng cao",
@@ -189,10 +198,19 @@ def _fold_needle(needle: str) -> str:
     return _fold(needle)
 
 
-def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
+_NEGATION_RE = re.compile(
+    r"(?:^|[\s,.;:()\-/])(?:not|no|without|avoid|khong|chua can|khong can)\s+(?:\w+\s+){0,3}$"
+)
+
+
+def _contains_any(
+    text: str, needles: tuple[str, ...], *, ignore_negated: bool = False
+) -> bool:
     """Khớp có biên từ — chặn `rong` khớp trong `trong`, `h` trong `4th`.
 
     Số được phép đứng ngay trước từ khoá (`6h`), chữ cái thì không.
+    Khi `ignore_negated=True`, bỏ qua lần khớp ngay sau từ phủ định ngắn
+    (`not expert`, `không đi sâu`, `chưa cần đi sâu`, `not music theory deep dive`).
     """
     folded = _fold(text)
     for needle in needles:
@@ -205,6 +223,11 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
             before = folded[start - 1] if start > 0 else ""
             after = folded[end] if end < len(folded) else ""
             if not (before and before.isalpha()) and not (after and after.isalpha()):
+                if ignore_negated:
+                    prefix = folded[max(0, start - 32) : start]
+                    if _NEGATION_RE.search(prefix):
+                        start = folded.find(target, start + 1)
+                        continue
                 return True
             start = folded.find(target, start + 1)
     return False
@@ -236,9 +259,9 @@ def _parse_weekly_minutes(text: str) -> int | None:
 
 def _detect_level(text: str) -> tuple[str, list[str]]:
     warnings: list[str] = []
-    advanced = _contains_any(text, _LEVEL_ADVANCED)
+    advanced = _contains_any(text, _LEVEL_ADVANCED, ignore_negated=True)
     beginner = _contains_any(text, _LEVEL_BEGINNER)
-    intermediate = _contains_any(text, _LEVEL_INTERMEDIATE)
+    intermediate = _contains_any(text, _LEVEL_INTERMEDIATE, ignore_negated=True)
 
     if advanced and beginner:
         warnings.append("Câu trả lời vừa nói 'mới bắt đầu' vừa nói 'nâng cao'; tạm xếp trung bình.")
@@ -254,20 +277,20 @@ def _detect_level(text: str) -> tuple[str, list[str]]:
 
 def _detect_styles(text: str) -> list[str]:
     styles: list[str] = []
-    if _contains_any(text, _STYLE_HANDS_ON):
+    if _contains_any(text, _STYLE_HANDS_ON, ignore_negated=True):
         styles.append("hands_on")
-    if _contains_any(text, _STYLE_PROJECT):
+    if _contains_any(text, _STYLE_PROJECT, ignore_negated=True):
         styles.append("project")
-    if _contains_any(text, _STYLE_THEORY):
+    if _contains_any(text, _STYLE_THEORY, ignore_negated=True):
         styles.append("theory")
-    if _contains_any(text, _STYLE_VISUAL):
+    if _contains_any(text, _STYLE_VISUAL, ignore_negated=True):
         styles.append("visual")
     return styles[:6]
 
 
 def _detect_depth(text: str) -> tuple[str, list[str]]:
-    deep = _contains_any(text, _DEPTH_DEEP)
-    broad = _contains_any(text, _DEPTH_BROAD)
+    deep = _contains_any(text, _DEPTH_DEEP, ignore_negated=True)
+    broad = _contains_any(text, _DEPTH_BROAD, ignore_negated=True)
     if deep and broad:
         return "balanced", ["Câu trả lời vừa muốn 'hiểu sâu' vừa muốn 'phủ rộng'; tạm xếp cân bằng."]
     if deep:
