@@ -50,3 +50,7 @@ backend/evals/reports/
 
 # superpowers SDD scratch (git-ignored)
 .superpowers/
+
+# Playwright E2E artifacts
+frontend/playwright-report/
+frontend/test-results/

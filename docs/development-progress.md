@@ -2,6 +2,34 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-22 — Wave 1 + Wave 2 — Repo Hygiene, Playwright E2E + Axe-core, P1-LEVEL-FIT, P1-LANG (0017), P1-CONTENT-TRUNC
+
+- Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).
+- **Wave 1.1 (Repo Hygiene):** tách working tree dirty lịch sử thành 3 commit sạch (`baafe08` backend fixes, `d3d2787` frontend FR-1..5, `be5ec0c` specs & audits); giữ `.claude/` và `backend/ailp.db` ngoài commit.
+- **Wave 1.2 (Docker Container Sync):** **SKIPPED / NOT TESTED** vì Docker daemon trên máy đang tắt (`docker compose ps` không kết nối được socket).
+- **Wave 1.3 (Playwright E2E + Axe-core + CI):**
+  - Thêm `backend/scripts/run_e2e_backend.py` (local FastAPI mock + throwaway SQLite, không phụ thuộc Docker), `frontend/playwright.config.ts`, `frontend/e2e/core-flow.spec.ts` (3 kịch bản: full English spine + answer-key network privacy + 6-block quiz; Tutor docked `1440×900` vs modal overlay `768×1024`/`390×844` + focus contract + `axe-core` WCAG 2.1 AA; account switch A→B session isolation), script `test:e2e` và job `frontend-e2e` trong `.github/workflows/ci.yml`.
+- **Wave 2.1 (`P1-LEVEL-FIT`):**
+  - `backend/app/services/pedagogy.py`: bổ sung từ điển tiếng Anh cho beginner/intermediate/advanced + style/depth có kiểm biên từ `_contains_any()`.
+  - `backend/app/providers/openai_compatible_provider.py`: sửa lỗi thiếu `proposal.learnerProfile` trong `generate_lesson()` — truyền `currentLevel`, `depth`, `preferredStyles` và chỉ dẫn hiệu chỉnh theo mức độ vào prompt bài học.
+- **Wave 2.2 (`P1-LANG`):**
+  - Migration expand-only `backend/alembic/versions/0017_p1_course_language.py` (`courses.language VARCHAR(16) NOT NULL DEFAULT 'vi'`, single head, downgrade sạch).
+  - Thêm `language: Literal["vi", "en"] = "vi"` vào `Course`, `CourseCreateRequest` (locale lạ → `422`), `CourseOut`/`CourseListItemOut`/`CourseDetailOut`, `LLMProvider` (`accepts_language` giữ tương thích ngược test stub), `MockProvider`, `OpenAICompatibleProvider` (prompt tách `vi`/`en`, gỡ chuỗi hardcode tiếng Việt khi `language="en"`), `tutor_context.py`, `evals/pipeline.py`, `evals/rubric.py` (kiểm rò dấu tiếng Việt ở khóa `en`), và selector chọn ngôn ngữ trên `frontend/src/app/new/page.tsx`.
+- **Wave 2.3 (`P1-CONTENT-TRUNC` + `M2-P99`):**
+  - Nâng nhẹ trần mặc định `llm_max_output_tokens_lesson`: `3000 → 4000` (`config.py`, `docker-compose.yml`).
+  - `openai_compatible_provider.py`: mọi `finish_reason == "length"` đều raise `ProviderBudgetError(truncated=True)` kể cả khi thiếu `usage`; `_chat_json()` thực hiện tối đa 1 lần compact retry (gọn nội dung + escalation có giới hạn), tuyệt đối không lưu `ready` nếu vẫn bị cắt; nhắc rõ quy tắc 1 chỗ trống `blank` và độ chính xác định lượng (`p99`) trong `LESSON_SYSTEM`.
+  - `providers/validation.py` + `evals/rubric.py`: thêm deterministic completeness lint (`check_text_completeness`, `check_lesson_completeness`) chặn code fence/inline backtick/ngoặc chưa đóng hoặc kết thúc lơ lửng (vd `diem = [7, 8,`).
+- **Kiểm chứng thực chạy (`2026-11-22`, 100% offline/mock, 0 lời gọi API trả phí):**
+  - `cd backend && .venv/bin/python -m pytest -q` → **813 passed, 31 skipped, 0 failed** (41 test mới trong `test_p1_language.py`, `test_p1_truncation.py`, `test_p1_level_fit.py`, cộng `test_p61_ci_contract.py` 16/16 pass).
+  - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build` → exit `0` (`11/11` pages).
+  - `cd frontend && npm run test:e2e` → **3 passed (8.6s)**, exit `0` (Chromium thật + `axe-core` 0 violations trên `1440`/`768`/`390`).
+- **NOT TESTED:**
+  - Real-LLM 12-topic re-evaluation (dừng chờ owner duyệt model & ngân sách theo quyết định `/grill-me` D6).
+  - PostgreSQL migration/race tests (`31 skipped` do chạy SQLite cục bộ không có `POSTGRES_TEST_URL` và không cài optional OCR engines).
+  - Docker container rebuild/live E2E (Docker daemon đang tắt).
+  - Screen reader thật (NVDA/VoiceOver).
+
 ## 2026-11-04 — P1-QUIZ-BLANK — một blank block chỉ được có đúng một chỗ trống, một đáp án
 
 - Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Không commit, không push.

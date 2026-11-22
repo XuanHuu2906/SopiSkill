@@ -75,9 +75,9 @@ users 1--* review_cards 1--* review_events
 | `review_events` | Lịch sử chấm FSRS (`rating 1..4`, `client_review_id` unique, `reviewed_at`) | Không tự tạo synthetic history |
 | `recommendation_events` | Log exposure cho `P5.2b` (`arm`, `propensity=1.0`, `context_hash`, `policy_version`, dedupe theo version) | Ghi chỉ qua HMAC token server-phát (`P52_EXPOSURE_ENABLED=false`) |
 
-## 3. Lịch sử 16 Alembic migrations (BẤT BIẾN — không sửa ngược)
+## 3. Lịch sử 17 Alembic migrations (BẤT BIẾN — không sửa ngược)
 
-`0001_initial` → `0002_auth_columns` → `0003_p11_quiz_integrity` → `0004_p12_job_reliability` → `0005_p30_source_registry` → `0006_p2sr_source_research` → `0007_p22_eval_cost` → `0008_p30_tutor_core` → `0009_p31_tutor_controls` → `0010_p31_tutor_tools` → `0011_p40_source_ingest` → `0012_p41_rag` → `0013_p42_web_ingest` → `0014_p43_ocr` → `0015_p50_learner_profile` → `0016_p52_exposure`.
+`0001_initial` → `0002_auth_columns` → `0003_p11_quiz_integrity` → `0004_p12_job_reliability` → `0005_p30_source_registry` → `0006_p2sr_source_research` → `0007_p22_eval_cost` → `0008_p30_tutor_core` → `0009_p31_tutor_controls` → `0010_p31_tutor_tools` → `0011_p40_source_ingest` → `0012_p41_rag` → `0013_p42_web_ingest` → `0014_p43_ocr` → `0015_p50_learner_profile` → `0016_p52_exposure` → `0017_p1_course_language`.
 
 ## 4. State machines & ID prefixes
 
