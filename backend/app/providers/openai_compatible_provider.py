@@ -167,6 +167,12 @@ _COMPACT_RETRY_SUFFIX = (
     "bracket, and JSON field cleanly."
 )
 
+_COMPACT_RETRY_SUFFIX_JUDGE = (
+    "\n\nIMPORTANT: The previous judge response hit the token limit and was truncated. "
+    "Keep reasoning minimal and return ONLY a compact, complete JSON object with "
+    '{"scores": {...}, "notes": [up to 3 concise strings]}.'
+)
+
 
 class OpenAICompatibleProvider(LLMProvider):
     name = "openai_compatible"
@@ -627,13 +633,16 @@ class OpenAICompatibleProvider(LLMProvider):
     # ---------- evaluator hook (P2.2) ----------
 
     async def request_json(self, *, system: str, user: str, max_input_chars: int) -> dict:
-        """Lời gọi JSON một lần cho evaluator. Không retry, không sửa schema.
+        """Lời gọi JSON một lần cho evaluator. Không retry schema, giữ đúng budget input.
 
         Evaluator phải phân biệt "judge không chạy được" với "judge cho điểm thấp",
         nên lỗi ở đây được raise nguyên taxonomy provider.
         """
-        trimmed = user[: max(1, max_input_chars)]
-        return await self._chat_json(kind="judge", system=system, user=trimmed)
+        limit = max(1, max_input_chars)
+        trimmed = user[:limit]
+        return await self._chat_json(
+            kind="judge", system=system, user=trimmed, max_input_chars=limit
+        )
 
     # ---------- structured call with bounded schema repair ----------
     async def _structured(
@@ -683,9 +692,17 @@ class OpenAICompatibleProvider(LLMProvider):
         clean = " ".join(str(text or "").split())
         return clean[:limit]
 
-    async def _chat_json(self, *, kind: str, system: str, user: str) -> dict[str, Any]:
-        if len(user) > self.max_input_chars:
-            user = user[: self.max_input_chars]
+    async def _chat_json(
+        self,
+        *,
+        kind: str,
+        system: str,
+        user: str,
+        max_input_chars: int | None = None,
+    ) -> dict[str, Any]:
+        input_limit = max(1, max_input_chars) if max_input_chars is not None else self.max_input_chars
+        if len(user) > input_limit:
+            user = user[:input_limit]
         max_tokens = self.max_tokens_by_kind.get(kind, self.max_output_tokens)
         # Một lần leo thang DUY NHẤT khi provider cắt output (finish_reason=length):
         # model reasoning đôi khi cần nhiều token hơn trần cấu hình. Không phải vòng
@@ -732,7 +749,9 @@ class OpenAICompatibleProvider(LLMProvider):
                 payload["max_tokens"] = max_tokens
                 # P1-CONTENT-TRUNC: ngoài leo thang trần có giới hạn, yêu cầu model
                 # viết gọn lại ở lượt retry duy nhất để không lặp lại cắt cụt.
-                compact_user = (user + _COMPACT_RETRY_SUFFIX)[: self.max_input_chars]
+                suffix = _COMPACT_RETRY_SUFFIX_JUDGE if kind == "judge" else _COMPACT_RETRY_SUFFIX
+                keep = max(0, input_limit - len(suffix))
+                compact_user = (user[:keep] + suffix)[:input_limit]
                 payload["messages"] = [
                     {"role": "system", "content": system},
                     {"role": "user", "content": compact_user},

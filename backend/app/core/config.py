@@ -26,8 +26,9 @@ class Settings(BaseSettings):
     llm_max_output_tokens_proposal: int = 4500
     llm_max_output_tokens_lesson: int = 4000
     # P2.2 — LLM-as-judge (rubric chấm chất lượng). Chỉ dùng khi eval, không
-    # nằm trên đường đi của người học.
-    llm_max_output_tokens_judge: int = 3000
+    # nằm trên đường đi của người học. Nâng lên 6000 để các model reasoning
+    # (như deepseek-flash) không chạm trần trước khi xuất JSON điểm.
+    llm_max_output_tokens_judge: int = 6000
     llm_max_input_chars: int = 12_000
     # Số lần thử lại khi LLM trả JSON đúng cú pháp nhưng sai schema/semantic
     # (1 = tối đa 2 request cho một bước). Bounded để không đốt tiền.
@@ -391,6 +392,20 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = 60 * 24 * 7
     allow_demo_header: bool = False
     cookie_secure: bool = False
+
+    # Wave 3 / P6.2 — Distributed rate-limiter, trusted proxy & readiness probe
+    # `auto`: dùng Redis khi `redis_url` được cấu hình, ngược lại dùng in-memory.
+    # `redis`: ưu tiên Redis; `memory`: luôn dùng in-memory (dev/test).
+    rate_limit_backend: str = "auto"
+    rate_limit_key_prefix: str = "sopiskill:rl"
+    rate_limit_redis_timeout_seconds: float = 0.5
+    # false (mặc định dev): Redis lỗi nhất thời ⇒ fallback in-memory + warning log.
+    # true (production): trả 503 RATE_LIMITER_UNAVAILABLE thay vì làm yếu giới hạn.
+    rate_limit_fail_closed: bool = False
+    # Chỉ đọc X-Forwarded-For khi có reverse proxy tin cậy đứng trước API.
+    trust_proxy_headers: bool = False
+    # Timeout tối đa cho mỗi dependency probe ở GET /ready (giây).
+    readiness_timeout_seconds: float = 2.0
 
     @property
     def cors_origin_list(self) -> list[str]:

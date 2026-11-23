@@ -2,6 +2,28 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-23 — Judge Harness Fix + Wave 3 (Redis Rate-Limiter, `/ready`, Backup-Restore CLI, Controlled Activation Guardrails)
+
+- Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).
+- **Fix nhanh `evals/judges.py` (`JUDGE_PROMPT_VERSION = "p2.2-judge-v2"`):**
+  - Không bao giờ cắt ngang giữa bài học: chuyển định dạng proposal/lesson sang JSON gọn, nâng `MAX_JUDGE_CHARS = 32_000`, chọn tập **bài học nguyên vẹn** phân bố đều (đầu/cuối/giữa) khi vượt ngân sách và ghi chú rõ cho judge không coi bài lược bỏ có chủ đích là lỗi cắt cụt.
+  - Sửa lỗi `openai_compatible_provider.py:request_json()` trước đây bị `_chat_json()` cắt lại về `llm_max_input_chars=12_000` — nay truyền đúng `max_input_chars` của caller và dùng `_COMPACT_RETRY_SUFFIX_JUDGE` riêng cho `kind="judge"`.
+  - Nâng trần mặc định `llm_max_output_tokens_judge`: `3000 → 6000` (`config.py`, `docker-compose.yml`, `.env.example`) để model reasoning (`deepseek-flash`) không chạm trần trước khi xuất JSON.
+- **Wave 3 — Hardening & Controlled Activation (Decision D7):**
+  - **`M1-SEC-LIMITER` (`backend/app/core/limits.py`):** nâng cấp sang **Redis distributed sliding-window rate-limiter** dùng 1 Lua script nguyên tử (`ZREMRANGEBYSCORE` + `ZCARD` + `ZADD` + `PEXPIRE`) trả header `Retry-After`; hỗ trợ `RATE_LIMIT_BACKEND=auto|redis|memory`, `RATE_LIMIT_FAIL_CLOSED=false|true` (`503 RATE_LIMITER_UNAVAILABLE` khi Redis sập ở production, hoặc fallback in-memory kèm warning sạch không lộ URL/mật khẩu), và `TRUST_PROXY_HEADERS=false` mặc định (chặn giả mạo `X-Forwarded-For`).
+  - **`OPS-005` Deep Readiness Probe & Baseline Security Headers (`backend/app/main.py`, `frontend/next.config.ts`):** thêm `GET /ready` kiểm tra `SELECT 1` DB + Redis `PING` (nếu cấu hình `REDIS_URL`) + `check_activation_readiness()`, trả `200 ready` / `503 not_ready` không lộ DSN/secret; thêm security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, và HSTS khi `COOKIE_SECURE=true` / `ENV=production`).
+  - **`D7` Controlled Activation Guardrails (`backend/app/core/activation.py`, `docker-compose.wave3.yml`):** giữ mặc định OFF trong `config.py` và `docker-compose.yml`; bổ sung validator `python -m app.core.activation` bắt buộc `TUTOR_MESSAGES_PER_DAY > 0`, `TUTOR_TOKENS_PER_DAY > 0`, Redis rate-limit, `JWT_SECRET`, `COOKIE_SECURE=true`, `ALLOW_DEMO_HEADER=false` ở `ENV=production`, đồng thời cảnh báo khi `RAG_ENABLED=true` trên `hashing` baseline; cung cấp `docker-compose.wave3.yml` override bật `TUTOR_ENABLED=true` (`30` lượt/ngày, `100.000` tokens/ngày) + `P50_ENABLED=true` + Redis rate-limit fail-closed.
+  - **`OPS-007` PostgreSQL Backup & Restore Drill Tooling (`backend/scripts/pg_backup_restore.py`, `docs/runbooks/p62-operations-and-activation.md`):** CLI 3 lệnh `backup` (`pg_dump --format=custom` + `.sha256` + `.meta.json` không secret), `verify` (header `PGDMP` + SHA-256), `restore-drill` (chặn ghi đè DB không chứa từ khóa `drill`/`restore`/`scratch`/`test`, verify + `pg_restore` + query `alembic_version` & đếm bảng cốt lõi).
+- **Kiểm chứng thực chạy (`2026-11-23`, 100% offline, 0 lời gọi API trả phí):**
+  - `cd backend && .venv/bin/python -m pytest -q` → **832 passed, 31 skipped, 0 failed** (+19 test mới: 3 test judge trong `test_p22_eval.py`, 16 test Wave 3 trong `test_wave3_ops.py`; `test_p61_ci_contract.py` PASS).
+  - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
+  - `cd backend && .venv/bin/python -m app.core.activation` → exit `0`, `"ok": true`.
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build && npm run test:e2e` → exit `0`, `11/11` pages, **3 passed (7.6s)** (`axe-core` 0 violations).
+- **NOT TESTED / BLOCKED (cần Docker daemon hoặc staging thật):**
+  - Live Redis container integration & live `pg_backup_restore.py restore-drill` trên PostgreSQL thật (Docker daemon trên máy đang tắt).
+  - Real-LLM re-eval lại 12 topics với `judges.py` v2 (không tự chạy vì tốn chi phí API — chờ owner duyệt nếu cần).
+  - Staging TLS termination + reverse-proxy CSP header thật và benchmark semantic embedding (`EMBEDDING_PROVIDER=openai_compatible`) trước khi mở `RAG_ENABLED`.
+
 ## 2026-11-22 — Wave 1 + Wave 2 — Repo Hygiene, Playwright E2E + Axe-core, P1-LEVEL-FIT, P1-LANG (0017), P1-CONTENT-TRUNC
 
 - Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).

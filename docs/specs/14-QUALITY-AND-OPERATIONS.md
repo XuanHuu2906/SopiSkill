@@ -10,10 +10,10 @@
 | OPS-002 | At-least-once queue + idempotent writes, worker crash/stale-dispatch recovery (`visibility_timeout=3600`) | **IMPLEMENTED · TESTED · DEPLOYED** (`RELIABILITY-CELERY-01/02`) |
 | OPS-003 | Timeout/retry bounded cho provider, tools, ingest, web fetch, OCR | **IMPLEMENTED · TESTED** |
 | OPS-004 | Token/cost quota đo được (`llm_usage_events`, `tutor_usage_events`) và guard trước gọi model | **IMPLEMENTED · TESTED** |
-| OPS-005 | `/health` liveness + Docker Compose healthchecks (`db`, `redis`, `minio`) | **IMPLEMENTED** (chưa có `/ready` kiểm tra deep dependencies) |
+| OPS-005 | `/health` liveness + `/ready` deep readiness (DB, Redis, activation guardrails) + Docker Compose healthchecks | **IMPLEMENTED · TESTED** (offline unit/API; live Redis container chưa chạy vì Docker tắt) |
 | OPS-006 | Logs/metrics không chứa secrets, cookies, raw prompts hoặc answer keys | **IMPLEMENTED · TESTED** |
-| OPS-007 | Backup định kỳ + restore drill; migration expand-only kiểm thử trên Postgres rỗng | **PARTIAL** — migration CI PASS; backup/restore drill **NOT TESTED** |
-| OPS-008 | HTTPS, `COOKIE_SECURE=true`, CSP/HSTS, trusted proxy, distributed Redis rate-limit | **PLANNED / NOT IMPLEMENTED** (rate-limit hiện là in-memory per-process) |
+| OPS-007 | Backup định kỳ + restore drill (`backend/scripts/pg_backup_restore.py`); migration expand-only kiểm thử trên Postgres rỗng | **IMPLEMENTED · PARTIALLY TESTED** (CLI + checksum/tamper/guardrail unit tests PASS; live Postgres restore drill **NOT TESTED** do Docker tắt) |
+| OPS-008 | HTTPS, `COOKIE_SECURE=true`, baseline security headers/HSTS, trusted proxy, distributed Redis rate-limit (`limits.py` Lua sliding window) | **IMPLEMENTED · PARTIALLY TESTED** (Redis Lua limiter + security headers + activation guardrails PASS offline; staging TLS/reverse-proxy CSP **NOT TESTED**) |
 | OPS-009 | Automated CI gates (backend tests, migrations, Postgres races, frontend build, Bandit/pip-audit) | **IMPLEMENTED · TESTED** (`P6.1`) |
 
 ## 2. Proposed SLO starting points (mục tiêu tham chiếu — chưa benchmark tải)

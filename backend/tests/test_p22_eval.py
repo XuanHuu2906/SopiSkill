@@ -11,7 +11,7 @@ from app.providers.mock_provider import MockProvider
 from app.providers.openai_compatible_provider import OpenAICompatibleProvider
 from app.schemas.schemas import LessonContent, ProposalPayload
 from evals.dataset import EVAL_CASES, dataset_summary, get_cases
-from evals.judges import JUDGE_PROMPT_VERSION, judge_course
+from evals.judges import JUDGE_PROMPT_VERSION, MAX_JUDGE_CHARS, build_judge_user_message, judge_course
 from evals.pipeline import run_case, summary
 from evals.regression import compare_reports
 from evals.rubric import HUMAN_RUBRIC, THRESHOLDS, evaluate_course
@@ -221,6 +221,153 @@ async def test_judge_without_request_json_support_is_not_run():
     # MockProvider kế thừa base → ProviderConfigError ⇒ not_run (không bịa điểm)
     assert result.status == "not_run"
     assert isinstance(ProviderConfigError(), ProviderConfigError)
+
+
+def test_judge_message_never_truncates_mid_lesson():
+    import json as _json
+
+    proposal = {
+        "name": "Full Course",
+        "objective": "Learn thoroughly.",
+        "units": [{"title": "U1", "lessonTitles": [f"Lesson {i}" for i in range(1, 9)]}],
+    }
+    lessons = [
+        {
+            "title": f"Lesson {i}",
+            "blocks": [
+                {
+                    "type": "teach",
+                    "title": f"Section {i}",
+                    "paragraphs": [f"Nội dung bài {i}: " + ("chi tiết thực tế " * 60) + "KẾT_THÚC."],
+                }
+            ],
+        }
+        for i in range(1, 9)
+    ]
+
+    # Budget đủ nhỏ để không chứa hết cả 8 bài, nhưng đủ chứa nhiều bài nguyên vẹn.
+    msg = build_judge_user_message(
+        topic="Python",
+        language="vi",
+        level="intermediate",
+        proposal=proposal,
+        lessons=lessons,
+        max_chars=5_000,
+    )
+    assert len(msg) <= 5_000
+    assert "KHÔNG coi là lỗi cắt cụt" in msg
+
+    # Mọi bài được đưa vào phải nguyên vẹn 100% JSON hợp lệ và giữ nguyên kết câu.
+    sections = msg.split("--- Bài ")[1:]
+    assert len(sections) >= 2
+    assert sections[0].startswith("1/8 ---")
+    assert sections[-1].startswith("8/8 ---")
+    for sec in sections:
+        body = sec.split("\n", 1)[1].strip()
+        parsed = _json.loads(body)
+        assert parsed["blocks"][0]["paragraphs"][0].endswith("KẾT_THÚC.")
+
+
+async def test_judge_request_json_does_not_retruncate_to_default_12k():
+    import json as _json
+
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(_json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": '{"scores": {"objective_clarity": 4}, "notes": ["ok"]}'},
+                    }
+                ],
+                "usage": {"prompt_tokens": 500, "completion_tokens": 50},
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        api_key="sk-test",
+        base_url="https://llm.test/v1",
+        model="judge-model",
+        transport=httpx.MockTransport(handler),
+    )
+    assert provider.max_tokens_by_kind["judge"] >= 6000
+
+    # Tạo course ~18_000 ký tự (> default llm_max_input_chars=12_000, < MAX_JUDGE_CHARS=32_000).
+    lessons = [
+        {
+            "title": f"Lesson {i}",
+            "blocks": [{"type": "teach", "title": f"T{i}", "paragraphs": ["x" * 2400 + f"_END_{i}"]}],
+        }
+        for i in range(1, 8)
+    ]
+    result = await judge_course(
+        provider,
+        topic="Distributed Systems",
+        language="en",
+        level="advanced",
+        proposal={"name": "DS", "objective": "Master DS."},
+        lessons=lessons,
+    )
+    assert result.status == "scored"
+    sent_user = captured[0]["messages"][1]["content"]
+    assert len(sent_user) > 15_000
+    assert len(sent_user) <= MAX_JUDGE_CHARS
+    assert "_END_7" in sent_user
+
+
+async def test_judge_compact_retry_uses_judge_specific_suffix():
+    import json as _json
+
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _json.loads(request.content.decode("utf-8"))
+        calls.append(body)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [{"finish_reason": "length", "message": {"content": '{"scores":'}}],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": body["max_tokens"]},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": '{"scores": {"level_fit": 4}, "notes": ["concise"]}'},
+                    }
+                ],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 60},
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        api_key="sk-test",
+        base_url="https://llm.test/v1",
+        model="judge-model",
+        transport=httpx.MockTransport(handler),
+    )
+    result = await judge_course(
+        provider,
+        topic="Python",
+        language="vi",
+        level="beginner",
+        proposal={"name": "Py"},
+        lessons=[{"title": "L1"}],
+    )
+    assert result.status == "scored"
+    assert len(calls) == 2
+    assert calls[1]["max_tokens"] > calls[0]["max_tokens"]
+    retry_user = calls[1]["messages"][1]["content"]
+    assert "judge response hit the token limit" in retry_user
+    assert "teach paragraph" not in retry_user
 
 
 # ---------- pipeline ----------

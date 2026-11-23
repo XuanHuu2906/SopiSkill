@@ -10,7 +10,7 @@
 - CSRF double-submit cookie/header bắt buộc cho mọi mutating endpoint (`verify_csrf`).
 - `X-User-Id` demo header chỉ mở khi `ALLOW_DEMO_HEADER=true` ở non-prod; mặc định `false`.
 - Token TTL mặc định **7 ngày** (`access_token_ttl_minutes = 10080`), chưa có refresh token rotation.
-- **Hạn chế đang mở:** `rate_limit()` trong `backend/app/core/limits.py` vẫn là **in-memory per-process** — cần chuyển sang Redis trước khi chạy nhiều replica (`M1-SEC-LIMITER`).
+- **Rate-limit phân tán (`M1-SEC-LIMITER`, Wave 3):** `rate_limit()` trong `backend/app/core/limits.py` đã hỗ trợ **Redis atomic sliding-window Lua script** (`RATE_LIMIT_BACKEND=auto|redis|memory`, `RATE_LIMIT_FAIL_CLOSED=true` trả `503` khi Redis sập ở production, `TRUST_PROXY_HEADERS=false` mặc định) và trả header `Retry-After` khi `429`. Live test trên Redis container chờ bật Docker/staging.
 
 ## 2. Authorization rules (IMPLEMENTED)
 

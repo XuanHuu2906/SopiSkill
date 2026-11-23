@@ -1,0 +1,42 @@
+# Wave 3 — Controlled Feature Activation & Distributed Hardening Override (Decision D7)
+#
+# Giữ nguyên mặc định OFF trong `backend/app/core/config.py` và `docker-compose.yml`.
+# Chỉ kích hoạt AI Tutor + P5.0 khi đã bật Redis distributed rate-limit và đặt quota ngày cụ thể:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.wave3.yml up -d
+#
+# Lưu ý:
+#   - `RAG_ENABLED` vẫn giữ `false` cho đến khi cấu hình và benchmark semantic embedding thật
+#     (`EMBEDDING_PROVIDER=openai_compatible`), tránh chạy RAG production trên hashing baseline.
+#   - Kiểm tra pre-flight trước khi mở traffic:
+#     docker compose exec backend python -m app.core.activation
+#     curl -fsS http://localhost:8001/ready
+
+services:
+  backend:
+    environment:
+      RATE_LIMIT_BACKEND: redis
+      RATE_LIMIT_FAIL_CLOSED: "true"
+      TUTOR_ENABLED: "true"
+      TUTOR_MESSAGES_PER_DAY: ${TUTOR_MESSAGES_PER_DAY:-30}
+      TUTOR_TOKENS_PER_DAY: ${TUTOR_TOKENS_PER_DAY:-100000}
+      TUTOR_MAX_CONCURRENT_STREAMS: ${TUTOR_MAX_CONCURRENT_STREAMS:-2}
+      P50_ENABLED: "true"
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+
+  worker:
+    environment:
+      TUTOR_ENABLED: "true"
+      TUTOR_MESSAGES_PER_DAY: ${TUTOR_MESSAGES_PER_DAY:-30}
+      TUTOR_TOKENS_PER_DAY: ${TUTOR_TOKENS_PER_DAY:-100000}
+      TUTOR_MAX_CONCURRENT_STREAMS: ${TUTOR_MAX_CONCURRENT_STREAMS:-2}
+      P50_ENABLED: "true"
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+
+  beat:
+    environment:
+      TUTOR_ENABLED: "true"
+      TUTOR_MESSAGES_PER_DAY: ${TUTOR_MESSAGES_PER_DAY:-30}
+      TUTOR_TOKENS_PER_DAY: ${TUTOR_TOKENS_PER_DAY:-100000}
+      P50_ENABLED: "true"
+      RAG_ENABLED: ${RAG_ENABLED:-false}
