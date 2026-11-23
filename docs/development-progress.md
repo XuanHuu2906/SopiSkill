@@ -26,8 +26,13 @@
     - **Live Redis 7 distributed sliding-window Lua rate-limit:** 10 lần `POST /v1/auth/login` → `401`, lần 11 → **`429 RATE_LIMITED`** kèm `Retry-After: 60`; xác minh trực tiếp trên Redis 7: `1` key, `ZCARD=10`, `PTTL=60996ms`.
     - **Live `/health`, `/ready` & Wave 3 activation:** `GET /ready` trả **`200 ready`** (`checks: {database: "ok", redis: "ok", config: "ok"}` + baseline security headers); `GET /v1/courses/{id}/tutor/usage` xác nhận quota `messagesPerDay=30`, `tokensPerDay=100000`, `maxConcurrentStreams=2`; các route P5.0 (`mastery`, `learning-path`, `reviews/due`) trả `200`.
     - **Live PostgreSQL Backup → SHA-256 Verify → Isolated Restore Drill:** `pg_dump --format=custom` (`87,928` bytes, `sha256: 2b0d9a443dc8...`) → `pg_backup_restore.py verify` (`ok: true`, `PGDMP` + SHA-256 khớp) → `pg_restore` vào DB tách biệt `ailp_restore_drill` → `psql` xác nhận `alembic_head=0017_p1_course_language`, `table_count=28` (27 bảng + `alembic_version`), `users=2`, `courses=1`; đã dọn sạch `ailp_restore_drill` và `/tmp/sopiskill_live_backup`.
-- **Phát hiện vận hành & NOT TESTED:**
-  - `docker compose up` bị lỗi kéo image `minio/minio:latest` (`pull access denied` từ Docker Hub) — cần đổi tag/registry MinIO khả dụng (hoặc image S3-compatible khác) nếu dựng full container `minio`.
+- **Docker Full-Stack 7-Container Live Verification (`docker compose -f docker-compose.yml -f docker-compose.wave3.yml up -d --build`):**
+  - Đổi image `minio` trong `docker-compose.yml` từ `minio/minio:latest` (đã bị gỡ khỏi Docker Hub) sang `${MINIO_IMAGE:-pgsty/minio:latest}` (UBI9 drop-in build) kèm healthcheck `["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]`.
+  - **7/7 containers UP & HEALTHY:** `db`, `redis`, `minio` (healthy), `backend`, `worker` (`celery inspect ping`: `1 node online`), `beat`, `frontend`.
+  - `GET http://127.0.0.1:8001/ready` → `200 OK` (`database=ok`, `redis=ok`, `config=ok`, security headers); `GET http://127.0.0.1:3000/` → `200 OK` + security headers; `alembic current` = `0017_p1_course_language (head)`.
+  - **Live MinIO S3 (`:9000`) + PostgreSQL 16 concurrency tests:** `test_p40_postgres_concurrency.py` + `test_p42_postgres_concurrency.py` với `SOURCE_STORAGE_BACKEND=s3` → **4 passed (4.36s)** (dọn DB scratch `ailp_minio_test`).
+  - **Live Full-Stack E2E (`:8001` + Celery worker + Postgres + Redis + MinIO):** tạo khóa `language="en"` → 5 câu interview (`intermediate`) → `approve` → worker sinh `4/4` bài `ready` (`dispatched=True`) → `GET /v1/lessons/{id}` có `6` blocks & `0` answer key leak → Tutor SSE trả `event: done` & `tutor/usage` ghi `messages=1` trên trần `30/100000`.
+- **Còn lại NOT TESTED (ngoài phạm vi máy local):**
   - Real-LLM re-eval lại 12 topics với `judges.py` v2 (chưa gọi vì tốn phí API — chờ owner duyệt).
   - Staging TLS termination + reverse-proxy CSP header thật và benchmark semantic embedding (`EMBEDDING_PROVIDER=openai_compatible`) trước khi mở `RAG_ENABLED`.
 
