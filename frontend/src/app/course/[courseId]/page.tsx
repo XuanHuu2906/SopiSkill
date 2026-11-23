@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/Progress";
 import Icon from "@/components/ui/Icon";
+import VocabSheet from "@/components/course/VocabSheet";
 
 interface CourseDetail {
   id: string;
@@ -106,6 +107,7 @@ function LockGlyph() {
 export default function CoursePage() {
   const { courseId } = useParams<{ courseId: string }>();
   const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
+  const [vocabOpen, setVocabOpen] = useState(false);
   const courseKey = useSessionQueryKey("course", courseId);
   const sourcesKey = useSessionQueryKey("course-sources", courseId);
 
@@ -196,15 +198,23 @@ export default function CoursePage() {
             </span>
           </div>
         </div>
-        {resumeLessonId ? (
-          <ButtonLink href={`/lesson/${resumeLessonId}`} size="md" className="course-resume">
-            <Icon name="play" size={16} />
-            Tiếp tục
-          </ButtonLink>
-        ) : (
-          <Badge tone="muted">Đã hết bài</Badge>
-        )}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <Button variant="secondary" size="md" onClick={() => setVocabOpen(true)}>
+            <Icon name="learn" size={16} />
+            Thuật ngữ
+          </Button>
+          {resumeLessonId ? (
+            <ButtonLink href={`/lesson/${resumeLessonId}`} size="md" className="course-resume">
+              <Icon name="play" size={16} />
+              Tiếp tục
+            </ButtonLink>
+          ) : (
+            <Badge tone="muted">Đã hết bài</Badge>
+          )}
+        </div>
       </div>
+
+      <VocabSheet courseId={courseId} open={vocabOpen} onClose={() => setVocabOpen(false)} />
 
       {course.isLoading && (
         <div className="course-timeline">

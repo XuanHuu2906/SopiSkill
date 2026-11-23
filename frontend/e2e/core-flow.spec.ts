@@ -257,3 +257,75 @@ test("session cache isolation across account switch A -> B", async ({ page }) =>
   await page.goto("/");
   await expect(page.getByText(secretTopic)).toHaveCount(0);
 });
+
+test("Wave 4: proposal edit, glossary VocabSheet, per-block check, and settings/delete", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("wave4");
+  await registerUser(page, email);
+
+  // 1. Create course and reach /new/proposal, then edit proposal inline (v1 -> v2)
+  await page.goto("/new");
+  await page.getByRole("button", { name: "English" }).click();
+  await page.locator("#topic-input").fill("Wave 4 Systems");
+  await page.getByRole("button", { name: "Bắt đầu" }).click();
+  await page.waitForURL("**/new/interview?courseId=*");
+
+  const answers = [
+    "Intermediate developer.",
+    "Learn practical patterns.",
+    "4 hours per week.",
+    "Hands-on examples.",
+    "Balanced depth.",
+  ];
+  for (let i = 0; i < answers.length; i++) {
+    await expect(page.locator(".flow-header-meta")).toHaveText(`Câu ${i + 1}/5`);
+    await page.locator("#interview-answer").fill(answers[i]);
+    const label = i === 4 ? "Gửi câu trả lời cuối" : "Câu tiếp theo";
+    await page.getByRole("button", { name: label }).click();
+  }
+  await page.waitForURL("**/new/proposal?courseId=*");
+
+  await page.getByRole("button", { name: "Chỉnh sửa" }).click();
+  await page.getByLabel("Tên khóa học").fill("Wave 4 Custom Plan");
+  await page.getByRole("button", { name: "Lưu thay đổi" }).click();
+  await expect(page.getByText("Đã lưu đề xuất phiên bản 2.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Wave 4 Custom Plan" })).toBeVisible();
+
+  // Approve and wait for course ready
+  await page.getByRole("button", { name: "Tạo khóa học" }).click();
+  await page.waitForURL("**/course/crs_*", { timeout: 20_000 });
+
+  // 2. Open VocabSheet on course page and run axe-core scan
+  await page.getByRole("button", { name: "Thuật ngữ" }).click();
+  const vocabDialog = page.getByRole("dialog", { name: "Bảng thuật ngữ" });
+  await expect(vocabDialog).toBeVisible();
+  await expect(vocabDialog.getByText(/thuật ngữ/i).first()).toBeVisible();
+  await expectNoAxeViolations(page);
+  await page.keyboard.press("Escape");
+  await expect(vocabDialog).toBeHidden();
+
+  // 3. Enter first lesson, step to MC question, and use instant server-side per-block check
+  await page.getByRole("link", { name: "Tiếp tục" }).click();
+  await page.waitForURL("**/lesson/lsn_*");
+  await page.locator(".lesson-bar-primary").click();
+  await page.locator('[role="radio"]').first().click();
+  await page.getByRole("button", { name: "Kiểm tra câu này" }).click();
+  await expect(page.getByRole("status").first()).toBeVisible();
+
+  // 4. Visit /settings, verify stats + axe-core, update display name, and delete account
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Hồ sơ & Cài đặt" })).toBeVisible();
+  await expect(page.getByText("Khóa học sẵn sàng")).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  await page.getByLabel("Tên hiển thị").fill("Wave4 Learner");
+  await page.getByRole("button", { name: "Lưu thay đổi" }).click();
+  await expect(page.getByText("Đã cập nhật tên hiển thị.")).toBeVisible();
+
+  await page.getByLabel("Mật khẩu hiện tại").fill(PASSWORD);
+  await page.getByLabel(/Nhập chính xác/).fill("DELETE");
+  await page.getByRole("button", { name: "Xóa vĩnh viễn tài khoản" }).click();
+  await page.waitForURL("**/login*", { timeout: 10_000 });
+});

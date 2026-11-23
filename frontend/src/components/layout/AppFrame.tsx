@@ -15,6 +15,7 @@ const NAV: { href: string; label: string; icon: IconName; match: (p: string) => 
   { href: "/new", label: "Khóa học mới", icon: "plus", match: (p) => p.startsWith("/new") },
   { href: "/sources", label: "Tài liệu", icon: "book", match: (p) => p.startsWith("/sources") },
   { href: "/review", label: "Ôn tập", icon: "sparkle", match: (p) => p.startsWith("/review") },
+  { href: "/settings", label: "Cài đặt", icon: "settings", match: (p) => p.startsWith("/settings") },
 ];
 
 function courseIsActive(pathname: string, courseId: string) {

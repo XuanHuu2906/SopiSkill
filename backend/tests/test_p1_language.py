@@ -281,7 +281,9 @@ def test_migration_0017_single_head_and_roundtrip(tmp_path):
 
     cfg = Config("alembic.ini")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["0017_p1_course_language"]
+    # Graph chỉ có đúng một head duy nhất và chứa revision 0017_p1_course_language.
+    assert len(script.get_heads()) == 1
+    assert script.get_revision("0017_p1_course_language") is not None
     assert "language" in Base.metadata.tables["courses"].c
 
     mig_path = (

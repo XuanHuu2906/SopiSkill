@@ -1072,3 +1072,27 @@ class RecommendationEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class CourseGlossaryTerm(Base):
+    """Thuật ngữ của khóa học rút trích từ `teach` blocks (Wave 4 / P1-GLOSSARY)."""
+
+    __tablename__ = "course_glossary_terms"
+    __table_args__ = (
+        UniqueConstraint("course_id", "term_key", name="uq_course_glossary_term_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE"), index=True
+    )
+    lesson_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("lessons.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    term_key: Mapped[str] = mapped_column(String(120))
+    term: Mapped[str] = mapped_column(Text)
+    definition: Mapped[str] = mapped_column(Text)
+    example: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

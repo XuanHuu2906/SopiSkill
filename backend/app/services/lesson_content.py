@@ -17,6 +17,8 @@ import hashlib
 import hmac
 import logging
 import random
+import re
+import unicodedata
 import uuid
 
 from app.core.config import get_settings
@@ -321,3 +323,87 @@ def is_completed(correct: int, total: int) -> bool:
     if total <= 0:
         return False
     return correct * 100 >= total * COMPLETION_THRESHOLD_PERCENT
+
+
+# ---------- Wave 4 / GAP-11: Per-block grading + short-answer semantic rubric ----------
+
+_NON_WORD_RE = re.compile(r"[^\w\s]+", re.UNICODE)
+
+
+def _fold_tokens(text: str) -> list[str]:
+    """Chuẩn hóa câu trả lời ngắn: bỏ dấu tiếng Việt, bỏ dấu câu, tách từ."""
+    raw = (text or "").strip().lower().replace("đ", "d")
+    nfkd = unicodedata.normalize("NFKD", raw)
+    no_accents = "".join(ch for ch in nfkd if not unicodedata.combining(ch))
+    cleaned = _NON_WORD_RE.sub(" ", no_accents)
+    return [tok for tok in cleaned.split() if tok]
+
+
+def short_semantic_match(block: dict, answer) -> bool:
+    """Rubric deterministic cho `short`: chấp nhận khác biệt dấu câu/dấu/từ đồng dạng khi đủ ý."""
+    if not isinstance(answer, str) or not answer.strip():
+        return False
+    ans_tokens = _fold_tokens(answer)
+    if not ans_tokens:
+        return False
+    ans_joined = " ".join(ans_tokens)
+    ans_set = set(ans_tokens)
+
+    for raw_accepted in block.get("acceptedAnswers", []):
+        acc_tokens = _fold_tokens(str(raw_accepted))
+        if not acc_tokens:
+            continue
+        acc_joined = " ".join(acc_tokens)
+        if ans_joined == acc_joined:
+            return True
+        # Nếu đáp án mẫu có >= 2 từ và câu trả lời khớp >= 80% từ khóa cốt lõi
+        # (không quá dài dòng lan man để tránh nhồi từ khóa), coi là đạt rubric.
+        if len(acc_tokens) >= 2:
+            acc_set = set(acc_tokens)
+            recall = len(acc_set & ans_set) / len(acc_set)
+            precision = len(acc_set & ans_set) / len(ans_set)
+            if recall >= 0.8 and precision >= 0.5:
+                return True
+    return False
+
+
+def grade_single_block(
+    lesson_id: uuid.UUID | str,
+    content_version: int,
+    blocks: list[dict],
+    block_index: int,
+    answer,
+) -> dict:
+    """Chấm 1 block câu hỏi phía server (Wave 4 / GAP-11). Không gửi answer key trước khi chấm."""
+    block = blocks[block_index]
+    btype = block.get("type", "")
+    exact_ok = _is_correct(block, answer, lesson_id, content_version, block_index)
+    grader = "deterministic"
+    ok = exact_ok
+
+    if btype == "short" and not exact_ok and short_semantic_match(block, answer):
+        ok = True
+        grader = "semantic_rubric"
+
+    if ok:
+        feedback = (
+            "Chính xác — câu trả lời khớp với ý chính theo tiêu chí chấm."
+            if grader == "semantic_rubric"
+            else "Chính xác!"
+        )
+    else:
+        feedback = (
+            "Chưa khớp đáp án mẫu. Bạn có thể xem gợi ý bên dưới hoặc bấm 'Yêu cầu chấm lại' nếu câu trả lời đúng ý."
+            if btype == "short"
+            else "Chưa chính xác. Hãy xem lại đáp án mẫu và giải thích trong bài."
+        )
+
+    return {
+        "blockIndex": block_index,
+        "type": btype,
+        "correct": ok,
+        "grader": grader,
+        "feedback": feedback,
+        "solution": solution_for(block, lesson_id, content_version, block_index),
+        "disputeAllowed": btype == "short" and not ok,
+    }

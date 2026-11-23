@@ -2,6 +2,33 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-23 — Wave 4 — Product Gaps Ưu tiên (`P1-PROPOSAL-EDIT`, `P1-GLOSSARY`, Per-Block Grading + Short Dispute Rubric, `M1-ME-SURFACE`)
+
+- Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).
+- **4.1 `P1-PROPOSAL-EDIT` (`GAP-08`, Decision D8):**
+  - Backend: thêm `PATCH /v1/courses/{courseId}/proposal` (`routes.py`, `course_service.update_proposal`, `ProposalUpdateRequest` với `extra="forbid"`). Khóa row course (`_lock_course_row`), yêu cầu optimistic `expectedVersion` (`409 PROPOSAL_VERSION_CONFLICT` kèm `currentVersion`), chặn sửa khi đã approve/generating/ready (`409 PROPOSAL_LOCKED`), giữ nguyên `learnerProfile` do server suy ra, tái kiểm `validate_proposal` + `pedagogy.normalize_curriculum`/`validate_curriculum`, tạo bản ghi `CourseProposal` mới (`version + 1`).
+  - Frontend: nâng cấp `frontend/src/app/new/proposal/page.tsx` thêm chế độ chỉnh sửa trực tiếp tên khóa, mục tiêu, outcomes, chương và danh sách bài học trước khi duyệt.
+- **4.2 `P1-GLOSSARY` (`GAP-06`, `GAP-14`):**
+  - Migration expand-only `backend/alembic/versions/0018_wave4_glossary.py` (nối `0017_p1_course_language`, 1 head duy nhất, `downgrade` sạch) tạo bảng `course_glossary_terms` (`UNIQUE(course_id, term_key)`).
+  - Backend: `glossary_service.py` chỉ rút trích thuật ngữ từ `teach` blocks (tuyệt đối không đọc block câu hỏi để không lộ answer key), tự động upsert trong `worker/generation.py`, và cung cấp `GET /v1/courses/{courseId}/glossary?lessonId=...` (owner-scoped).
+  - Frontend: component drawer accessible `frontend/src/components/course/VocabSheet.tsx` (tìm kiếm, lọc bài này / cả khóa học, `useModalPanel` focus trap, `tabIndex={0}` đạt WCAG 2.1 AA) gắn trên `/course/[courseId]` và `/lesson/[lessonId]`.
+- **4.3 Per-Block Server-Side Grading & AI Short-Answer Rubric Grader (`GAP-11`, Decision D8):**
+  - Backend: `POST /v1/lessons/{lessonId}/blocks/{blockIndex}/grade` (`lesson_content.grade_single_block`, `lesson_service.grade_lesson_block`, `BlockGradeRequest` từ chối `bool` + `extra="forbid"`). Chấm 100% phía server (`GET /v1/lessons/{id}` vẫn giữ 0 answer key); hỗ trợ rubric trùng khớp từ khóa chuẩn hóa dấu (`semantic_rubric`) và tùy chọn `dispute=true` gọi LLM rubric có giới hạn (bọc dữ liệu người học bằng `<<<LEARNER_START>>>...<<<LEARNER_END>>>` chống prompt injection, ghi nhận usage, fallback an toàn).
+  - Frontend: thêm nút **"Kiểm tra câu này"** và **"Yêu cầu chấm lại"** (khi `short` chưa đạt) ngay trên từng bước câu hỏi của `/lesson/[lessonId]` mà không đổi quy trình nộp bài lấy XP idempotent (`POST /attempts`).
+- **4.4 `M1-ME-SURFACE` & Account Settings (`GAP-03`, `GAP-21`):**
+  - Backend (`backend/app/api/v1/me.py`, `user_service.py`):
+    - `GET /v1/me/stats` trả thống kê học tập thực từ DB (XP, khóa học, bài hoàn thành, lượt làm bài, lịch ôn đến hạn).
+    - `PATCH /v1/me` cập nhật `displayName` (CSRF + rate-limit).
+    - `DELETE /v1/me` yêu cầu CSRF + xác nhận chữ `DELETE` + xác thực mật khẩu hiện tại, xóa sạch toàn bộ dữ liệu sở hữu theo đúng thứ tự FK trên 28 bảng trong 1 transaction và xóa cookie phiên/CSRF.
+  - Frontend: trang mới `frontend/src/app/settings/page.tsx` + mục điều hướng `Cài đặt` trên `AppFrame.tsx`.
+- **Kiểm chứng thực chạy (`2026-11-23`, 0 chi phí LLM thật):**
+  - `cd backend && .venv/bin/python -m pytest -q` → **840 passed, 31 skipped, 0 failed** (+8 test mới trong `test_wave4_product.py`; `test_p61_ci_contract.py` PASS).
+  - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
+  - **Live PostgreSQL 16.15 (`:5433`):** `alembic heads` = `0018_wave4_glossary (head)` → `upgrade head` → `downgrade -1` → `upgrade head` PASS; smoke test live cả 4 trụ cột Wave 4 + full FK-cascade `DELETE /v1/me` trên PostgreSQL 16.15 **PASS**.
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build && npm run test:e2e` → exit `0`, `12/12` pages (gồm `/settings`), **4 passed (10.3s)** trên Chromium thật + `axe-core` **0 violations** trên `VocabSheet`, `/settings`, `TutorPanel`, `OutlineSheet`.
+- **NOT TESTED:**
+  - Chạy `dispute=true` cho câu `short` với real LLM endpoint trực tiếp (đã kiểm chứng contract + delimiter + usage recording qua `httpx.MockTransport` trong `test_wave4_product.py`).
+
 ## 2026-11-23 — Judge Harness Fix + Wave 3 (Redis Rate-Limiter, `/ready`, Backup-Restore CLI, Controlled Activation Guardrails)
 
 - Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).

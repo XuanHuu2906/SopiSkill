@@ -551,6 +551,98 @@ class ProposalOut(BaseModel):
     payload: dict
 
 
+class ProposalUpdateRequest(BaseModel):
+    """Body của PATCH /v1/courses/{courseId}/proposal (Wave 4 / P1-PROPOSAL-EDIT).
+
+    Yêu cầu `expectedVersion` (optimistic concurrency) và không nhận `learnerProfile`
+    từ client — server giữ nguyên hồ sơ học viên đã suy từ phỏng vấn.
+    """
+
+    expectedVersion: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=200)
+    objective: str = Field(min_length=1, max_length=500)
+    units: list["ProposalUnit"] = Field(min_length=1, max_length=8)
+    outcomes: list[str] = Field(default_factory=list, max_length=8)
+
+    model_config = {"extra": "forbid"}
+
+
+class GlossaryTermOut(BaseModel):
+    id: str
+    termKey: str
+    term: str
+    definition: str
+    example: str | None = None
+    lessonId: str | None = None
+    lessonTitle: str | None = None
+
+
+class CourseGlossaryOut(BaseModel):
+    courseId: str
+    total: int
+    items: list[GlossaryTermOut] = Field(default_factory=list)
+
+
+class BlockGradeRequest(BaseModel):
+    """Body của POST /v1/lessons/{lessonId}/blocks/{blockIndex}/grade (Wave 4 / GAP-11)."""
+
+    contentVersion: int = Field(ge=1)
+    answer: str | int | list | dict | None = None
+    dispute: bool = False
+    disputeReason: str | None = Field(default=None, max_length=400)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("answer", mode="before")
+    @classmethod
+    def _reject_bool(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("answer không chấp nhận boolean")
+        return value
+
+
+class BlockGradeOut(BaseModel):
+    blockIndex: int
+    type: str
+    correct: bool
+    grader: Literal["deterministic", "semantic_rubric", "llm_rubric"]
+    feedback: str
+    # Trả đáp án mẫu CHỈ sau khi đã chấm block này (không bao giờ trả trên GET lesson).
+    solution: dict | None = None
+    disputeAllowed: bool = False
+
+
+class MeStatsOut(BaseModel):
+    """Thống kê học tập thực từ DB cho người dùng hiện tại (Wave 4 / M1-ME-SURFACE)."""
+
+    userId: str
+    email: str | None = None
+    displayName: str
+    xp: int
+    streakDays: int = 0
+    lastActiveDate: str | None = None
+    coursesTotal: int = 0
+    coursesReady: int = 0
+    lessonsCompleted: int = 0
+    lessonsTotal: int = 0
+    attemptsTotal: int = 0
+    reviewsDue: int = 0
+    createdAt: str | None = None
+
+
+class MeUpdateRequest(BaseModel):
+    displayName: str = Field(min_length=1, max_length=80)
+
+    model_config = {"extra": "forbid"}
+
+
+class MeDeleteRequest(BaseModel):
+    confirmText: str = Field(min_length=1, max_length=32)
+    password: str | None = Field(default=None, max_length=128)
+
+    model_config = {"extra": "forbid"}
+
+
 class GenerationOut(BaseModel):
     jobId: str
     status: str

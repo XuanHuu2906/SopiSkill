@@ -3,7 +3,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, citationStatusLabel, newClientId, type Citation } from "@/lib/api";
+import {
+  api,
+  citationStatusLabel,
+  gradeLessonBlock,
+  newClientId,
+  type BlockGradeResult,
+  type Citation,
+} from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
 import { Badge } from "@/components/ui/Badge";
 import { Button, ButtonLink, IconButton } from "@/components/ui/Button";
@@ -12,6 +19,7 @@ import { ProgressBar } from "@/components/ui/Progress";
 import Icon from "@/components/ui/Icon";
 import useModalPanel from "@/components/ui/useModalPanel";
 import useMediaQuery from "@/components/ui/useMediaQuery";
+import VocabSheet from "@/components/course/VocabSheet";
 import TutorPanel from "./TutorPanel";
 
 interface IdText {
@@ -219,6 +227,10 @@ export default function LessonPage() {
   const [step, setStep] = useState(0);
   const [tutorOpen, setTutorOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [vocabOpen, setVocabOpen] = useState(false);
+  const [blockChecks, setBlockChecks] = useState<Record<number, BlockGradeResult>>({});
+  const [checkingBlock, setCheckingBlock] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
   // The reference docks the tutor rail beside the lesson rather than covering
   // it, which needs room for both a 720 px column and a 400 px rail.
   const canDock = useMediaQuery("(min-width: 1024px)");
@@ -408,6 +420,11 @@ export default function LessonPage() {
         <IconButton aria-label="Mục lục bài học" onClick={() => setOutlineOpen(true)}>
           <Icon name="book" size={18} />
         </IconButton>
+        {lesson.data.courseId && (
+          <IconButton aria-label="Bảng thuật ngữ" onClick={() => setVocabOpen(true)}>
+            <Icon name="learn" size={18} />
+          </IconButton>
+        )}
       </div>
 
       {submitted && result ? (
@@ -595,6 +612,91 @@ export default function LessonPage() {
             </>
           )}
 
+          {current!.type !== "teach" && (
+            <div style={{ marginTop: 18 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!answeredCurrent || checkingBlock}
+                  onClick={async () => {
+                    if (!lesson.data) return;
+                    const single = buildAnswers(blocks, answerState, orderCandidates).find(
+                      (a) => a.index === safeStep
+                    );
+                    if (!single) return;
+                    setCheckingBlock(true);
+                    setCheckError(null);
+                    try {
+                      const res = await gradeLessonBlock(lessonId, safeStep, {
+                        contentVersion: lesson.data.contentVersion,
+                        answer: single.answer,
+                      });
+                      setBlockChecks((prev) => ({ ...prev, [safeStep]: res }));
+                    } catch (e) {
+                      setCheckError(e instanceof Error ? e.message : "Không kiểm tra được câu này.");
+                    } finally {
+                      setCheckingBlock(false);
+                    }
+                  }}
+                >
+                  {checkingBlock ? "Đang kiểm tra…" : "Kiểm tra câu này"}
+                </Button>
+                {blockChecks[safeStep]?.disputeAllowed && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={checkingBlock}
+                    onClick={async () => {
+                      if (!lesson.data) return;
+                      const single = buildAnswers(blocks, answerState, orderCandidates).find(
+                        (a) => a.index === safeStep
+                      );
+                      if (!single) return;
+                      setCheckingBlock(true);
+                      setCheckError(null);
+                      try {
+                        const res = await gradeLessonBlock(lessonId, safeStep, {
+                          contentVersion: lesson.data.contentVersion,
+                          answer: single.answer,
+                          dispute: true,
+                        });
+                        setBlockChecks((prev) => ({ ...prev, [safeStep]: res }));
+                      } catch (e) {
+                        setCheckError(e instanceof Error ? e.message : "Không thể chấm lại.");
+                      } finally {
+                        setCheckingBlock(false);
+                      }
+                    }}
+                  >
+                    Yêu cầu chấm lại
+                  </Button>
+                )}
+              </div>
+              {checkError && (
+                <div className="error-box" role="alert" style={{ marginTop: 10 }}>
+                  {checkError}
+                </div>
+              )}
+              {blockChecks[safeStep] && (
+                <div
+                  className={blockChecks[safeStep].correct ? "success-box" : "error-box"}
+                  role="status"
+                  style={{ marginTop: 10 }}
+                >
+                  <strong>{blockChecks[safeStep].correct ? "Chính xác!" : "Chưa chính xác"}</strong>{" "}
+                  — {blockChecks[safeStep].feedback}
+                  {blockChecks[safeStep].solution &&
+                    solutionText(current!, blockChecks[safeStep].solution!) && (
+                      <div className="caption" style={{ marginTop: 4 }}>
+                        Gợi ý đáp án: {solutionText(current!, blockChecks[safeStep].solution!)}
+                      </div>
+                    )}
+                </div>
+              )}
+            </div>
+          )}
+
           <p className="citation-line">{lesson.data.title}</p>
         </section>
       )}
@@ -664,6 +766,15 @@ export default function LessonPage() {
           setOutlineOpen(false);
         }}
       />
+
+      {lesson.data.courseId && (
+        <VocabSheet
+          courseId={lesson.data.courseId}
+          lessonId={lesson.data.id}
+          open={vocabOpen}
+          onClose={() => setVocabOpen(false)}
+        />
+      )}
 
       {lesson.data.courseId && (
         <TutorPanel

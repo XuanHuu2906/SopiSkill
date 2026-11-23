@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.api.v1.auth import router as auth_router
 from app.api.v1.learner import router as learner_router
+from app.api.v1.me import router as me_router
 from app.api.v1.research import router as research_router
 from app.api.v1.routes import router as v1_router
 from app.api.v1.sources import router as sources_router
@@ -62,6 +63,7 @@ async def security_headers_middleware(request: Request, call_next):
 
 
 app.include_router(auth_router)
+app.include_router(me_router)
 app.include_router(v1_router)
 app.include_router(sources_router)
 app.include_router(research_router)

@@ -334,6 +334,17 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
             # giữ citation của phiên bản nội dung cũ trỏ sang nguồn đã đổi.
             lesson_row.grounding = source_context_service.lesson_grounding(source_context)
             await db.flush()
+            # Wave 4 / P1-GLOSSARY — rút trích thuật ngữ từ `teach` blocks (không đụng câu hỏi).
+            try:
+                from app.services import glossary_service
+
+                await glossary_service.upsert_lesson_glossary(
+                    db, course.id, lesson_row.id, content.title, new_blocks
+                )
+            except Exception:  # pragma: no cover - phòng thủ, không chặn sinh bài
+                logger.warning(
+                    "glossary upsert skipped course=%s lesson=%s", course.id, lesson_row.id
+                )
             await citation_service.replace_lesson_citations(
                 db,
                 lesson_row,

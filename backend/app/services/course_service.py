@@ -23,7 +23,8 @@ from app.models import (
 from app.providers import LLMProvider, ProviderError, SchemaInvalidError
 from app.providers.base import accepts_language
 from app.providers.usage import collect_usage
-from app.schemas.schemas import ProposalPayload
+from app.providers.validation import validate_proposal
+from app.schemas.schemas import ProposalPayload, ProposalUpdateRequest
 from app.services import llm_usage_service, pedagogy
 from app.services.lesson_content import COMPLETION_THRESHOLD_PERCENT
 
@@ -236,6 +237,91 @@ async def get_latest_proposal(db: AsyncSession, course: Course) -> CourseProposa
         .limit(1)
     )
     return result.scalars().first()
+
+
+async def update_proposal(
+    db: AsyncSession,
+    course: Course,
+    body: ProposalUpdateRequest,
+) -> CourseProposal:
+    """Chỉnh sửa proposal có kiểm soát phiên bản (optimistic locking, Wave 4 / P1-PROPOSAL-EDIT).
+
+    - Khóa row course để tuần tự hóa với `approve_course` hoặc 2 tab cùng sửa.
+    - Chỉ cho sửa khi course đang ở trạng thái `proposed`, chưa approve, và chưa có job active.
+    - Giữ nguyên `learnerProfile` do server suy ra từ phỏng vấn (client không thể giả mạo).
+    - Tạo bản ghi `CourseProposal` mới (`version + 1`) thay vì ghi đè lịch sử.
+    """
+    course = await _lock_course_row(db, course.id)
+    if await _active_job(db, course.id) is not None or course.status != CourseStatus.proposed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PROPOSAL_LOCKED",
+                "message": f"Không thể chỉnh sửa đề xuất khi khóa học đang ở trạng thái {course.status.value}.",
+            },
+        )
+
+    latest = await get_latest_proposal(db, course)
+    if latest is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NO_PROPOSAL", "message": "Chưa có đề xuất để chỉnh sửa."},
+        )
+    if latest.approved_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "PROPOSAL_LOCKED", "message": "Đề xuất đã được duyệt, không thể chỉnh sửa."},
+        )
+    if latest.version != body.expectedVersion:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PROPOSAL_VERSION_CONFLICT",
+                "message": "Đề xuất đã thay đổi trên phiên bản mới hơn, hãy tải lại trước khi lưu.",
+                "currentVersion": latest.version,
+            },
+        )
+
+    prev_payload = latest.payload if isinstance(latest.payload, dict) else {}
+    cleaned_outcomes = [o.strip() for o in body.outcomes if o and o.strip()]
+    try:
+        candidate = ProposalPayload.model_validate(
+            {
+                "name": body.name.strip(),
+                "objective": body.objective.strip(),
+                "units": [
+                    {
+                        "title": u.title.strip(),
+                        "blurb": u.blurb.strip(),
+                        "lessonTitles": [t.strip() for t in u.lessonTitles if t and t.strip()],
+                    }
+                    for u in body.units
+                ],
+                "outcomes": cleaned_outcomes,
+                "learnerProfile": prev_payload.get("learnerProfile"),
+                "skills": [],
+                "prerequisites": [],
+            }
+        )
+        candidate = validate_proposal(candidate)
+        candidate = pedagogy.normalize_curriculum(candidate)
+        pedagogy.validate_curriculum(candidate)
+    except (SchemaInvalidError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "PROPOSAL_INVALID", "message": str(exc)[:300]},
+        ) from exc
+
+    new_row = CourseProposal(
+        course_id=course.id,
+        version=latest.version + 1,
+        payload=candidate.model_dump(),
+        approved_at=None,
+    )
+    db.add(new_row)
+    await db.commit()
+    await db.refresh(new_row)
+    return new_row
 
 
 async def _lock_course_row(db: AsyncSession, course_id: uuid.UUID) -> Course:

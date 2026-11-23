@@ -1,6 +1,7 @@
 from app.models.models import (
     CitationValidationStatus,
     Course,
+    CourseGlossaryTerm,
     CourseInterview,
     CourseProposal,
     CourseSource,
@@ -44,6 +45,7 @@ from app.models.models import (
 __all__ = [
     "CitationValidationStatus",
     "Course",
+    "CourseGlossaryTerm",
     "CourseInterview",
     "CourseProposal",
     "CourseSource",
