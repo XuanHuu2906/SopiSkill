@@ -14,14 +14,21 @@
   - **`OPS-005` Deep Readiness Probe & Baseline Security Headers (`backend/app/main.py`, `frontend/next.config.ts`):** thêm `GET /ready` kiểm tra `SELECT 1` DB + Redis `PING` (nếu cấu hình `REDIS_URL`) + `check_activation_readiness()`, trả `200 ready` / `503 not_ready` không lộ DSN/secret; thêm security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, và HSTS khi `COOKIE_SECURE=true` / `ENV=production`).
   - **`D7` Controlled Activation Guardrails (`backend/app/core/activation.py`, `docker-compose.wave3.yml`):** giữ mặc định OFF trong `config.py` và `docker-compose.yml`; bổ sung validator `python -m app.core.activation` bắt buộc `TUTOR_MESSAGES_PER_DAY > 0`, `TUTOR_TOKENS_PER_DAY > 0`, Redis rate-limit, `JWT_SECRET`, `COOKIE_SECURE=true`, `ALLOW_DEMO_HEADER=false` ở `ENV=production`, đồng thời cảnh báo khi `RAG_ENABLED=true` trên `hashing` baseline; cung cấp `docker-compose.wave3.yml` override bật `TUTOR_ENABLED=true` (`30` lượt/ngày, `100.000` tokens/ngày) + `P50_ENABLED=true` + Redis rate-limit fail-closed.
   - **`OPS-007` PostgreSQL Backup & Restore Drill Tooling (`backend/scripts/pg_backup_restore.py`, `docs/runbooks/p62-operations-and-activation.md`):** CLI 3 lệnh `backup` (`pg_dump --format=custom` + `.sha256` + `.meta.json` không secret), `verify` (header `PGDMP` + SHA-256), `restore-drill` (chặn ghi đè DB không chứa từ khóa `drill`/`restore`/`scratch`/`test`, verify + `pg_restore` + query `alembic_version` & đếm bảng cốt lõi).
-- **Kiểm chứng thực chạy (`2026-11-23`, 100% offline, 0 lời gọi API trả phí):**
-  - `cd backend && .venv/bin/python -m pytest -q` → **832 passed, 31 skipped, 0 failed** (+19 test mới: 3 test judge trong `test_p22_eval.py`, 16 test Wave 3 trong `test_wave3_ops.py`; `test_p61_ci_contract.py` PASS).
-  - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
-  - `cd backend && .venv/bin/python -m app.core.activation` → exit `0`, `"ok": true`.
-  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build && npm run test:e2e` → exit `0`, `11/11` pages, **3 passed (7.6s)** (`axe-core` 0 violations).
-- **NOT TESTED / BLOCKED (cần Docker daemon hoặc staging thật):**
-  - Live Redis container integration & live `pg_backup_restore.py restore-drill` trên PostgreSQL thật (Docker daemon trên máy đang tắt).
-  - Real-LLM re-eval lại 12 topics với `judges.py` v2 (không tự chạy vì tốn chi phí API — chờ owner duyệt nếu cần).
+- **Kiểm chứng thực chạy (`2026-11-23`, 0 lời gọi API trả phí):**
+  - **Offline unit/API/CI/E2E:**
+    - `cd backend && .venv/bin/python -m pytest -q` → **832 passed, 31 skipped, 0 failed** (+19 test mới: 3 test judge trong `test_p22_eval.py`, 16 test Wave 3 trong `test_wave3_ops.py`; `test_p61_ci_contract.py` PASS).
+    - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
+    - `cd backend && .venv/bin/python -m app.core.activation` → exit `0`, `"ok": true`.
+    - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build && npm run test:e2e` → exit `0`, `11/11` pages, **3 passed (7.6s)** (`axe-core` 0 violations).
+  - **Live Docker PostgreSQL 16.15 (`:5433`) + Live Redis 7 (`:6379`):**
+    - **Alembic migration roundtrip thật:** `alembic heads` (`0017_p1_course_language (head)` duy nhất) → `upgrade head` → `downgrade -1` → `upgrade head` → `downgrade base` → `upgrade head` **PASS** trên PostgreSQL 16.15.
+    - **PostgreSQL real concurrency/race tests (`11` files):** `POSTGRES_TEST_URL=...@127.0.0.1:5433/ailp_race_test SOURCE_STORAGE_BACKEND=memory pytest *postgres_concurrency*` → **29 passed, 0 failed (22.58s)**; đã dọn DB scratch `ailp_race_test`.
+    - **Live Redis 7 distributed sliding-window Lua rate-limit:** 10 lần `POST /v1/auth/login` → `401`, lần 11 → **`429 RATE_LIMITED`** kèm `Retry-After: 60`; xác minh trực tiếp trên Redis 7: `1` key, `ZCARD=10`, `PTTL=60996ms`.
+    - **Live `/health`, `/ready` & Wave 3 activation:** `GET /ready` trả **`200 ready`** (`checks: {database: "ok", redis: "ok", config: "ok"}` + baseline security headers); `GET /v1/courses/{id}/tutor/usage` xác nhận quota `messagesPerDay=30`, `tokensPerDay=100000`, `maxConcurrentStreams=2`; các route P5.0 (`mastery`, `learning-path`, `reviews/due`) trả `200`.
+    - **Live PostgreSQL Backup → SHA-256 Verify → Isolated Restore Drill:** `pg_dump --format=custom` (`87,928` bytes, `sha256: 2b0d9a443dc8...`) → `pg_backup_restore.py verify` (`ok: true`, `PGDMP` + SHA-256 khớp) → `pg_restore` vào DB tách biệt `ailp_restore_drill` → `psql` xác nhận `alembic_head=0017_p1_course_language`, `table_count=28` (27 bảng + `alembic_version`), `users=2`, `courses=1`; đã dọn sạch `ailp_restore_drill` và `/tmp/sopiskill_live_backup`.
+- **Phát hiện vận hành & NOT TESTED:**
+  - `docker compose up` bị lỗi kéo image `minio/minio:latest` (`pull access denied` từ Docker Hub) — cần đổi tag/registry MinIO khả dụng (hoặc image S3-compatible khác) nếu dựng full container `minio`.
+  - Real-LLM re-eval lại 12 topics với `judges.py` v2 (chưa gọi vì tốn phí API — chờ owner duyệt).
   - Staging TLS termination + reverse-proxy CSP header thật và benchmark semantic embedding (`EMBEDDING_PROVIDER=openai_compatible`) trước khi mở `RAG_ENABLED`.
 
 ## 2026-11-22 — Wave 1 + Wave 2 — Repo Hygiene, Playwright E2E + Axe-core, P1-LEVEL-FIT, P1-LANG (0017), P1-CONTENT-TRUNC
