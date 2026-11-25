@@ -5323,3 +5323,39 @@ button.tutor-chip:disabled,
   background: var(--ember);
   color: #ffffff;
 }
+
+
+/* ---------- Phase 8: Offline-First Bar & Pending Sync ---------- */
+
+.offline-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--ember);
+  background: var(--wash);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.offline-bar.is-offline {
+  border-color: var(--clay);
+}
+
+.offline-bar-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.complete-pending-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}

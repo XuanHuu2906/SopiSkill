@@ -9,14 +9,16 @@ import {
   type UnitBreakdownItem,
 } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../../providers";
+import { useOffline } from "@/components/offline/OfflineProvider";
 import { Badge } from "@/components/ui/Badge";
-import { ButtonLink } from "@/components/ui/Button";
+import { Button, ButtonLink } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 
 interface CompleteAttemptSnapshot {
   attemptId: string;
   duplicate: boolean;
+  pendingSync?: boolean;
   lessonTitle: string;
   courseId: string | null;
   score: { correct: number; total: number };
@@ -58,6 +60,7 @@ const CONFETTI_PIECES = [
 export default function LessonCompletePage() {
   const { lessonId } = useParams<{ lessonId: string }>();
   const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
+  const { isOnline, syncing, syncNow } = useOffline();
   const profileKey = useSessionQueryKey("me-profile");
 
   const [snapshot, setSnapshot] = useState<CompleteAttemptSnapshot | null>(null);
@@ -65,24 +68,42 @@ export default function LessonCompletePage() {
 
   const profile = useQuery({
     queryKey: profileKey,
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && isOnline,
     queryFn: fetchMeProfile,
     retry: false,
   });
 
+  const refetchProfile = profile.refetch;
+
   useEffect(() => {
     if (!lessonId || typeof window === "undefined") return;
-    try {
-      const raw = window.sessionStorage.getItem(`sopiskill:complete:${lessonId}`);
-      if (raw) {
-        setSnapshot(JSON.parse(raw) as CompleteAttemptSnapshot);
+    const readSnapshot = () => {
+      try {
+        const raw = window.sessionStorage.getItem(`sopiskill:complete:${lessonId}`);
+        if (raw) {
+          setSnapshot(JSON.parse(raw) as CompleteAttemptSnapshot);
+        }
+      } catch {
+        // ignore storage errors
       }
-    } catch {
-      // ignore storage errors
-    }
+    };
+    readSnapshot();
+
+    const onSynced = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ lessonId?: string }>).detail;
+      if (!detail?.lessonId || detail.lessonId === lessonId) {
+        readSnapshot();
+        void refetchProfile();
+      }
+    };
+    window.addEventListener("sopiskill:attempt-synced", onSynced);
+
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
     setAllowConfetti(!reduced);
-  }, [lessonId]);
+    return () => {
+      window.removeEventListener("sopiskill:attempt-synced", onSynced);
+    };
+  }, [lessonId, refetchProfile]);
 
   if (authLoading) return <p className="muted">Đang kiểm tra phiên đăng nhập…</p>;
   if (!isAuthenticated) return <p className="muted">Đang chuyển tới trang đăng nhập…</p>;
@@ -101,9 +122,34 @@ export default function LessonCompletePage() {
   const newlyEarned = snapshot?.newlyEarnedMilestones ?? [];
   const courseHref = snapshot?.courseId ? `/course/${snapshot.courseId}` : "/";
 
+  const isPendingSync = Boolean(snapshot?.pendingSync);
+
   return (
     <div className="reading-column complete-page" data-testid="lesson-complete-page">
-      {allowConfetti && (perfect || xpEarned > 0) && (
+      {isPendingSync && (
+        <Card variant="tint" style={{ marginBottom: 20 }}>
+          <div className="complete-pending-card" data-testid="complete-pending-sync">
+            <div>
+              <Badge tone="accent">Chờ đồng bộ ngoại tuyến</Badge>
+              <h1 className="block-title-sm" style={{ marginTop: 10 }}>
+                Đã lưu bài làm của bạn trên thiết bị
+              </h1>
+              <p className="muted" style={{ margin: "6px 0 0", fontSize: 14 }}>
+                Đáp án chỉ được chấm trên máy chủ để đảm bảo công bằng. Ngay khi có kết nối mạng,
+                SopiSkill sẽ tự động gửi câu trả lời thô lên máy chủ để chấm điểm, cộng XP và cập
+                nhật chuỗi ngày.
+              </p>
+            </div>
+            {isOnline && (
+              <Button size="md" disabled={syncing} onClick={() => void syncNow()}>
+                {syncing ? "Đang đồng bộ…" : "Đồng bộ ngay"}
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {!isPendingSync && allowConfetti && (perfect || xpEarned > 0) && (
         <div className="complete-confetti" aria-hidden="true">
           {CONFETTI_PIECES.map((p, idx) => (
             <span

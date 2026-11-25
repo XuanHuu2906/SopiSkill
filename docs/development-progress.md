@@ -2,6 +2,33 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 8 — Offline-First IndexedDB Cache (6 Stores), Raw-Answer Outbox & Smart Prefetch
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase8` (tách từ `feat/polyglot-phase7` `72c7340`, đã push `origin/feat/polyglot-phase7`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
+- **IMPLEMENTED:**
+  - **IndexedDB `sopiskill_offline_v1` — Đúng 6 Object Stores (`frontend/src/lib/offline/db.ts`):**
+    - `cached_courses`, `cached_lessons` (chỉ lưu `public_blocks`, có lớp lọc phòng thủ `stripForbiddenKeys` đảm bảo **0 answer key trên trình duyệt** và tự xóa ngay qua `invalidateStaleCachedLesson` khi `contentVersion` trên server tăng), `cached_glossary`, `outbox_attempts` (khóa chặt theo `outbox.owner = user.id`), `cached_reel_clips`, `local_prefs`.
+    - Cô lập tài khoản nghiêm ngặt: `clearOfflineDatabase()` xóa sạch cả 6 stores khi `logout`, và `ensureOfflineOwner(userId)` tự quét sạch nếu phát hiện đổi chủ sở hữu tài khoản A → B.
+  - **FIFO Raw-Answer Outbox (`frontend/src/lib/offline/outbox.ts`):**
+    - `enqueueOfflineAttempt` ghi câu trả lời thô vào `outbox_attempts` khi mất mạng hoặc lỗi kết nối; tuyệt đối không chấm điểm cục bộ.
+    - `flushOutboxAttempts` xả FIFO lên `core-api` `POST /v1/lessons/{id}/attempts` đúng theo `owner === currentUserId`, áp dụng exponential backoff `min(5s * 2^(attempts-1), 300s)` cho lỗi mạng/5xx, drop sạch lỗi `4xx` không thể phục hồi (trừ `401`), và phát sự kiện `sopiskill:attempt-synced` để nâng cấp trực tiếp màn `/lesson/[id]/complete` lên điểm & XP thật.
+  - **Smart Background Prefetch (`frontend/src/lib/offline/prefetch.ts` & `frontend/public/sw.js`):**
+    - Tải trước `path` + `glossary` + **3 bài `ready` tiếp theo** trên Wi-Fi (**1 bài** khi bật `saveData` hoặc mạng chậm `slow-2g/2g/3g`), bỏ qua các unit/lesson đang `paywalled`.
+    - Nâng cấp Service Worker `frontend/public/sw.js` cache App Shell/RSC/static chunk (tuyệt đối không cache `/v1/*` hay đáp án) giúp chuyển trang `/course/[id] → /lesson/[id] → /lesson/[id]/complete` mượt mà khi ngoại tuyến hoàn toàn.
+  - **UI & Tích hợp (`OfflineProvider.tsx`, `OfflineBar.tsx`, `providers.tsx`, `AppFrame.tsx`, `CoursePage`, `LessonPage`, `CompletePage`, `VocabSheet`):**
+    - Bật `networkMode: "always"` trên các query có fallback IndexedDB (`useAuth`, `CoursePage`, `LessonPage`, `VocabSheet`), hiển thị `OfflineBar` rõ ràng khi ngoại tuyến/đang đồng bộ, và trạng thái `Chờ đồng bộ ngoại tuyến` trên `/lesson/[lessonId]/complete` tự cập nhật sang kết quả thật ngay khi có mạng.
+- **TESTED (100% offline/mock + live 8-container Docker polyglot stack, 0đ chi phí):**
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8080 npm run build` → **exit `0`** (`0` warnings, `16/16` routes).
+  - `docker compose -f deploy/docker-compose.yml up -d --build frontend` → **8/8 container UP & HEALTHY**.
+  - `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8080 E2E_FRONTEND_PORT=3010 npm run test:e2e` → **exit `0` (`11 passed in 40.4s`, `axe-core` 0 violations)** — kịch bản #11 xác minh:
+    - IndexedDB `sopiskill_offline_v1` có đủ 6 stores và **0 answer key** trong `cached_lessons`.
+    - `context.setOffline(true)` → hiện `OfflineBar` → mở Bài 1 từ cache → tra `VocabSheet` từ `cached_glossary` → hoàn thành & nộp bài ngoại tuyến → `/lesson/[id]/complete` hiện `Chờ đồng bộ ngoại tuyến` (`outbox_attempts = 1`).
+    - `context.setOffline(false)` → tự xả FIFO `outbox_attempts` (`0` còn lại), màn `/complete` tự chuyển sang `UnitBreakdown` & XP thật, trang chủ ghi nhận XP thật từ server.
+    - Cô lập `outbox.owner` khi chuyển tài khoản A → B (kể cả khi có bản ghi ngoại lai của A còn sót): `ensureOfflineOwner` xóa sạch và User B có `0` outbox & `0 XP`.
+- **NOT TESTED:**
+  - Mô phỏng thực tế trên thiết bị di động ở chế độ `saveData=true` / mạng `2g` vật lý (logic `computePrefetchBudget()` đã được cài đặt chuẩn theo `navigator.connection`).
+- **ROLLBACK:** Thuần Git + Docker (`frontend` only, không đổi schema DB hay `core-api`) — revert nhánh `feat/polyglot-phase8`.
+
 ## 2026-11-25 — Phase 7 — OAuth2 (Google/Apple), Rotating Refresh Sessions, Onboarding 4 Bước, i18n (`vi`/`en`) & Web Push
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase7` (tách từ `feat/polyglot-phase6` `264b7a4`, đã push `origin/feat/polyglot-phase6`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
