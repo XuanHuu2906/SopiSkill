@@ -2,6 +2,30 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 2 — `core-api/` (Spring Boot 3.4.5 · Java 21 LTS · Maven · Flyway `core`) & Cutover Parity Wave 4
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase2` (tách từ `feat/polyglot-phase1` `b256925`); giữ nguyên `backend/` cũ chưa xóa cho tới khi owner quyết định bước lưu trữ.
+- **IMPLEMENTED:**
+  - **Khung `core-api/` (`sopiskill-core-sb:local`, Java 21 LTS + Virtual Threads + Maven Wrapper `./mvnw`):**
+    - `core-api/pom.xml`, `core-api/Dockerfile` (`maven:3.9.9-eclipse-temurin-21` → `eclipse-temurin:21-jre` + ZGC), `core-api/src/main/resources/application.yml` (`spring.threads.virtual.enabled=true`, `server.shutdown=graceful`, Actuator `/actuator/health/{liveness,readiness}`, Springdoc `/v3/api-docs`).
+    - **Flyway Schema `core` (`V1__baseline_core_schema.sql`):** quản lý tách biệt `core.flyway_schema_history` với 24 bảng cốt lõi (`users`, `courses`, `course_interviews`, `course_proposals`, `generation_jobs`, `units`, `lessons`, `lesson_attempts` `UNIQUE(lesson_id, user_id, client_attempt_id)`, `xp_events`, `course_glossary_terms`, `sources`, `source_documents`, `course_sources`, `lesson_citations`, `source_research_runs`, `skills`, `lesson_skills`, `skill_mastery`, `review_cards`, `review_events`, `recommendation_events`, `tutor_threads`, `tutor_messages`, `tutor_tool_calls`, `tutor_usage_events`, `llm_usage_events`), tuyệt đối không chạm `rag.*`.
+    - **Security & Rate-Limit (`com.sopiskill.core.security`):** Spring Security 6 stateless (`DispatcherType.ASYNC` cho `SseEmitter`), JWT HS256 trong `HttpOnly` cookie `access_token`, CSRF double-submit `csrf_token` / `X-CSRF-Token` constant-time, Argon2id (`BouncyCastle`), Redis Lua sliding-window rate-limiter trả `Retry-After`, và baseline security headers.
+    - **Quiz Integrity & Learning Core (`PublicBlockProjector`, `LessonController`, `CourseController`, `GlossaryService`, `LearnerController`):** `PublicBlockProjector` lọc 100% answer key + trộn `order`/`match` tất định bằng `HMAC-SHA256(LESSON_SHUFFLE_SECRET, lessonId:version:blockIndex)`; chấm deterministic + per-block `/blocks/{index}/grade` + dispute sang `ai-api`; cập nhật `Attempt + XP + Streak + BKT/EWMA Mastery + FSRS Review` trong **1 `@Transactional`** có khóa dòng `SELECT ... FOR UPDATE` trên `core.users`; Proposal optimistic lock (`409 PROPOSAL_VERSION_CONFLICT`); auto Glossary từ `teach` blocks; `DELETE /v1/me` cascade `core.*` + `DELETE /internal/rag/users/{userId}`.
+    - **Tutor SSE Gateway, Sources & Internal HMAC Callbacks (`TutorController`, `SourcesAndResearchController`, `AiEngineClient`, `InternalHmacSigner`, `InternalCallbackController`):** proxy SSE `core-api → ai-api` bằng Java 21 Virtual Threads (`HTTP_1_1` + Resilience4j CircuitBreaker + chỉ gửi `publicBlocks`), đẩy job async vào Redis Streams `queue:ai:llm` / `queue:ai:ingest`, xác thực HMAC-SHA256 chống replay cho `/internal/jobs/{jobId}/complete` và `/internal/sources/{sourceId}/complete`.
+    - **Full 8-Container Polyglot Compose (`deploy/docker-compose.yml`):** nối `frontend (:3010)` → `core-api (:8080)` ↔ `ai-api (:8010)` + `ai-worker-llm` + `ai-worker-ingest` + `pgvector:pg16 (:5439)` + `redis:7 (:6380)` + `minio (:9010)`.
+- **TESTED (100% offline/mock + live 8-container Docker polyglot stack, 0đ chi phí):**
+  - `cd core-api && ./mvnw -B test` → **exit `0` (`Tests run: 2, Failures: 0, Errors: 0`, `7.95s`)** trên live PostgreSQL 16.16 (`pgvector:pg16`) + Redis 7 + `ai-api`:
+    - `PublicBlockProjectorTest`: 0 answer key leak, HMAC shuffle tất định & khác thứ tự gốc, chấm `mc`/`blank`/`order`/`match`/`short` bỏ dấu.
+    - `CoreApiIntegrationTest`: Flyway `core` V1, `/ready` 200, CSRF 403, live `core-api ↔ ai-api` interview & Tutor SSE (`event:delta` + `event:done`, 0 cảnh báo fallback), Proposal optimistic lock `409`, HMAC callback `401/200`, **20 luồng nộp bài đồng thời đúng 40 XP (0 double-XP)**, `DELETE /v1/me` 204.
+  - **Live 8-Container Cutover Gate (`deploy/docker-compose.yml`):**
+    - `docker compose -f deploy/docker-compose.yml ps` → **8/8 containers UP & HEALTHY** (`pgvector-db`, `redis`, `minio`, `ai-api`, `core-api` healthy; `ai-worker-llm`, `ai-worker-ingest`, `frontend` up).
+    - `GET :8080/actuator/health/readiness` → `{"status":"UP"}`; `GET :8080/ready` → `200 ready`; `GET :8080/v3/api-docs` → OpenAPI 3.1 hợp lệ.
+    - `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8080 E2E_FRONTEND_PORT=3010 npm run test:e2e` → **exit `0` (`5 passed in 15.1s`, `axe-core` 0 violations)** — **nguyên vẹn 100% bộ Playwright E2E không sửa Frontend**, chạy thật qua Redis Streams `queue:ai:llm` → `ai-worker-llm` → HMAC callback về `core-api`.
+- **NOT TESTED:**
+  - Real `OpenAICompatibleProvider` / real MinIO PDF upload end-to-end (giữ 0đ phí; presigned MinIO upload thuộc Phase 3).
+  - So sánh diff OpenAPI chi tiết từng schema của Springdoc `/v3/api-docs` so với `contracts/public-api.yaml` (đã xác minh runtime 100% tương thích qua 5/5 Playwright E2E + `CoreApiIntegrationTest`).
+- **ROLLBACK:** Thuần Git + Docker tách biệt — revert/xóa nhánh `feat/polyglot-phase2` và dừng `deploy/docker-compose.yml`; toàn bộ `backend/` và `docker-compose.yml` gốc + volumes cũ nguyên vẹn 100%.
+
 ## 2026-11-25 — Phase 1 — `ai-engine/` (Python 3.12 · `/internal/*` HMAC Replay · Redis Streams Workers · `pgvector` Schema `rag`)
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase1` (tách từ `feat/polyglot-phase0` `6265932`); giữ nguyên 100% `backend/` cũ và volume DB cũ theo `DEC-019`/`DEC-020`.

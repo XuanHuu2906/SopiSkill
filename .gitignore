@@ -54,3 +54,6 @@ backend/evals/reports/
 # Playwright E2E artifacts
 frontend/playwright-report/
 frontend/test-results/
+
+# Java / Maven build output
+core-api/target/

@@ -110,6 +110,57 @@ services:
       ai-api:
         condition: service_healthy
 
+  core-api:
+    image: sopiskill-core-sb:local
+    build:
+      context: ../core-api
+      dockerfile: Dockerfile
+    environment:
+      ENV: ${ENV:-development}
+      CORE_API_PORT: 8080
+      SPRING_DATASOURCE_URL: jdbc:postgresql://pgvector-db:5432/${POLYGLOT_PG_DB:-sopiskill}?currentSchema=core
+      SPRING_DATASOURCE_USERNAME: ${POLYGLOT_PG_USER:-sopiskill}
+      SPRING_DATASOURCE_PASSWORD: ${POLYGLOT_PG_PASSWORD:-sopiskill_password}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AI_ENGINE_URL: http://ai-api:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-service-token-change-me}
+      INTERNAL_HMAC_SECRET: ${INTERNAL_HMAC_SECRET:-dev-internal-hmac-secret-change-me}
+      CORS_ORIGINS: http://localhost:3010,http://127.0.0.1:3010,http://localhost:3000,http://127.0.0.1:3000
+      TUTOR_ENABLED: ${TUTOR_ENABLED:-true}
+      P50_ENABLED: ${P50_ENABLED:-true}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+    ports:
+      - "127.0.0.1:${CORE_API_HOST_PORT:-8080}:8080"
+    depends_on:
+      pgvector-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  frontend:
+    image: sopiskill-frontend-polyglot:local
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://127.0.0.1:${CORE_API_HOST_PORT:-8080}
+    environment:
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:${CORE_API_HOST_PORT:-8080}
+      PORT: 3000
+    ports:
+      - "127.0.0.1:${POLYGLOT_FRONTEND_PORT:-3010}:3000"
+    depends_on:
+      core-api:
+        condition: service_healthy
+
 volumes:
   sopiskill_pgvector_data:
   sopiskill_polyglot_redis:
