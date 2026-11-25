@@ -2,6 +2,31 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 1 — `ai-engine/` (Python 3.12 · `/internal/*` HMAC Replay · Redis Streams Workers · `pgvector` Schema `rag`)
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase1` (tách từ `feat/polyglot-phase0` `6265932`); giữ nguyên 100% `backend/` cũ và volume DB cũ theo `DEC-019`/`DEC-020`.
+- **IMPLEMENTED:**
+  - **Cấu trúc độc lập `ai-engine/` (`sopiskill-ai-py:local`, Python 3.12-slim):**
+    - `ai-engine/app/core/internal_auth.py`: `InternalAuthMiddleware` kiểm tra `X-Internal-Service-Token` bằng `hmac.compare_digest` + chữ ký HMAC-SHA256 chống replay (`X-Internal-Timestamp` ±300s, `X-Internal-Signature` = `sha256=<hex>`) + `X-Correlation-Id`; cung cấp `sign_internal_headers()` cho callback về `core-api`.
+    - `ai-engine/app/core/callback_client.py`: gửi callback có chữ ký HMAC-SHA256 + retry có trần & timeout về `POST {CORE_API_URL}/internal/jobs/{jobId}/complete` và `/internal/sources/{sourceId}/complete`.
+    - `ai-engine/app/agents/`: kế thừa & tái cấu trúc `pedagogy.py` (phủ định Wave 2), `validation.py` (completeness lint + 1-blank), `providers.py` (`MockProvider` mặc định 0đ + `OpenAICompatibleProvider` fail-fast + bọc `<<<LEARNER_START>>>...<<<LEARNER_END>>>`), `short_grader.py` (exact + rubric bỏ dấu + bounded LLM dispute), `tutor_agent.py` (3 tools `read_lesson`, `explain_deeper`, `read_source` + registry khe cắm 6 tools Phase 5, chỉ nhận `publicBlocks`, từ chối 422 mọi answer key).
+    - **Schema `rag` + `pgvector` (`ai-engine/alembic/versions/0001_init_rag_schema.py`):** quản lý tách biệt `rag.alembic_version` & `rag.document_chunks` (`embedding vector(256)` + HNSW cosine index `ix_rag_chunks_embedding_hnsw` + `tsv tsvector` GIN index `ix_rag_chunks_tsv_gin`), kết hợp Hybrid RAG Reciprocal Rank Fusion (`RRF`, `k=60`) khóa cứng theo `owner_id`/`course_id` trong `ai-engine/app/rag/repository.py`, `url_fetcher.py` (chống SSRF fail-closed), `extractor.py` (PDF/HTML/arXiv XML `defusedxml`/OCR fail-fast `OCR_NOT_CONFIGURED`), `storage.py` (MinIO/memory).
+    - **`ai-api` (`ai-engine/app/main.py`, `app/api/internal.py`):** `GET /health`, `GET /ready`, `POST /internal/interview/{questions,evaluate}`, `POST /internal/lessons/grade-short`, `POST /internal/tutor/stream` (SSE), `POST /internal/rag/search`, `DELETE /internal/rag/{users,courses,sources}/{id}`.
+    - **2 Redis Streams Workers (`ai-engine/app/workers/{streams,worker_llm,worker_ingest}.py`):** `XGROUP CREATE MKSTREAM`, `XREADGROUP`, `XAUTOCLAIM` thu hồi job treo, periodic heartbeat `worker:heartbeat:*`, bounded retries → `:dlq` trên `queue:ai:llm` và `queue:ai:ingest`.
+    - **Đóng gói polyglot sạch (`ai-engine/Dockerfile`, `deploy/docker-compose.yml`):** `pgvector/pgvector:pg16` (`127.0.0.1:5439`, volume mới `sopiskill_pgvector_data`), `redis:7-alpine` (`127.0.0.1:6380`), `pgsty/minio:latest` (`127.0.0.1:9010-9011`), cùng 3 workloads `ai-api` (`127.0.0.1:8010`), `ai-worker-llm`, `ai-worker-ingest` dùng chung 1 image `sopiskill-ai-py:local`.
+- **TESTED (100% offline/mock + live Docker `pgvector:pg16` + Redis 7, 0đ chi phí LLM/Cloud):**
+  - `docker compose -f deploy/docker-compose.yml up -d --build && docker compose -f deploy/docker-compose.yml ps` → **6/6 containers UP & HEALTHY** (`pgvector-db`, `redis`, `minio`, `ai-api` healthy; `ai-worker-llm`, `ai-worker-ingest` up, tạo đủ consumer groups & heartbeats trên Redis 7).
+  - `cd ai-engine && PGVECTOR_TEST_URL=...@127.0.0.1:5439/sopiskill REDIS_TEST_URL=redis://127.0.0.1:6380/0 AI_API_LIVE_URL=http://127.0.0.1:8010 ../backend/.venv/bin/python -m pytest -v` → **exit `0` (`15 passed, 0 failed, 0 skipped` trong `1.69s`)**, xác nhận:
+    - Alembic roundtrip thật trên `pgvector:pg16` (`upgrade head → downgrade base → upgrade head`), `rag.alembic_version`, `ix_rag_chunks_tsv_gin`, `ix_rag_chunks_embedding_hnsw`, Hybrid RAG RRF (`mode=hybrid_rrf`), 0 cross-tenant leak, cascade `delete_by_user`.
+    - Redis 7 `XREADGROUP` + `XAUTOCLAIM` thu hồi job từ consumer chết + heartbeat + DLQ routing.
+    - `ai-api` live container `/ready` `200`, từ chối `401` khi thiếu/sai token, sai HMAC, sửa body hoặc timestamp hết hạn (>300s), trả `422` khi payload Tutor chứa answer key.
+  - `cd ai-engine && ../backend/.venv/bin/python -m bandit -r app -q` → **exit `0` (0 findings, 0 `#nosec`)**.
+- **NOT TESTED:**
+  - Real `OpenAICompatibleProvider` / real semantic embedding API (đã kiểm contract + delimiter `<<<LEARNER_START>>>...<<<LEARNER_END>>>` qua `httpx.MockTransport`; chưa gọi API trả phí theo nguyên tắc 0đ).
+  - Optional OCR engines (`vietocr`/`rapidocr` không cài trong base image; đã test fail-fast `OCR_NOT_CONFIGURED`).
+  - Real `core-api` Spring Boot nhận callback trực tiếp (sẽ dựng và nối ở Phase 2).
+- **ROLLBACK:** Thuần Git + Docker tách biệt — xóa/revert nhánh `feat/polyglot-phase1` và dừng `deploy/docker-compose.yml`; toàn bộ `backend/` và `docker-compose.yml` gốc + volumes cũ hoàn toàn nguyên vẹn.
+
 ## 2026-11-25 — Phase 0 — UI Baseline Lock (`/profile`, `GlobalSopiSheet`, Course Switcher), Frozen Contracts (`contracts/*.yaml`) & `DEC-019..DEC-029`
 
 - Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` đã được commit cụm UI baseline (`169b6a3`), merge không ghi đè lịch sử (`a091ea7`) và push lên `origin/feat/p6.0-ci-pipeline`; toàn bộ công việc Phase 0 được tách nhánh sạch sang `feat/polyglot-phase0`.
