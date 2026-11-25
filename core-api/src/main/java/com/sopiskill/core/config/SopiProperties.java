@@ -33,7 +33,13 @@ public record SopiProperties(
         String s3AccessKey,
         String s3SecretKey,
         String s3Bucket,
-        String s3Region
+        String s3Region,
+        int xpLessonBase,
+        int xpPerfectBonus,
+        int heartsMax,
+        int heartsRefillMinutes,
+        boolean heartsEnforcementEnabled,
+        boolean leaguesEnabled
 ) {
     public List<String> corsOriginList() {
         if (corsOrigins == null || corsOrigins.isBlank()) {

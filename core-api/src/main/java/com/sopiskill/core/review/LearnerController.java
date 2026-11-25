@@ -3,6 +3,7 @@ package com.sopiskill.core.review;
 import com.sopiskill.core.common.ApiException;
 import com.sopiskill.core.common.IdCodec;
 import com.sopiskill.core.config.SopiProperties;
+import com.sopiskill.core.gamification.GamificationService;
 import com.sopiskill.core.security.AuthPrincipal;
 import com.sopiskill.core.security.CsrfValidator;
 import com.sopiskill.core.security.RateLimiterService;
@@ -44,17 +45,20 @@ public class LearnerController {
     private final SopiProperties props;
     private final CsrfValidator csrf;
     private final RateLimiterService rateLimiter;
+    private final GamificationService gamification;
 
     public LearnerController(
             JdbcClient jdbc,
             SopiProperties props,
             CsrfValidator csrf,
-            RateLimiterService rateLimiter
+            RateLimiterService rateLimiter,
+            GamificationService gamification
     ) {
         this.jdbc = jdbc;
         this.props = props;
         this.csrf = csrf;
         this.rateLimiter = rateLimiter;
+        this.gamification = gamification;
     }
 
     public record ReviewGradeRequest(
@@ -390,13 +394,25 @@ public class LearnerController {
                 .param("cid", cid)
                 .update();
 
+        Map<String, Object> heartInfo = gamification.refillHeartOnFsrsReview(uid, now);
+
         Map<String, Object> cardOut = new LinkedHashMap<>();
         cardOut.put("cardId", IdCodec.format("crd", cid));
         cardOut.put("lessonId", IdCodec.format("lsn", (UUID) card.get("lessonId")));
         cardOut.put("state", nextState);
         cardOut.put("dueAt", nextDue.toString());
         cardOut.put("lastReviewAt", now.toString());
-        return Map.of("card", cardOut, "eventId", IdCodec.format("rev", eventId), "duplicate", false);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("card", cardOut);
+        out.put("eventId", IdCodec.format("rev", eventId));
+        out.put("duplicate", false);
+        out.put("hearts", heartInfo.get("hearts"));
+        out.put("heartsMax", heartInfo.get("heartsMax"));
+        out.put("heartsRefilled", heartInfo.get("heartsRefilled"));
+        out.put("heartsRefillAt", heartInfo.get("heartsRefillAt"));
+        out.put("newlyEarnedMilestones", heartInfo.get("newlyEarnedMilestones"));
+        return out;
     }
 
     private void requireP50Enabled() {

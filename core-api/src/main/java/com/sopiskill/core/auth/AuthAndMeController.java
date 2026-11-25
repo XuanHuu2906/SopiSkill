@@ -3,6 +3,7 @@ package com.sopiskill.core.auth;
 import com.sopiskill.core.common.ApiException;
 import com.sopiskill.core.common.IdCodec;
 import com.sopiskill.core.config.SopiProperties;
+import com.sopiskill.core.gamification.GamificationService;
 import com.sopiskill.core.internal.AiEngineClient;
 import com.sopiskill.core.security.AuthPrincipal;
 import com.sopiskill.core.security.CsrfValidator;
@@ -43,6 +44,7 @@ public class AuthAndMeController {
     private final RateLimiterService rateLimiter;
     private final SopiProperties props;
     private final AiEngineClient aiEngineClient;
+    private final GamificationService gamification;
 
     public AuthAndMeController(
             JdbcClient jdbc,
@@ -51,7 +53,8 @@ public class AuthAndMeController {
             CsrfValidator csrfValidator,
             RateLimiterService rateLimiter,
             SopiProperties props,
-            AiEngineClient aiEngineClient
+            AiEngineClient aiEngineClient,
+            GamificationService gamification
     ) {
         this.jdbc = jdbc;
         this.passwordEncoder = passwordEncoder;
@@ -60,6 +63,7 @@ public class AuthAndMeController {
         this.rateLimiter = rateLimiter;
         this.props = props;
         this.aiEngineClient = aiEngineClient;
+        this.gamification = gamification;
     }
 
     public record RegisterRequest(
@@ -178,17 +182,32 @@ public class AuthAndMeController {
     public Map<String, Object> meStats(@AuthenticationPrincipal AuthPrincipal principal) {
         UUID uid = principal.userId();
         var user = jdbc.sql("""
-                SELECT id, email, display_name, xp, streak_days, last_active_date, created_at
+                SELECT id, email, display_name, xp, streak_days, best_streak_days,
+                       streak_freezes, hearts, hearts_refill_at, timezone, goal_lessons,
+                       last_active_date, created_at
                 FROM core.users WHERE id = :id
                 """)
                 .param("id", uid)
                 .query((rs, rowNum) -> {
+                    var ra = rs.getTimestamp("hearts_refill_at");
+                    var effectiveHearts = gamification.computeEffectiveHearts(
+                            rs.getInt("hearts"),
+                            ra == null ? null : ra.toInstant(),
+                            java.time.Instant.now()
+                    );
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("userId", IdCodec.format("usr", rs.getObject("id", UUID.class)));
                     m.put("email", rs.getString("email"));
                     m.put("displayName", rs.getString("display_name"));
                     m.put("xp", rs.getInt("xp"));
                     m.put("streakDays", rs.getInt("streak_days"));
+                    m.put("bestStreakDays", rs.getInt("best_streak_days"));
+                    m.put("streakFreezes", rs.getInt("streak_freezes"));
+                    m.put("hearts", effectiveHearts.hearts());
+                    m.put("heartsMax", effectiveHearts.heartsMax());
+                    m.put("heartsRefillAt", effectiveHearts.heartsRefillAt() == null ? null : effectiveHearts.heartsRefillAt().toString());
+                    m.put("timezone", rs.getString("timezone"));
+                    m.put("goalLessons", rs.getInt("goal_lessons"));
                     var lad = rs.getDate("last_active_date");
                     m.put("lastActiveDate", lad == null ? null : lad.toLocalDate().toString());
                     var ca = rs.getTimestamp("created_at");

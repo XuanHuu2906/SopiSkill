@@ -928,6 +928,10 @@ export interface ReviewGradeResult {
   };
   eventId: string;
   duplicate: boolean;
+  hearts?: number;
+  heartsMax?: number;
+  heartsRefilled?: boolean;
+  heartsRefillAt?: string | null;
 }
 
 export function fetchCourseMastery(courseId: string): Promise<CourseMastery> {
@@ -1077,6 +1081,13 @@ export interface MeStats {
   displayName: string;
   xp: number;
   streakDays: number;
+  bestStreakDays?: number;
+  streakFreezes?: number;
+  hearts?: number;
+  heartsMax?: number;
+  heartsRefillAt?: string | null;
+  timezone?: string;
+  goalLessons?: number;
   lastActiveDate: string | null;
   coursesTotal: number;
   coursesReady: number;
@@ -1207,4 +1218,147 @@ export function retryLesson(lessonId: string): Promise<{ lessonId: string; jobId
 
 export function prefetchLesson(lessonId: string): Promise<unknown> {
   return api<unknown>(`/v1/lessons/${lessonId}?prefetch=1`);
+}
+
+// ---------- Phase 6: Gamification, Hearts, Milestones, Home, Profile & Leagues ----------
+
+export interface WeekDayStat {
+  date: string;
+  dayOfWeek: number; // 1=Mon .. 7=Sun
+  isToday: boolean;
+  lessonsCompleted: number;
+  xpEarned: number;
+  attemptsCount: number;
+}
+
+export interface MilestoneItem {
+  id?: string;
+  code: string;
+  category: string;
+  title: string;
+  description: string;
+  ladder: boolean;
+  earned?: boolean;
+  earnedAt?: string | null;
+}
+
+export interface UnitBreakdownItem {
+  type: string;
+  label: string;
+  correct: number;
+  total: number;
+  accuracyPercent: number;
+}
+
+export interface WeekRecapOut {
+  days: WeekDayStat[];
+  lessonsThisWeek: number;
+  xpThisWeek: number;
+  activeDaysThisWeek: number;
+  todayLessons: number;
+  goalLessons: number;
+  goalReachedToday: boolean;
+}
+
+export interface HomeOut {
+  userId: string;
+  displayName: string;
+  timezone: string;
+  xp: number;
+  streakDays: number;
+  bestStreakDays: number;
+  streakFreezes: number;
+  hearts: number;
+  heartsMax: number;
+  heartsRefillAt: string | null;
+  heartsEnforcementEnabled: boolean;
+  leaguesEnabled: boolean;
+  reviewsDue: number;
+  weekRecap: WeekRecapOut;
+}
+
+export interface MeProfileOut {
+  userId: string;
+  email: string | null;
+  displayName: string;
+  createdAt: string | null;
+  timezone: string;
+  goalLessons: number;
+  xp: number;
+  streakDays: number;
+  bestStreakDays: number;
+  streakFreezes: number;
+  hearts: number;
+  heartsMax: number;
+  heartsRefillAt: string | null;
+  coursesTotal: number;
+  coursesReady: number;
+  lessonsCompleted: number;
+  lessonsTotal: number;
+  reviewsDue: number;
+  accuracyPercent: number;
+  weekChart: WeekDayStat[];
+  milestones: MilestoneItem[];
+  milestonesEarned: number;
+  milestonesTotal: number;
+  leaguesEnabled: boolean;
+}
+
+export interface LeagueStanding {
+  membershipId: string;
+  userId: string;
+  displayName: string;
+  weeklyXp: number;
+  rank: number;
+  outcome: "promoted" | "stayed" | "demoted" | null;
+  zone: "promotion" | "stay" | "demotion";
+  isMe: boolean;
+}
+
+export interface LeagueCohortOut {
+  cohortId: string;
+  tier: "bronze" | "silver" | "gold" | "sapphire" | "ruby";
+  weekStart: string;
+  settled: boolean;
+  settledAt: string | null;
+  tiers: string[];
+  cohortMaxSize: number;
+  memberCount: number;
+  promotionZone: number;
+  demotionZone: number;
+  myRank: number | null;
+  myWeeklyXp: number;
+  myOutcome: "promoted" | "stayed" | "demoted" | null;
+  standings: LeagueStanding[];
+}
+
+export interface LastLeagueOut {
+  hasPrevious: boolean;
+  cohort: LeagueCohortOut | null;
+}
+
+export function fetchHome(): Promise<HomeOut> {
+  return api<HomeOut>("/v1/home");
+}
+
+export function fetchMeProfile(): Promise<MeProfileOut> {
+  return api<MeProfileOut>("/v1/me/profile");
+}
+
+export function updateMePreferences(body: {
+  timezone?: string;
+  goalLessons?: number;
+}): Promise<{ timezone: string; goalLessons: number }> {
+  return api<{ timezone: string; goalLessons: number }>("/v1/me/preferences", {
+    method: "PATCH",
+    body,
+  });
+}
+
+export function fetchLeague(): Promise<LeagueCohortOut> {
+  return api<LeagueCohortOut>("/v1/league");
+}
+
+export function fetchLastLeague(): Promise<LastLeagueOut> {
+  return api<LastLeagueOut>("/v1/league/last");
 }

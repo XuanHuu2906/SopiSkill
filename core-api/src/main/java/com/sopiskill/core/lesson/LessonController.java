@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.sopiskill.core.common.ApiException;
 import com.sopiskill.core.common.IdCodec;
 import com.sopiskill.core.common.JsonHelper;
+import com.sopiskill.core.gamification.GamificationService;
 import com.sopiskill.core.internal.AiEngineClient;
 import com.sopiskill.core.security.AuthPrincipal;
 import com.sopiskill.core.security.CsrfValidator;
@@ -50,6 +51,7 @@ public class LessonController {
     private final CsrfValidator csrf;
     private final RateLimiterService rateLimiter;
     private final AiEngineClient aiEngine;
+    private final GamificationService gamification;
 
     public LessonController(
             JdbcClient jdbc,
@@ -57,7 +59,8 @@ public class LessonController {
             PublicBlockProjector projector,
             CsrfValidator csrf,
             RateLimiterService rateLimiter,
-            AiEngineClient aiEngine
+            AiEngineClient aiEngine,
+            GamificationService gamification
     ) {
         this.jdbc = jdbc;
         this.json = json;
@@ -65,6 +68,7 @@ public class LessonController {
         this.csrf = csrf;
         this.rateLimiter = rateLimiter;
         this.aiEngine = aiEngine;
+        this.gamification = gamification;
     }
 
     public record AnswerItem(@NotNull Integer index, Object answer) {}
@@ -237,9 +241,11 @@ public class LessonController {
             );
         }
 
-        // Lock user row (`SELECT ... FOR UPDATE`) to serialize concurrent attempt XP/streak/mastery writes!
+        // Lock user row (`SELECT ... FOR UPDATE`) to serialize concurrent attempt XP/streak/hearts/mastery/milestones/league writes!
+        Instant now = Instant.now();
         var userRow = jdbc.sql("""
-                SELECT xp, streak_days, last_active_date
+                SELECT xp, streak_days, best_streak_days, last_active_day, last_active_date,
+                       streak_freezes, hearts, hearts_refill_at, timezone
                 FROM core.users
                 WHERE id = :uid
                 FOR UPDATE
@@ -249,8 +255,15 @@ public class LessonController {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("xp", rs.getInt("xp"));
                     m.put("streakDays", rs.getInt("streak_days"));
-                    var lad = rs.getDate("last_active_date");
-                    m.put("lastActiveDate", lad == null ? null : lad.toLocalDate());
+                    m.put("bestStreakDays", rs.getInt("best_streak_days"));
+                    var lad = rs.getDate("last_active_day");
+                    if (lad == null) lad = rs.getDate("last_active_date");
+                    m.put("lastActiveDay", lad == null ? null : lad.toLocalDate());
+                    m.put("streakFreezes", rs.getInt("streak_freezes"));
+                    m.put("hearts", rs.getInt("hearts"));
+                    var ra = rs.getTimestamp("hearts_refill_at");
+                    m.put("heartsRefillAt", ra == null ? null : ra.toInstant());
+                    m.put("timezone", rs.getString("timezone"));
                     return m;
                 })
                 .single();
@@ -266,19 +279,52 @@ public class LessonController {
                 .param("lid", lid)
                 .param("uid", uid)
                 .param("cid", body.clientAttemptId().trim())
-                .query((rs, rowNum) -> Map.<String, Object>of(
-                        "attemptId", IdCodec.format("att", rs.getObject("id", UUID.class)),
-                        "duplicate", true,
-                        "score", Map.of("correct", rs.getInt("correct"), "total", rs.getInt("total")),
-                        "rewards", Map.of("xp", currentXp, "xpEarned", 0),
-                        "results", json.fromJson(rs.getString("results_json"), new TypeReference<List<Map<String, Object>>>() {}),
-                        "reviewCardCreated", false
-                ))
+                .query((rs, rowNum) -> {
+                    List<Map<String, Object>> storedResults = json.fromJson(
+                            rs.getString("results_json"),
+                            new TypeReference<List<Map<String, Object>>>() {}
+                    );
+                    var effectiveHearts = gamification.computeEffectiveHearts(
+                            ((Number) userRow.get("hearts")).intValue(),
+                            (Instant) userRow.get("heartsRefillAt"),
+                            now
+                    );
+                    Map<String, Object> rewards = new LinkedHashMap<>();
+                    rewards.put("xp", currentXp);
+                    rewards.put("xpEarned", 0);
+                    rewards.put("streakDays", userRow.get("streakDays"));
+                    rewards.put("bestStreakDays", userRow.get("bestStreakDays"));
+                    rewards.put("streakFreezes", userRow.get("streakFreezes"));
+                    rewards.put("freezeConsumed", false);
+                    rewards.put("freezeEarned", false);
+                    rewards.put("hearts", effectiveHearts.hearts());
+                    rewards.put("heartsMax", effectiveHearts.heartsMax());
+                    rewards.put("heartsRefillAt", effectiveHearts.heartsRefillAt() == null ? null : effectiveHearts.heartsRefillAt().toString());
+                    rewards.put("heartLost", false);
+
+                    Map<String, Object> dupOut = new LinkedHashMap<>();
+                    dupOut.put("attemptId", IdCodec.format("att", rs.getObject("id", UUID.class)));
+                    dupOut.put("duplicate", true);
+                    dupOut.put("score", Map.of("correct", rs.getInt("correct"), "total", rs.getInt("total")));
+                    dupOut.put("rewards", rewards);
+                    dupOut.put("results", storedResults);
+                    dupOut.put("unitBreakdown", GamificationService.buildUnitBreakdown(storedResults));
+                    dupOut.put("newlyEarnedMilestones", List.of());
+                    dupOut.put("reviewCardCreated", false);
+                    return dupOut;
+                })
                 .optional();
 
         if (existingOpt.isPresent()) {
             return existingOpt.get();
         }
+
+        // Enforce Hearts availability (409 OUT_OF_HEARTS when HEARTS_ENFORCEMENT_ENABLED=true and hearts==0)
+        gamification.checkHeartsAvailableOrThrow(
+                ((Number) userRow.get("hearts")).intValue(),
+                (Instant) userRow.get("heartsRefillAt"),
+                now
+        );
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> privateBlocks = (List<Map<String, Object>>) lesson.get("blocks");
@@ -306,7 +352,7 @@ public class LessonController {
         }
 
         boolean completed = PublicBlockProjector.isCompleted(correct, total);
-        int rawXp = correct * 10 + (total > 0 && correct == total ? 20 : 0);
+        int rawXp = gamification.computeRawLessonXp(correct, total, completed);
 
         Integer prevAwarded = jdbc.sql("""
                 SELECT COALESCE(SUM(xp_earned), 0)
@@ -320,7 +366,6 @@ public class LessonController {
                 .single();
         int alreadyAwarded = prevAwarded == null ? 0 : prevAwarded;
         int xpEarned = Math.max(0, rawXp - alreadyAwarded);
-        int newXp = currentXp + xpEarned;
 
         UUID attemptId = UUID.randomUUID();
         try {
@@ -352,32 +397,16 @@ public class LessonController {
                     "score", Map.of("correct", correct, "total", total),
                     "rewards", Map.of("xp", currentXp, "xpEarned", 0),
                     "results", results,
+                    "unitBreakdown", GamificationService.buildUnitBreakdown(results),
+                    "newlyEarnedMilestones", List.of(),
                     "reviewCardCreated", false
             );
         }
 
-        // Update XP + Streak inside the same ACID transaction
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
-        LocalDate lastActive = (LocalDate) userRow.get("lastActiveDate");
-        int streak = ((Number) userRow.get("streakDays")).intValue();
-        if (lastActive == null) {
-            streak = 1;
-        } else if (lastActive.equals(today.minusDays(1))) {
-            streak = streak + 1;
-        } else if (!lastActive.equals(today)) {
-            streak = 1;
-        }
-
-        jdbc.sql("""
-                UPDATE core.users
-                SET xp = :xp, streak_days = :streak, last_active_date = :today, updated_at = now()
-                WHERE id = :uid
-                """)
-                .param("xp", newXp)
-                .param("streak", streak)
-                .param("today", today)
-                .param("uid", uid)
-                .update();
+        // Update XP + Timezone Streak/Freeze + Hearts + Daily Activity + Milestones + League inside 1 ACID transaction
+        var gamResult = gamification.applyAttemptRewards(
+                uid, courseId, lid, userRow, correct, total, completed, xpEarned, now
+        );
 
         if (xpEarned > 0) {
             jdbc.sql("""
@@ -431,17 +460,32 @@ public class LessonController {
                 .param("uid", uid)
                 .param("cid", courseId)
                 .param("lid", lid)
-                .param("due", java.sql.Timestamp.from(Instant.now().plusSeconds(86400)))
+                .param("due", java.sql.Timestamp.from(now.plusSeconds(86400)))
                 .update();
 
-        return Map.of(
-                "attemptId", IdCodec.format("att", attemptId),
-                "duplicate", false,
-                "score", Map.of("correct", correct, "total", total),
-                "rewards", Map.of("xp", newXp, "xpEarned", xpEarned),
-                "results", results,
-                "reviewCardCreated", createdCard > 0
-        );
+        Map<String, Object> rewards = new LinkedHashMap<>();
+        rewards.put("xp", gamResult.newXp());
+        rewards.put("xpEarned", gamResult.xpEarned());
+        rewards.put("streakDays", gamResult.streak().streakDays());
+        rewards.put("bestStreakDays", gamResult.streak().bestStreakDays());
+        rewards.put("streakFreezes", gamResult.streak().streakFreezes());
+        rewards.put("freezeConsumed", gamResult.streak().freezeConsumed());
+        rewards.put("freezeEarned", gamResult.streak().freezeEarned());
+        rewards.put("hearts", gamResult.hearts().hearts());
+        rewards.put("heartsMax", gamResult.hearts().heartsMax());
+        rewards.put("heartsRefillAt", gamResult.hearts().heartsRefillAt() == null ? null : gamResult.hearts().heartsRefillAt().toString());
+        rewards.put("heartLost", gamResult.heartLost());
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("attemptId", IdCodec.format("att", attemptId));
+        resp.put("duplicate", false);
+        resp.put("score", Map.of("correct", correct, "total", total));
+        resp.put("rewards", rewards);
+        resp.put("results", results);
+        resp.put("unitBreakdown", GamificationService.buildUnitBreakdown(results));
+        resp.put("newlyEarnedMilestones", gamResult.newlyEarnedMilestones());
+        resp.put("reviewCardCreated", createdCard > 0);
+        return resp;
     }
 
     @PostMapping("/{lessonId}/blocks/{blockIndex}/grade")

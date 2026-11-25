@@ -104,8 +104,34 @@ interface AttemptOut {
   attemptId: string;
   duplicate: boolean;
   score: { correct: number; total: number };
-  rewards: { xp: number; xpEarned: number };
+  rewards: {
+    xp: number;
+    xpEarned: number;
+    streakDays?: number;
+    bestStreakDays?: number;
+    streakFreezes?: number;
+    freezeConsumed?: boolean;
+    freezeEarned?: boolean;
+    hearts?: number;
+    heartsMax?: number;
+    heartLost?: boolean;
+  };
   results: AttemptResult[];
+  unitBreakdown?: {
+    type: string;
+    label: string;
+    correct: number;
+    total: number;
+    accuracyPercent: number;
+  }[];
+  newlyEarnedMilestones?: {
+    id?: string;
+    code: string;
+    category: string;
+    title: string;
+    description: string;
+    ladder: boolean;
+  }[];
   reviewCardCreated?: boolean;
 }
 
@@ -376,10 +402,43 @@ export default function LessonPage() {
         body: payload,
       });
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       attemptKeyRef.current = null;
       queryClient.invalidateQueries({ queryKey: ["session"] });
       queryClient.invalidateQueries({ queryKey: ["me"] });
+      if (typeof window !== "undefined" && lesson.data) {
+        try {
+          const snapshot = {
+            attemptId: data.attemptId,
+            duplicate: data.duplicate,
+            lessonTitle: lesson.data.title,
+            courseId: lesson.data.courseId ?? null,
+            score: data.score,
+            rewards: data.rewards,
+            unitBreakdown: data.unitBreakdown ?? [],
+            newlyEarnedMilestones: data.newlyEarnedMilestones ?? [],
+            reviewCardCreated: data.reviewCardCreated ?? false,
+            results: data.results.map((r) => {
+              const blk = lesson.data.blocks[r.index];
+              return {
+                index: r.index,
+                type: r.type,
+                label: blk ? BLOCK_LABELS[blk.type] : r.type,
+                prompt: blk ? blockPrompt(blk) : "",
+                correct: r.correct,
+                solutionText: blk ? solutionText(blk, r.solution) : null,
+              };
+            }),
+          };
+          window.sessionStorage.setItem(
+            `sopiskill:complete:${lessonId}`,
+            JSON.stringify(snapshot),
+          );
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      router.push(`/lesson/${lessonId}/complete`);
     },
   });
 

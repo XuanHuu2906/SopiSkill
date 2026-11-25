@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { fetchCourses, fetchMeStats } from "@/lib/api";
+import { fetchCourses, fetchMeProfile } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../providers";
+import { Badge } from "@/components/ui/Badge";
 import { ButtonLink } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
 import { ProgressRing } from "@/components/ui/Progress";
 import { Skeleton, SkeletonStack } from "@/components/ui/Skeleton";
+import WeekChart from "@/components/gamification/WeekChart";
 
 function formatJoined(iso: string | null | undefined): string {
   if (!iso) return "Thành viên SopiSkill";
@@ -18,13 +21,13 @@ function formatJoined(iso: string | null | undefined): string {
 
 export default function ProfilePage() {
   const { user, isAuthenticated, isLoading: authLoading } = useRequireAuth();
-  const statsKey = useSessionQueryKey("me-stats");
+  const profileKey = useSessionQueryKey("me-profile");
   const coursesKey = useSessionQueryKey("courses", { limit: 20 });
 
-  const stats = useQuery({
-    queryKey: statsKey,
+  const profile = useQuery({
+    queryKey: profileKey,
     enabled: isAuthenticated,
-    queryFn: fetchMeStats,
+    queryFn: fetchMeProfile,
   });
 
   const courses = useQuery({
@@ -36,7 +39,8 @@ export default function ProfilePage() {
   if (authLoading) return <p className="muted">Đang kiểm tra phiên đăng nhập…</p>;
   if (!isAuthenticated) return <p className="muted">Đang chuyển tới trang đăng nhập…</p>;
 
-  const name = stats.data?.displayName ?? user?.displayName ?? "Người học";
+  const data = profile.data;
+  const name = data?.displayName ?? user?.displayName ?? "Người học";
   const initial = (name.trim()[0] ?? "S").toUpperCase();
 
   return (
@@ -49,8 +53,8 @@ export default function ProfilePage() {
           <div>
             <h1 className="page-title">{name}</h1>
             <p className="caption" style={{ marginTop: 4 }}>
-              {formatJoined(stats.data?.createdAt)}
-              {stats.data ? ` · ${stats.data.coursesTotal} khóa học` : ""}
+              {formatJoined(data?.createdAt)}
+              {data ? ` · ${data.coursesTotal} khóa học · Múi giờ ${data.timezone}` : ""}
             </p>
           </div>
         </div>
@@ -60,7 +64,7 @@ export default function ProfilePage() {
         </ButtonLink>
       </header>
 
-      {stats.isLoading && (
+      {profile.isLoading && (
         <div className="profile-stats-grid">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="profile-stat-tile">
@@ -72,50 +76,95 @@ export default function ProfilePage() {
         </div>
       )}
 
-      {stats.isError && (
+      {profile.isError && (
         <div className="error-box" role="alert">
-          Không tải được thống kê hồ sơ: {stats.error.message}
+          Không tải được thống kê hồ sơ: {profile.error.message}
         </div>
       )}
 
-      {stats.data && (
-        <section className="profile-stats-grid" aria-label="Tổng quan học tập">
-          <div className="profile-stat-tile">
-            <span className="profile-stat-icon" aria-hidden="true">
-              <Icon name="flame" size={18} />
-            </span>
-            <span className="profile-stat-value">{stats.data.streakDays}</span>
-            <span className="profile-stat-label">Chuỗi ngày liên tiếp</span>
-          </div>
-          <div className="profile-stat-tile">
-            <span className="profile-stat-icon" aria-hidden="true">
-              <Icon name="bolt" size={18} />
-            </span>
-            <span className="profile-stat-value">{stats.data.xp.toLocaleString("vi-VN")}</span>
-            <span className="profile-stat-label">Tổng XP tích lũy</span>
-          </div>
-          <div className="profile-stat-tile">
-            <span className="profile-stat-icon" aria-hidden="true">
-              <Icon name="checkCircle" size={18} />
-            </span>
-            <span className="profile-stat-value">
-              {stats.data.lessonsCompleted}/{stats.data.lessonsTotal}
-            </span>
-            <span className="profile-stat-label">Bài học hoàn thành</span>
-          </div>
-          <div className="profile-stat-tile">
-            <span className="profile-stat-icon" aria-hidden="true">
-              <Icon name="learn" size={18} />
-            </span>
-            <span className="profile-stat-value">
-              {stats.data.coursesReady}/{stats.data.coursesTotal}
-            </span>
-            <span className="profile-stat-label">Khóa học sẵn sàng</span>
-          </div>
-        </section>
+      {data && (
+        <>
+          <section className="profile-stats-grid" aria-label="Tổng quan học tập">
+            <div className="profile-stat-tile" data-testid="profile-streak">
+              <span className="profile-stat-icon" aria-hidden="true">
+                <Icon name="flame" size={18} />
+              </span>
+              <span className="profile-stat-value">{data.streakDays}</span>
+              <span className="profile-stat-label">
+                Chuỗi ngày (kỷ lục {data.bestStreakDays} · {data.streakFreezes} đóng băng)
+              </span>
+            </div>
+            <div className="profile-stat-tile" data-testid="profile-xp">
+              <span className="profile-stat-icon" aria-hidden="true">
+                <Icon name="bolt" size={18} />
+              </span>
+              <span className="profile-stat-value">{data.xp.toLocaleString("vi-VN")}</span>
+              <span className="profile-stat-label">Tổng XP tích lũy</span>
+            </div>
+            <div className="profile-stat-tile" data-testid="profile-accuracy">
+              <span className="profile-stat-icon" aria-hidden="true">
+                <Icon name="checkCircle" size={18} />
+              </span>
+              <span className="profile-stat-value">{data.accuracyPercent}%</span>
+              <span className="profile-stat-label">
+                Độ chính xác ({data.lessonsCompleted}/{data.lessonsTotal} bài)
+              </span>
+            </div>
+            <div className="profile-stat-tile" data-testid="profile-hearts">
+              <span className="profile-stat-icon" aria-hidden="true">
+                <Icon name="heart" size={18} />
+              </span>
+              <span className="profile-stat-value">
+                {data.hearts}/{data.heartsMax}
+              </span>
+              <span className="profile-stat-label">Tim hiện có (ôn FSRS hồi +1)</span>
+            </div>
+          </section>
+
+          <section aria-labelledby="profile-week-heading" style={{ marginTop: 28 }}>
+            <div className="section-head">
+              <h2 id="profile-week-heading" className="section-title">
+                Biểu đồ 7 ngày qua
+              </h2>
+              <Badge tone="accent">Mục tiêu {data.goalLessons} bài/ngày</Badge>
+            </div>
+            <Card>
+              <WeekChart days={data.weekChart} title="Biểu đồ hoạt động 7 ngày trên hồ sơ" />
+            </Card>
+          </section>
+
+          <section aria-labelledby="profile-milestones-heading" style={{ marginTop: 28 }}>
+            <div className="section-head">
+              <h2 id="profile-milestones-heading" className="section-title">
+                Huy hiệu & Cột mốc
+              </h2>
+              <Badge tone="success" data-testid="milestones-count">
+                {data.milestonesEarned}/{data.milestonesTotal} đã đạt
+              </Badge>
+            </div>
+            <div className="milestones-grid" data-testid="profile-milestones">
+              {data.milestones.map((m) => (
+                <div
+                  key={m.code}
+                  className={`milestone-card${m.earned ? " is-earned" : " is-locked"}`}
+                  data-milestone-code={m.code}
+                  data-earned={m.earned ? "true" : "false"}
+                >
+                  <div className="milestone-icon" aria-hidden="true">
+                    <Icon name={m.earned ? "trophy" : "shield"} size={18} />
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="milestone-title">{m.title}</div>
+                    <div className="milestone-desc">{m.description}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
       )}
 
-      <section aria-labelledby="profile-courses-heading">
+      <section aria-labelledby="profile-courses-heading" style={{ marginTop: 32 }}>
         <div className="section-head">
           <h2 id="profile-courses-heading" className="section-title">
             Tiến độ khóa học
@@ -159,12 +208,17 @@ export default function ProfilePage() {
         <div className="list-group-card">
           <Link href="/review" className="list-group-row">
             <Icon name="sparkle" size={20} />
-            <span style={{ flex: 1 }}>Ôn tập ngắt quãng</span>
-            {stats.data && stats.data.reviewsDue > 0 && (
+            <span style={{ flex: 1 }}>Ôn tập ngắt quãng (Hồi tim FSRS)</span>
+            {data && data.reviewsDue > 0 && (
               <span className="caption" style={{ color: "var(--ember-deep)", fontWeight: 600 }}>
-                {stats.data.reviewsDue} đến hạn
+                {data.reviewsDue} đến hạn
               </span>
             )}
+            <Icon name="arrowRight" size={18} />
+          </Link>
+          <Link href="/league" className="list-group-row">
+            <Icon name="trophy" size={20} />
+            <span style={{ flex: 1 }}>Bảng xếp hạng tuần (Leagues)</span>
             <Icon name="arrowRight" size={18} />
           </Link>
           <Link href="/sources" className="list-group-row">

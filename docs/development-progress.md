@@ -2,6 +2,33 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 6 — Gamification, Hearts (Timed + FSRS Refill), Milestones, `/complete` & Leagues
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase6` (tách từ `feat/polyglot-phase5` `6b1ac68`, đã push `origin/feat/polyglot-phase5`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
+- **IMPLEMENTED:**
+  - **Flyway `core` V5 (`core-api/src/main/resources/db/migration/V5__gamification_hearts_milestones_leagues.sql`):** mở rộng `core.users` (`timezone`, `goal_lessons` `1|2|3`, `best_streak_days`, `last_active_day`, `streak_freezes` `0..2`, `hearts` `0..5`, `hearts_refill_at`) và tạo 4 bảng `core.user_daily_activity`, `core.user_milestones`, `core.league_cohorts` (`lgc_`, 5 hạng `bronze → silver → gold → sapphire → ruby`), `core.league_memberships` (`lgm_`).
+  - **`core-api/` Gamification & Leagues (`GamificationService`, `LeagueService`, `GamificationController`, `LessonController`, `LearnerController`, `AuthAndMeController`, `SopiProperties`):**
+    - Chuẩn hóa XP cấu hình được (`XP_LESSON_BASE=80`, `XP_PERFECT_BONUS=20`, tổng tối đa `100 XP` / phiên bản bài học), chạy trọn vẹn trong **1 ACID `@Transactional`** có khóa dòng `SELECT ... FOR UPDATE` trên `core.users`.
+    - Tính Streak theo đúng `timezone` người học (`ZoneId`), tự tặng `+1` `streak_freezes` mỗi bội số 7 ngày (tối đa `2`), và tự tiêu 1 freeze khi lỡ đúng 1 ngày (`today - 2`).
+    - **Hearts gắn kết FSRS:** `HEARTS_MAX=5`, tự hồi theo thời gian (`HEARTS_REFILL_MINUTES=30`), hỗ trợ cờ `HEARTS_ENFORCEMENT_ENABLED` (trả `409 OUT_OF_HEARTS` khi `hearts=0`), và **cộng ngay `+1` tim** khi hoàn thành thẻ ôn tập đến hạn tại `POST /v1/reviews/{cardId}/grade`.
+    - Tự động mở khóa **7 nhóm Milestones + 9 Ladder Milestones** (`16` huy hiệu) trong cùng giao dịch nộp bài; trả thêm `unitBreakdown` & `newlyEarnedMilestones` trong `POST /v1/lessons/{lessonId}/attempts`.
+    - Cung cấp `GET /v1/home` (`WeekRecapCard`), `GET /v1/me/profile` (`WeekChart` 7 ngày, `accuracyPercent`, `milestones`), `PATCH /v1/me/preferences` (`timezone`, `goalLessons`), và `GET /v1/league` + `GET /v1/league/last` (cohort tối đa **30 học viên**, chốt hạng hàng tuần top 20% thăng hạng / bottom 20% xuống hạng trừ `bronze`, sau cờ mặc định `LEAGUES_ENABLED=false`).
+  - **`frontend/` Phase 6:**
+    - Màn mới **`frontend/src/app/lesson/[lessonId]/complete/page.tsx`** (Confetti tôn trọng `prefers-reduced-motion`, điểm/độ chính xác/`+XP`/chuỗi/tim, `UnitBreakdown`, huy hiệu vừa mở khóa, gợi ý qua `/review` hồi tim FSRS, và nút điều hướng về khóa học/trang chủ); `frontend/src/app/lesson/[lessonId]/page.tsx` chuyển hướng sang `/complete` ngay sau khi nộp bài.
+    - Component mới `frontend/src/components/gamification/WeekChart.tsx` & `WeekRecapCard.tsx` tích hợp vào trang chủ `/` và trang hồ sơ `/profile` (kèm lưới 16 huy hiệu đã đạt / chưa đạt và độ chính xác).
+    - Trang mới `frontend/src/app/league/page.tsx` hiển thị 5 hạng, bảng xếp hạng cohort + tuần trước, và trạng thái rõ ràng khi `LEAGUES_ENABLED=false`; cập nhật `/review` hiện thông báo `+1 tim` khi hồi tim từ FSRS.
+- **TESTED (100% offline/mock + live 8-container Docker polyglot stack, 0đ chi phí):**
+  - `cd core-api && ./mvnw -B test` → **exit `0` (`Tests run: 10, Failures: 0, Errors: 0`, `10.87s`)** trên live PostgreSQL 16 (Flyway `V5`) + Redis 7 + MinIO + `ai-api`:
+    - `CoreApiIntegrationTest`: 20 luồng nộp bài đồng thời đúng **100 XP** (`80 base + 20 perfect`, 0 double-XP).
+    - `Phase6GamificationTest` (3/3 tests): chuyển ngày theo múi giờ (`UTC` vs `Asia/Ho_Chi_Minh`), tích `+1` freeze ngày 7 & tự tiêu freeze khi lỡ 1 ngày, hồi tim theo thời gian, chặn `409 OUT_OF_HEARTS` → chấm FSRS `POST /v1/reviews/{cardId}/grade` hồi `+1` tim → nộp bài thành công nhận 100 XP + mở khóa 4 milestones + cập nhật `/v1/home` & `/v1/me/profile`, và kiểm chứng **31 học viên tách đúng 2 cohort (30 + 1)** + chốt tuần thăng 6 người lên hạng `silver`.
+  - `cd ai-engine && PGVECTOR_TEST_URL=...@127.0.0.1:5439/sopiskill REDIS_TEST_URL=redis://127.0.0.1:6380/0 AI_API_LIVE_URL=http://127.0.0.1:8010 ../backend/.venv/bin/python -m pytest -v` → **exit `0` (`38 passed in 1.78s`)**; `bandit -r app -q` → **exit `0` (0 findings)**.
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8080 npm run build` → **exit `0`** (0 warnings, `15/15` static + dynamic routes gồm `/lesson/[lessonId]/complete` và `/league`).
+  - `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8080 E2E_FRONTEND_PORT=3010 npm run test:e2e` → **exit `0` (`9 passed in 33.7s`, `axe-core` 0 violations)** — kịch bản #9 kiểm chứng trọn vẹn luồng nộp bài → `/lesson/[lessonId]/complete` (`UnitBreakdown` + huy hiệu) → `/` (`WeekRecapCard` + `WeekChart` có cột sáng) → `/profile` (Streak ≥ 1 + `WeekChart` + huy hiệu đã đạt) → `/league` (`LEAGUES_ENABLED=false`).
+- **NOT TESTED:**
+  - Cron tự động chốt hạng hàng tuần chạy thật xuyên qua mốc Chủ nhật → Thứ Hai UTC (hàm `LeagueService.settleWeek` đã được kiểm thử đầy đủ bằng JUnit trên 31 học viên).
+  - Giao diện `/league` khi bật `LEAGUES_ENABLED=true` trên trình duyệt (đã kiểm thử API `/v1/league` & `/v1/league/last` với `LEAGUES_ENABLED=true` trong JUnit `Phase6GamificationTest`, và giao diện trạng thái mặc định `LEAGUES_ENABLED=false` trong Playwright E2E).
+- **ROLLBACK:** Thuần Git + Docker tách biệt — revert nhánh `feat/polyglot-phase6`; Flyway `V5` thuần additive (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`).
+
 ## 2026-11-25 — Phase 5 — Agentic AI Tutor "Sopi" Đa Pod (6 Tools · 3 Thread Kinds · `PlanChat` · `ChangeCard` · `Last-Event-ID` · Redis Pub/Sub `/stop`)
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase5` (tách từ `feat/polyglot-phase4` `386f76c`, đã push `origin/feat/polyglot-phase4`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
