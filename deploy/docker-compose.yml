@@ -43,6 +43,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${POLYGLOT_MINIO_USER:-sopiskill_minio}
       MINIO_ROOT_PASSWORD: ${POLYGLOT_MINIO_PASSWORD:-sopiskill_minio_password}
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
     ports:
       - "127.0.0.1:${POLYGLOT_MINIO_PORT:-9010}:9000"
       - "127.0.0.1:${POLYGLOT_MINIO_CONSOLE_PORT:-9011}:9001"
@@ -130,6 +131,11 @@ services:
       TUTOR_ENABLED: ${TUTOR_ENABLED:-true}
       P50_ENABLED: ${P50_ENABLED:-true}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: http://127.0.0.1:${POLYGLOT_MINIO_PORT:-9010}
+      S3_ACCESS_KEY: ${POLYGLOT_MINIO_USER:-sopiskill_minio}
+      S3_SECRET_KEY: ${POLYGLOT_MINIO_PASSWORD:-sopiskill_minio_password}
+      S3_BUCKET: ${S3_BUCKET:-sopiskill-sources}
     ports:
       - "127.0.0.1:${CORE_API_HOST_PORT:-8080}:8080"
     depends_on:

@@ -71,22 +71,85 @@ class MockProvider:
         self, topic: str, language: str
     ) -> tuple[list[InterviewQuestionItem], LlmUsageOut]:
         if language == "en":
-            prompts = [
-                f"Have you worked with {topic} before?",
-                f"What concrete goal do you want to achieve with {topic}?",
-                "How many hours per week can you dedicate to learning?",
-                "Which learning style helps you most (examples, diagrams, projects)?",
-                "Do you prefer a quick practical overview or a deep dive?",
+            specs = [
+                (
+                    f"Have you worked with {topic} before?",
+                    "single",
+                    [
+                        "Complete beginner — never used it",
+                        "Some experience — know the basics",
+                        "Intermediate — use it occasionally",
+                        "Advanced — want to deepen mastery",
+                    ],
+                ),
+                (
+                    f"What concrete goal do you want to achieve with {topic}?",
+                    "single",
+                    [
+                        "Understand core concepts quickly",
+                        "Build a clean working project",
+                        "Prepare for work or interviews",
+                        "Apply it to my own documents",
+                    ],
+                ),
+                (
+                    "How many hours per week can you dedicate to learning?",
+                    "single",
+                    ["1-2 hours per week", "3 hours per week", "5+ hours per week"],
+                ),
+                (
+                    "Which learning style helps you most (examples, diagrams, projects)?",
+                    "multi",
+                    ["Hands-on examples", "Visual diagrams", "Mini projects", "Clear theory"],
+                ),
+                (
+                    "Do you prefer a quick practical overview or a deep dive?",
+                    "single",
+                    ["Quick practical overview", "Balanced theory & practice", "Deep dive into core ideas"],
+                ),
             ]
         else:
-            prompts = [
-                f"Bạn đã từng tiếp xúc hay làm việc với {topic} chưa?",
-                f"Mục tiêu cụ thể bạn muốn đạt được với {topic} là gì?",
-                "Mỗi tuần bạn có thể dành khoảng bao nhiêu giờ để học?",
-                "Bạn thích học theo phong cách nào (ví dụ thực tế, sơ đồ, dự án)?",
-                "Bạn muốn nắm tổng quan nhanh hay đi sâu vào nền tảng?",
+            specs = [
+                (
+                    f"Bạn đã từng tiếp xúc hay làm việc với {topic} chưa?",
+                    "single",
+                    [
+                        "Mới bắt đầu từ con số 0",
+                        "Đã biết cơ bản một chút",
+                        "Đã dùng thực tế ở mức trung bình",
+                        "Khá vững, muốn đào sâu chuyên môn",
+                    ],
+                ),
+                (
+                    f"Mục tiêu cụ thể bạn muốn đạt được với {topic} là gì?",
+                    "single",
+                    [
+                        "Nắm nhanh khái niệm cốt lõi",
+                        "Tự làm được bài tập / dự án nhỏ",
+                        "Ứng dụng ngay vào công việc",
+                        "Hiểu sâu tài liệu chuyên ngành",
+                    ],
+                ),
+                (
+                    "Mỗi tuần bạn có thể dành khoảng bao nhiêu giờ để học?",
+                    "single",
+                    ["1-2 giờ mỗi tuần", "Khoảng 3 giờ mỗi tuần", "5 giờ trở lên mỗi tuần"],
+                ),
+                (
+                    "Bạn thích học theo phong cách nào (ví dụ thực tế, sơ đồ, dự án)?",
+                    "multi",
+                    ["Ví dụ thực tế", "Sơ đồ trực quan", "Dự án nhỏ", "Giải thích lý thuyết rõ ràng"],
+                ),
+                (
+                    "Bạn muốn nắm tổng quan nhanh hay đi sâu vào nền tảng?",
+                    "single",
+                    ["Tổng quan nhanh, dễ áp dụng", "Cân bằng lý thuyết và thực hành", "Đi sâu vào bản chất nền tảng"],
+                ),
             ]
-        items = [InterviewQuestionItem(index=i, prompt=p, kind="freeform") for i, p in enumerate(prompts)]
+        items = [
+            InterviewQuestionItem(index=i, prompt=prompt, kind=kind, choices=choices)
+            for i, (prompt, kind, choices) in enumerate(specs)
+        ]
         return items, LlmUsageOut(provider=self.name, model=self.model)
 
     async def generate_proposal(

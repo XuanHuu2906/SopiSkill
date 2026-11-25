@@ -2,6 +2,38 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 3 — Source-to-Course Pipeline (Presigned PDF · Source Brief · TopicGuard · Chips · Lesson-1-First · 2-Tier Validator QA · Course Lifecycle)
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase3` (tách từ `feat/polyglot-phase2` `01ea8d1`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc theo quyết định người dùng.
+- **IMPLEMENTED:**
+  - **Flyway `core` V2 (`core-api/src/main/resources/db/migration/V2__source_brief_course_lifecycle_and_flags.sql`):** mở rộng `core.sources` (`brief`, `word_count`, `duration_minutes`, `suggested_topic`, `reject_reason`), `core.lessons` (`estimated_minutes`, `kind`, `format`), `core.units` (`kicker`, `blurb`, `tone`), và tạo bảng `core.content_flags` lưu cảnh báo kiểm định bài học.
+  - **`ai-engine/` Phase 3:**
+    - `ai-engine/app/rag/brief_builder.py`: xây dựng `source.brief` theo hard-schema (`what`, `claims[1..10]`, `notation[<=20]`, `assumes[<=10]`, `sections[<=40]{anchor,heading,gist}`) kèm `wordCount`, `durationMinutes`, `suggestedTopic`.
+    - `ai-engine/app/agents/validator_qa.py`: bộ kiểm định 2 tầng (Tier 1 static lint + `contentFlags` bắt buộc; Tier 2 LLM QA pass opt-in qua `VALIDATOR_LLM_ENABLED=false` mặc định 0đ).
+    - `ai-engine/app/agents/providers.py`: `MockProvider.generate_interview_questions` trả `kind` (`single|multi`) và `choices[2..6]` cho cả `vi` và `en`, bảo toàn câu mở đầu Q1 tương thích E2E cũ.
+    - `ai-engine/app/workers/worker_llm.py` & `worker_ingest.py`: kích hoạt callback **Lesson-1-First** `POST /internal/jobs/{jobId}/lesson-ready` ngay sau từng bài kèm `estimatedMinutes` & `contentFlags`, và gửi `brief`/`wordCount`/`durationMinutes`/`suggestedTopic` trong `/internal/sources/{sourceId}/complete`.
+  - **`core-api/` Phase 3:**
+    - `S3PresignService.java`: ký AWS SigV4 thuần Java không thêm dependency cho luồng browser `PUT` trực tiếp tới MinIO (`POST /v1/sources/upload` ≤ 25 MB PDF → `POST /v1/sources/{id}/ingest`); bật `MINIO_API_CORS_ALLOW_ORIGIN="*"` trong `deploy/docker-compose.yml`.
+    - `TopicGuard.java`: trả `422 TOPIC_REJECTED` có `reason` (`unsafe|too_vague|not_teachable|too_narrow`) + `suggestedRephrase`, chặn link YouTube/chủ đề không an toàn/quá mơ hồ/quá hẹp.
+    - `CitationLinkResolver.java`: chuẩn hóa deep-link arXiv `/abs/` → `/html/#anchor`, Web `#anchor`, PDF upload → `null`.
+    - `CourseController.java`, `LessonController.java`, `InternalCallbackController.java`, `SourcesAndResearchController.java`: hỗ trợ `sourceId` khi tạo khóa, `structuredQuestions` cho phỏng vấn, `GET /v1/courses/{id}/path` (`state: done|next|open|preparing|failed`, `hasPreparingLessons`), `DELETE /v1/courses/{id}` idempotent + dọn RAG, `POST /internal/jobs/{jobId}/lesson-ready` mở khóa khóa học ngay khi Bài 1 xong + ghi `core.content_flags`, `GET /v1/lessons/{id}?prefetch=1` (`Cache-Control: private, max-age=30`), và `POST /v1/lessons/{id}/retry`.
+  - **`frontend/` Phase 3:**
+    - Trang mới `frontend/src/app/new/source/page.tsx`: tải PDF ≤ 25 MB qua presigned MinIO PUT, poll 1.5s hiển thị `SourceCard` + `source.brief` đầy đủ và nút `"Tạo khóa học từ tài liệu này"`.
+    - `frontend/src/app/new/page.tsx`: chặn sớm link YouTube trên client và trỏ banner tài liệu sang `/new/source`.
+    - `frontend/src/app/new/interview/page.tsx`: hiển thị quick-select chips (`single`/`multi`) từ `structuredQuestions` song song ô nhập `#interview-answer`.
+    - `frontend/src/app/new/generating/page.tsx`: chuyển sớm sang `/course/[courseId]` ngay khi `lessonsDone >= 1` (Lesson-1-First).
+    - `frontend/src/app/course/[courseId]/page.tsx`: dùng `/v1/courses/{id}/path` poll 5s khi còn `preparing`, hiển thị `~X phút`, trạng thái `Đang chuẩn bị…`, nút `"Thử lại"` cho bài lỗi, và `"Xóa khóa học"` có bước xác nhận nội tuyến.
+- **TESTED (100% offline/mock + live 8-container Docker polyglot stack, 0đ chi phí):**
+  - `cd ai-engine && PGVECTOR_TEST_URL=...@127.0.0.1:5439/sopiskill REDIS_TEST_URL=redis://127.0.0.1:6380/0 AI_API_LIVE_URL=http://127.0.0.1:8010 ../backend/.venv/bin/python -m pytest -v` → **exit `0` (`20 passed, 0 failed, 0 skipped` trong `1.79s`)** (thêm 5 test Phase 3 trong `test_phase3_brief_qa_progressive.py`).
+  - `cd ai-engine && ../backend/.venv/bin/python -m bandit -r app -q` → **exit `0` (0 findings, 0 `#nosec`)**.
+  - `cd core-api && ./mvnw -B test` → **exit `0` (`Tests run: 4, Failures: 0, Errors: 0`, `10.69s`)** trên live PostgreSQL 16 + Redis 7 + MinIO + `ai-api`, gồm `Phase3IntegrationTest` (Flyway V2, TopicGuard 422 cả 4 lý do, CitationLinkResolver, presigned MinIO PUT 200, Source Brief callback, structured interview chips, Lesson-1-First mở khóa ngay khi Bài 2 còn `preparing` + `content_flags`, `?prefetch=1`, `POST /v1/lessons/{id}/retry`, `DELETE /v1/courses/{id}` idempotent).
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8080 npm run build` → **exit `0`** (0 warnings, `14/14` static/dynamic routes gồm `/new/source`).
+  - `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8080 E2E_FRONTEND_PORT=3010 npm run test:e2e` → **exit `0` (`6 passed in 17.9s`, `axe-core` 0 violations)** — bao gồm kịch bản #6 Phase 3: YouTube guard → upload PDF thật qua MinIO presigned PUT → Source Brief → interview single/multi chips → `/course/[courseId]` `~5 phút` → xóa khóa học.
+- **NOT TESTED:**
+  - Tier-2 LLM QA pass trên provider trả phí (`VALIDATOR_LLM_ENABLED=true` giữ mặc định `false`, 0đ chi phí).
+  - Khôi phục tự động PDF scan bằng OCR thật (đã giữ fail-fast `OCR_NOT_CONFIGURED`).
+- **ROLLBACK:** Thuần Git + Docker tách biệt — revert nhánh `feat/polyglot-phase3`; Flyway V2 thuần additive (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`).
+
 ## 2026-11-25 — Phase 2 — `core-api/` (Spring Boot 3.4.5 · Java 21 LTS · Maven · Flyway `core`) & Cutover Parity Wave 4
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase2` (tách từ `feat/polyglot-phase1` `b256925`); giữ nguyên `backend/` cũ chưa xóa cho tới khi owner quyết định bước lưu trữ.

@@ -27,7 +27,13 @@ public record SopiProperties(
         boolean ragEnabled,
         boolean p50Enabled,
         boolean rateLimitEnabled,
-        boolean rateLimitFailClosed
+        boolean rateLimitFailClosed,
+        String s3Endpoint,
+        String s3PublicEndpoint,
+        String s3AccessKey,
+        String s3SecretKey,
+        String s3Bucket,
+        String s3Region
 ) {
     public List<String> corsOriginList() {
         if (corsOrigins == null || corsOrigins.isBlank()) {

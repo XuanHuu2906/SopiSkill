@@ -10,7 +10,7 @@ from typing import Any
 from redis.asyncio import Redis
 
 from app.agents.providers import LLMProvider, get_llm_provider
-from app.agents.validation import validate_lesson_payload
+from app.agents.validator_qa import run_two_tier_validator
 from app.core.callback_client import CoreApiCallbackClient
 from app.core.config import Settings, get_settings
 from app.workers.streams import RedisStreamWorker, default_consumer_name
@@ -52,6 +52,8 @@ async def handle_llm_job(
                 "usage": usage.model_dump(),
             }
         elif job_type in {"generate_course", "generate_lesson", "regenerate_unit"}:
+            course_id = str(message.get("courseId") or "")
+            lesson_ids: list[str] = [str(lid) for lid in (payload.get("lessonIds") or [])]
             unit_specs = payload.get("units") or [
                 {
                     "title": str(payload.get("unitTitle") or "Unit 1"),
@@ -59,25 +61,55 @@ async def handle_llm_job(
                 }
             ]
             generated_lessons: list[dict[str, Any]] = []
+            all_flags: list[dict[str, Any]] = []
             last_usage = None
+            lesson_order = 0
+
             for unit in unit_specs:
                 u_title = str(unit.get("title") or "Unit")
                 for l_title in unit.get("lessonTitles") or []:
                     lesson, usage = await llm.generate_lesson(
                         topic, u_title, str(l_title), language, learner_profile
                     )
-                    lint_errors = validate_lesson_payload(lesson)
-                    if lint_errors:
-                        raise ValueError("; ".join(lint_errors))
+                    qa = await run_two_tier_validator(
+                        lesson,
+                        provider=llm,
+                        llm_qa_enabled=cfg.validator_llm_enabled,
+                    )
+                    if qa.blocking_errors:
+                        raise ValueError("; ".join(qa.blocking_errors))
+
+                    lesson["estimatedMinutes"] = qa.estimated_minutes
                     generated_lessons.append(lesson)
+                    all_flags.extend(qa.content_flags)
                     last_usage = usage
+
+                    # Phase 3 Lesson-1-First: callback each lesson immediately as it completes!
+                    if lesson_order < len(lesson_ids) and course_id:
+                        await cb.post_callback(
+                            f"/internal/jobs/{job_id}/lesson-ready",
+                            {
+                                "jobId": job_id,
+                                "idempotencyKey": f"{idempotency_key}:lesson:{lesson_order}",
+                                "courseId": course_id,
+                                "lessonId": lesson_ids[lesson_order],
+                                "lessonOrder": lesson_order,
+                                "status": "ready",
+                                "content": lesson,
+                                "estimatedMinutes": qa.estimated_minutes,
+                                "contentFlags": qa.content_flags,
+                                "usage": usage.model_dump() if usage else None,
+                            },
+                            correlation_id=correlation_id,
+                        )
+                    lesson_order += 1
 
             callback_payload = {
                 "jobId": job_id,
                 "idempotencyKey": idempotency_key,
                 "status": "completed",
                 "result": {"lessons": generated_lessons},
-                "contentFlags": [],
+                "contentFlags": all_flags,
                 "usage": last_usage.model_dump() if last_usage else None,
             }
         else:

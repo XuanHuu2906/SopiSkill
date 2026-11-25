@@ -23,6 +23,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -57,8 +58,9 @@ public class CourseController {
     }
 
     public record CreateCourseRequest(
-            @NotBlank @Size(min = 2, max = 300) String topic,
-            String language
+            @NotBlank @Size(min = 1, max = 300) String topic,
+            String language,
+            String sourceId
     ) {}
 
     public record InterviewAnswerRequest(
@@ -94,8 +96,24 @@ public class CourseController {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_LANGUAGE", "Ngôn ngữ chỉ hỗ trợ vi hoặc en.");
         }
 
-        UUID courseId = UUID.randomUUID();
         String topic = body.topic().trim();
+        TopicGuard.validateOrThrow(topic);
+
+        Map<String, Object> sourceBrief = null;
+        UUID linkedSourceUuid = null;
+        if (body.sourceId() != null && !body.sourceId().isBlank()) {
+            linkedSourceUuid = IdCodec.parse(body.sourceId(), "src");
+            var briefStrOpt = jdbc.sql("SELECT brief::text FROM core.sources WHERE id = :sid AND (owner_id = :uid OR visibility = 'public')")
+                    .param("sid", linkedSourceUuid)
+                    .param("uid", principal.userId())
+                    .query(String.class)
+                    .optional();
+            if (briefStrOpt.isPresent() && briefStrOpt.get() != null) {
+                sourceBrief = json.fromJson(briefStrOpt.get(), new TypeReference<>() {});
+            }
+        }
+
+        UUID courseId = UUID.randomUUID();
         jdbc.sql("""
                 INSERT INTO core.courses (id, user_id, topic, language, status)
                 VALUES (:id, :uid, :topic, :lang, 'interviewing')
@@ -106,14 +124,28 @@ public class CourseController {
                 .param("lang", lang)
                 .update();
 
-        List<String> questions = aiEngine.fetchInterviewQuestions(IdCodec.format("crs", courseId), topic, lang, null);
+        if (linkedSourceUuid != null) {
+            jdbc.sql("""
+                    INSERT INTO core.course_sources (id, course_id, source_id)
+                    VALUES (:id, :cid, :sid)
+                    ON CONFLICT (course_id, source_id) DO NOTHING
+                    """)
+                    .param("id", UUID.randomUUID())
+                    .param("cid", courseId)
+                    .param("sid", linkedSourceUuid)
+                    .update();
+        }
+
+        List<Map<String, Object>> structuredQuestions = aiEngine.fetchStructuredInterviewQuestions(
+                IdCodec.format("crs", courseId), topic, lang, sourceBrief, null
+        );
         jdbc.sql("""
                 INSERT INTO core.course_interviews (id, course_id, questions, answers, completed_count)
                 VALUES (:id, :cid, CAST(:qs AS jsonb), '[]'::jsonb, 0)
                 """)
                 .param("id", UUID.randomUUID())
                 .param("cid", courseId)
-                .param("qs", json.toJson(questions))
+                .param("qs", json.toJson(structuredQuestions))
                 .update();
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -186,7 +218,7 @@ public class CourseController {
         Map<String, Object> course = loadOwnedCourse(principal.userId(), cid);
 
         List<Map<String, Object>> units = jdbc.sql("""
-                SELECT id, order_index, title, blurb
+                SELECT id, order_index, kicker, title, blurb, tone
                 FROM core.units
                 WHERE course_id = :cid
                 ORDER BY order_index ASC
@@ -196,8 +228,10 @@ public class CourseController {
                     Map<String, Object> u = new LinkedHashMap<>();
                     u.put("id", IdCodec.format("unit", rs.getObject("id", UUID.class)));
                     u.put("orderIndex", rs.getInt("order_index"));
+                    u.put("kicker", rs.getString("kicker"));
                     u.put("title", rs.getString("title"));
                     u.put("blurb", rs.getString("blurb"));
+                    u.put("tone", rs.getString("tone"));
                     return u;
                 })
                 .list();
@@ -208,6 +242,7 @@ public class CourseController {
             UUID unitUuid = IdCodec.parse(String.valueOf(u.get("id")), "unit");
             List<Map<String, Object>> lessons = jdbc.sql("""
                     SELECT l.id, l.order_index, l.title, l.status, l.content_version,
+                           l.estimated_minutes, l.kind, l.format,
                            EXISTS(
                                SELECT 1 FROM core.lesson_attempts la
                                WHERE la.lesson_id = l.id
@@ -223,11 +258,16 @@ public class CourseController {
                     .param("uid", principal.userId())
                     .query((rs, rowNum) -> {
                         Map<String, Object> l = new LinkedHashMap<>();
+                        String st = rs.getString("status");
                         l.put("id", IdCodec.format("lsn", rs.getObject("id", UUID.class)));
                         l.put("orderIndex", rs.getInt("order_index"));
                         l.put("title", rs.getString("title"));
-                        l.put("status", rs.getString("status"));
+                        l.put("status", st);
+                        l.put("state", "queued".equals(st) || "generating".equals(st) ? "preparing" : st);
                         l.put("contentVersion", rs.getInt("content_version"));
+                        l.put("estimatedMinutes", rs.getInt("estimated_minutes"));
+                        l.put("kind", rs.getString("kind"));
+                        l.put("format", rs.getString("format"));
                         l.put("completed", rs.getBoolean("completed"));
                         return l;
                     })
@@ -245,6 +285,63 @@ public class CourseController {
         return course;
     }
 
+    @GetMapping("/{courseId}/path")
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getCoursePath(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String courseId
+    ) {
+        Map<String, Object> detail = getCourseDetail(principal, courseId);
+        List<Map<String, Object>> units = (List<Map<String, Object>>) detail.get("units");
+        boolean assignedNext = false;
+        boolean hasPreparing = false;
+        for (Map<String, Object> u : units) {
+            List<Map<String, Object>> lessons = (List<Map<String, Object>>) u.get("lessons");
+            for (Map<String, Object> l : lessons) {
+                boolean completed = Boolean.TRUE.equals(l.get("completed"));
+                String status = String.valueOf(l.get("status"));
+                String state;
+                if (completed) {
+                    state = "done";
+                } else if ("queued".equals(status) || "generating".equals(status)) {
+                    state = "preparing";
+                    hasPreparing = true;
+                } else if ("failed".equals(status)) {
+                    state = "failed";
+                } else if (!assignedNext) {
+                    state = "next";
+                    assignedNext = true;
+                } else {
+                    state = "open";
+                }
+                l.put("state", state);
+            }
+        }
+        detail.put("hasPreparingLessons", hasPreparing);
+        return detail;
+    }
+
+    @DeleteMapping("/{courseId}")
+    @Transactional
+    public ResponseEntity<Void> deleteCourse(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String courseId,
+            HttpServletRequest request
+    ) {
+        csrf.verify(request);
+        rateLimiter.check(request, "course_delete", 20, 60);
+        UUID cid = IdCodec.parse(courseId, "crs");
+        // Idempotent owner-scoped delete (never reveals existence of another user's course)
+        int deleted = jdbc.sql("DELETE FROM core.courses WHERE id = :cid AND user_id = :uid")
+                .param("cid", cid)
+                .param("uid", principal.userId())
+                .update();
+        if (deleted > 0) {
+            aiEngine.deleteRagResourceBestEffort("/internal/rag/courses/" + IdCodec.format("crs", cid), null);
+        }
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/{courseId}/interview")
     public Map<String, Object> getInterview(
             @AuthenticationPrincipal AuthPrincipal principal,
@@ -254,10 +351,7 @@ public class CourseController {
         loadOwnedCourse(principal.userId(), cid);
         return jdbc.sql("SELECT questions, completed_count FROM core.course_interviews WHERE course_id = :cid")
                 .param("cid", cid)
-                .query((rs, rowNum) -> Map.<String, Object>of(
-                        "questions", json.fromJson(rs.getString("questions"), new TypeReference<List<String>>() {}),
-                        "completedCount", rs.getInt("completed_count")
-                ))
+                .query((rs, rowNum) -> buildInterviewOut(rs.getString("questions"), rs.getInt("completed_count")))
                 .optional()
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "INTERVIEW_NOT_FOUND", "Không tìm thấy phỏng vấn."));
     }
@@ -278,15 +372,15 @@ public class CourseController {
         var row = jdbc.sql("SELECT questions, answers, completed_count FROM core.course_interviews WHERE course_id = :cid FOR UPDATE")
                 .param("cid", cid)
                 .query((rs, rowNum) -> Map.<String, Object>of(
-                        "questions", json.fromJson(rs.getString("questions"), new TypeReference<List<String>>() {}),
+                        "questionsRaw", rs.getString("questions"),
                         "answers", json.fromJson(rs.getString("answers"), new TypeReference<List<String>>() {}),
                         "completed_count", rs.getInt("completed_count")
                 ))
                 .optional()
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "INTERVIEW_NOT_FOUND", "Không tìm thấy phỏng vấn."));
 
-        @SuppressWarnings("unchecked")
-        List<String> questions = (List<String>) row.get("questions");
+        String questionsRaw = String.valueOf(row.get("questionsRaw"));
+        List<String> questions = extractQuestionPrompts(questionsRaw);
         @SuppressWarnings("unchecked")
         List<String> answers = new ArrayList<>((List<String>) row.get("answers"));
         int pos = body.position();
@@ -313,7 +407,53 @@ public class CourseController {
             createInitialProposalIfAbsent(cid, String.valueOf(course.get("topic")), String.valueOf(course.get("language")), questions, answers);
         }
 
-        return Map.of("questions", questions, "completedCount", completedCount);
+        return buildInterviewOut(questionsRaw, completedCount);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> extractQuestionPrompts(String questionsJson) {
+        List<Object> rawList = json.fromJson(questionsJson, new TypeReference<>() {});
+        List<String> prompts = new ArrayList<>(rawList.size());
+        for (Object item : rawList) {
+            if (item instanceof Map<?, ?> m) {
+                Object p = m.get("prompt");
+                prompts.add(p == null ? "" : String.valueOf(p));
+            } else {
+                prompts.add(String.valueOf(item));
+            }
+        }
+        return prompts;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> buildInterviewOut(String questionsJson, int completedCount) {
+        List<Object> rawList = json.fromJson(questionsJson, new TypeReference<>() {});
+        List<String> prompts = new ArrayList<>(rawList.size());
+        List<Map<String, Object>> structured = new ArrayList<>(rawList.size());
+        for (int i = 0; i < rawList.size(); i++) {
+            Object item = rawList.get(i);
+            if (item instanceof Map<?, ?> m) {
+                Object p = m.get("prompt");
+                String prompt = p == null ? "" : String.valueOf(p);
+                prompts.add(prompt);
+                Map<String, Object> q = new LinkedHashMap<>();
+                q.put("index", i);
+                q.put("prompt", prompt);
+                Object kindVal = m.get("kind");
+                q.put("kind", kindVal == null ? "freeform" : String.valueOf(kindVal));
+                q.put("choices", m.get("choices") instanceof List<?> c ? c : List.of());
+                structured.add(q);
+            } else {
+                String prompt = String.valueOf(item);
+                prompts.add(prompt);
+                structured.add(Map.of("index", i, "prompt", prompt, "kind", "freeform", "choices", List.of()));
+            }
+        }
+        return Map.of(
+                "questions", prompts,
+                "structuredQuestions", structured,
+                "completedCount", completedCount
+        );
     }
 
     @GetMapping("/{courseId}/proposal")
@@ -522,6 +662,20 @@ public class CourseController {
                 .param("cid", cid)
                 .update();
 
+        // Collect ordered lesson IDs for Phase 3 Lesson-1-First progressive callbacks
+        List<String> orderedLessonIds = jdbc.sql("""
+                SELECT l.id FROM core.lessons l
+                JOIN core.units u ON u.id = l.unit_id
+                WHERE l.course_id = :cid
+                ORDER BY u.order_index ASC, l.order_index ASC
+                """)
+                .param("cid", cid)
+                .query(UUID.class)
+                .list()
+                .stream()
+                .map(id -> IdCodec.format("lsn", id))
+                .toList();
+
         // Dispatch async generation job to Redis Stream `queue:ai:llm` for `ai-worker-llm`
         Map<String, Object> streamMsg = new LinkedHashMap<>();
         streamMsg.put("jobId", IdCodec.format("job", jobId));
@@ -535,7 +689,8 @@ public class CourseController {
                 "topic", courseRow.get("topic"),
                 "language", courseRow.get("language"),
                 "learnerProfile", payload.getOrDefault("learnerProfile", Map.of("currentLevel", "beginner")),
-                "units", units
+                "units", units,
+                "lessonIds", orderedLessonIds
         ));
         aiEngine.enqueueLlmJob(streamMsg);
 

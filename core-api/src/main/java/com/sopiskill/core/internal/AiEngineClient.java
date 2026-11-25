@@ -136,20 +136,38 @@ public class AiEngineClient {
     }
 
     @SuppressWarnings("unchecked")
-    public List<String> fetchInterviewQuestions(String courseId, String topic, String language, String correlationId) {
+    public List<Map<String, Object>> fetchStructuredInterviewQuestions(
+            String courseId,
+            String topic,
+            String language,
+            Map<String, Object> sourceBrief,
+            String correlationId
+    ) {
         try {
-            Map<String, Object> resp = postJson(
-                    "/internal/interview/questions",
-                    Map.of("courseId", courseId, "topic", topic, "language", language),
-                    correlationId
-            );
+            Map<String, Object> reqBody = new java.util.LinkedHashMap<>();
+            reqBody.put("courseId", courseId);
+            reqBody.put("topic", topic);
+            reqBody.put("language", language);
+            if (sourceBrief != null) {
+                reqBody.put("sourceBrief", sourceBrief);
+            }
+            Map<String, Object> resp = postJson("/internal/interview/questions", reqBody, correlationId);
             List<Map<String, Object>> qs = (List<Map<String, Object>>) resp.get("questions");
             if (qs != null && !qs.isEmpty()) {
-                return qs.stream().map(q -> String.valueOf(q.get("prompt"))).toList();
+                return qs;
             }
         } catch (Exception ex) {
             log.warn("ai_engine_interview_questions_fallback errorType={}", ex.getClass().getSimpleName());
         }
+        List<String> fallback = fetchInterviewQuestionsFallback(topic, language);
+        List<Map<String, Object>> structured = new java.util.ArrayList<>();
+        for (int i = 0; i < fallback.size(); i++) {
+            structured.add(Map.of("index", i, "prompt", fallback.get(i), "kind", "freeform", "choices", List.of()));
+        }
+        return structured;
+    }
+
+    private List<String> fetchInterviewQuestionsFallback(String topic, String language) {
         if ("en".equals(language)) {
             return List.of(
                     "Have you worked with " + topic + " before?",
