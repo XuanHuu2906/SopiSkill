@@ -278,12 +278,12 @@ class CoreApiIntegrationTest {
         }
         pool.shutdown();
 
-        // 2 correct * 10 + 20 perfect bonus = 40 XP TOTAL across all 20 concurrent threads!
-        assertThat(totalXpEarnedAcross20Threads).isEqualTo(40);
+        // Standardized Phase 6 XP: 80 base + 20 perfect bonus = 100 XP TOTAL across all 20 concurrent threads!
+        assertThat(totalXpEarnedAcross20Threads).isEqualTo(100);
 
         HttpResponse<String> meAfter = getAuthed("/v1/auth/me", cookieHeader);
         assertThat(meAfter.statusCode()).isEqualTo(200);
-        assertThat(((Number) parseMap(meAfter.body()).get("xp")).intValue()).isEqualTo(40);
+        assertThat(((Number) parseMap(meAfter.body()).get("xp")).intValue()).isEqualTo(100);
 
         // 9. DELETE /v1/me cascades cleanly
         HttpResponse<String> delResp = http.send(

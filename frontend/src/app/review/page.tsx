@@ -34,6 +34,7 @@ function ReviewQueue() {
   const sessionPrefix = useSessionQueryKey();
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [reviewedCount, setReviewedCount] = useState(0);
+  const [heartNotice, setHeartNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const reviewKeyRef = useRef<Record<string, string>>({});
 
@@ -57,12 +58,17 @@ function ReviewQueue() {
         clientReviewId:
           reviewKeyRef.current[cardId] ?? newClientId("rv"),
       }),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
       // Một clientReviewId cho mỗi thẻ đang được chấm; xoá sau khi xong để lượt
       // sau (khác ngày) có id mới.
       delete reviewKeyRef.current[variables.cardId];
       setReviewedCount((n) => n + 1);
       setError(null);
+      if (data.heartsRefilled) {
+        setHeartNotice(
+          `Đã hồi +1 tim từ ôn tập FSRS! (${data.hearts ?? 5}/${data.heartsMax ?? 5} tim)`
+        );
+      }
       // Invalidate cả nhóm session để course page cập nhật reviewDueCount /
       // mastery / learning-path sau khi chấm thẻ.
       queryClient.invalidateQueries({ queryKey: sessionPrefix });
@@ -177,6 +183,12 @@ function ReviewQueue() {
         >
           <Badge tone="accent">{remaining} thẻ đến hạn</Badge>
           {reviewedCount > 0 && <Badge tone="success">đã ôn {reviewedCount}</Badge>}
+        </div>
+      )}
+
+      {heartNotice && (
+        <div className="notice-box" role="status" style={{ marginBottom: 14 }}>
+          {heartNotice}
         </div>
       )}
 

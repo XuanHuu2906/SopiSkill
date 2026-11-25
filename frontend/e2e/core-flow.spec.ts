@@ -628,3 +628,127 @@ test("Phase 4: Rich Lesson — KaTeX, SVG FigureRenderer, {termKey} VocabSheet, 
     }
   }
 });
+
+test("Phase 5: PlanChat proposal revision, Sopi ChangeCard rewrite, 6 tools, cross-course sessions & axe-core", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("phase5-sopi");
+  await registerUser(page, email);
+
+  // 1. Create course and reach /new/proposal
+  await page.goto("/new");
+  await page.getByRole("button", { name: "English" }).click();
+  await page.locator("#topic-input").fill("Distributed Streaming");
+  await page.getByRole("button", { name: "Bắt đầu" }).click();
+  await page.waitForURL("**/new/interview?courseId=*");
+
+  for (let i = 0; i < 5; i += 1) {
+    await expect(page.locator(".flow-header-meta")).toHaveText(`Câu ${i + 1}/5`);
+    await page.locator(".quick-chip").first().click();
+    const label = i === 4 ? "Gửi câu trả lời cuối" : "Câu tiếp theo";
+    await page.getByRole("button", { name: label }).click();
+  }
+  await page.waitForURL("**/new/proposal?courseId=*");
+
+  // 2. Use PlanChat on /new/proposal to revise outline -> version 2 + collapsible "Bản nháp trước"
+  await page.getByRole("button", { name: "Thêm bài dự án thực hành" }).click();
+  await expect(page.getByText("Sopi đã cập nhật đề xuất lên phiên bản 2.")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('[data-previous-drafts="true"]')).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // 3. Approve course -> enter Lesson 1 -> open Sopi -> trigger ChangeCard (`regenerate_unit`)
+  await page.getByRole("button", { name: "Tạo khóa học" }).click();
+  await page.waitForURL("**/course/crs_*", { timeout: 20_000 });
+  await page.locator('a[href^="/lesson/"]').first().click();
+  await page.waitForURL("**/lesson/lsn_*");
+
+  await page.getByRole("button", { name: "Hỏi Sopi" }).click();
+  const dialog = page.locator('[role="dialog"]');
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Phần này quá khó, viết lại chương giúp mình" }).click();
+  const changeCard = dialog.locator(".change-card").first();
+  await expect(changeCard).toBeVisible({ timeout: 15_000 });
+  await expect(dialog.getByText("Đề xuất viết lại chương").first()).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // Confirm ChangeCard -> preparing -> live ai-worker-llm completes -> ready ("Đã cập nhật")
+  await changeCard.getByRole("button", { name: "Xác nhận viết lại" }).click();
+  await expect(changeCard).toContainText(/Đang viết lại|Đã cập nhật/, { timeout: 15_000 });
+  await expect(changeCard).toContainText("Đã cập nhật", { timeout: 25_000 });
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  // 4. Open GlobalSopiSheet from sidebar on home -> verify cross-course sessions ("Phiên hỏi Sopi gần đây")
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "Hỏi Sopi" }).click();
+  const globalDialog = page.locator('[role="dialog"]');
+  await expect(globalDialog).toBeVisible();
+  await expect(globalDialog.getByText(/Phiên hỏi Sopi gần đây/)).toBeVisible({ timeout: 10_000 });
+  await expectNoAxeViolations(page);
+});
+
+test("Phase 6: /lesson/[id]/complete, WeekRecapCard, Profile WeekChart & Milestones, /league & axe-core", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("phase6-gamify");
+  await registerUser(page, email);
+
+  const topic = "Algorithms Foundations";
+  await createAndGenerateCourse(page, topic, "en");
+
+  // Open Lesson 1 and complete all 6 steps
+  await page.locator('a[href^="/lesson/"]').first().click();
+  await page.waitForURL("**/lesson/lsn_*");
+  await expect(page.locator(".lesson-counter")).toHaveText("1/6");
+
+  const nextBtn = page.locator(".lesson-bar-primary");
+  await nextBtn.click(); // 1 -> 2 (mc)
+  await page.locator('[role="radio"]').first().click();
+  await nextBtn.click(); // 2 -> 3 (blank)
+  await page.locator('input[id^="blank-"]').fill(topic);
+  await nextBtn.click(); // 3 -> 4 (order)
+  await nextBtn.click(); // 4 -> 5 (match)
+  const selects = page.locator('select[id^="match-"]');
+  const selectCount = await selects.count();
+  for (let i = 0; i < selectCount; i += 1) {
+    const sel = selects.nth(i);
+    const optVal = await sel.locator("option").nth(1).getAttribute("value");
+    await sel.selectOption(optVal!);
+  }
+  await nextBtn.click(); // 5 -> 6 (short)
+  await page.locator('input[id^="short-"]').fill(topic);
+  await nextBtn.click(); // submit -> redirects to /lesson/[id]/complete
+
+  // 1. Verify /lesson/[lessonId]/complete screen with UnitBreakdown, Milestones & 0 axe violations
+  await page.waitForURL("**/lesson/lsn_*/complete", { timeout: 15_000 });
+  await expect(page.getByTestId("lesson-complete-page")).toBeVisible();
+  await expect(page.getByTestId("unit-breakdown")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Về trang chủ" })).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // 2. Navigate to Home -> verify WeekRecapCard & active WeekChart bar + 0 axe violations
+  await page.getByRole("link", { name: "Về trang chủ" }).click();
+  await page.waitForURL("**/");
+  await expect(page.getByTestId("week-recap-card")).toBeVisible();
+  await expect(page.getByTestId("week-chart")).toBeVisible();
+  await expect(page.locator('[data-testid="week-chart"] [data-active="true"]').first()).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // 3. Navigate to /profile -> verify Streak >= 1, WeekChart updated, Milestones rendered + 0 axe violations
+  await page.goto("/profile");
+  await expect(page.getByTestId("profile-streak")).toContainText(/[1-9]/);
+  await expect(page.getByTestId("week-chart")).toBeVisible();
+  await expect(page.getByTestId("profile-milestones")).toBeVisible();
+  await expect(page.locator('[data-earned="true"]').first()).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // 4. Navigate to /league -> verify graceful LEAGUES_DISABLED card + 0 axe violations
+  await page.goto("/league");
+  await expect(page.getByTestId("league-page")).toBeVisible();
+  await expect(page.getByTestId("leagues-disabled-notice")).toBeVisible();
+  await expectNoAxeViolations(page);
+});

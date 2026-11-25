@@ -133,7 +133,11 @@ class TutorStreamInternalRequest(BaseModel):
         "tab", "wrong_answer", "teach_block", "term", "path_harder", "proposal"
     ] = "tab"
     userMessage: str = Field(min_length=1, max_length=2000)
-    lessonContext: TutorLessonContext
+    lessonContext: TutorLessonContext | None = None
+    unitContext: dict[str, Any] | None = None
+    proposalContext: dict[str, Any] | None = None
+    sourceBrief: dict[str, Any] | None = None
+    delayMs: int = Field(default=0, ge=0, le=2000)
     history: list[TutorHistoryItem] = Field(default_factory=list, max_length=40)
     ragEnabled: bool = False
     allowedTools: list[
@@ -145,7 +149,16 @@ class TutorStreamInternalRequest(BaseModel):
             "revise_proposal",
             "regenerate_unit",
         ]
-    ] = Field(default_factory=lambda: ["read_lesson", "explain_deeper", "read_source"])
+    ] = Field(
+        default_factory=lambda: [
+            "read_lesson",
+            "explain_deeper",
+            "read_source",
+            "flag_question",
+            "revise_proposal",
+            "regenerate_unit",
+        ]
+    )
 
 
 class RagSearchRequest(BaseModel):

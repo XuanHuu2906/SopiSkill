@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { fetchCourses, fetchMeStats, type CourseListItem } from "@/lib/api";
+import { fetchCourses, fetchHome, fetchMeStats, type CourseListItem } from "@/lib/api";
 import { useAuth, useSessionQueryKey } from "./providers";
 import { ButtonLink } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -10,6 +10,7 @@ import Icon from "@/components/ui/Icon";
 import { ProgressRing } from "@/components/ui/Progress";
 import { Skeleton, SkeletonStack } from "@/components/ui/Skeleton";
 import LandingPage from "@/components/landing/LandingPage";
+import WeekRecapCard from "@/components/gamification/WeekRecapCard";
 
 const WEEKDAY = ["Chủ nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
 
@@ -65,6 +66,7 @@ export default function HomePage() {
   const { data: user, isLoading } = useAuth();
   const listKey = useSessionQueryKey("courses", { limit: 20 });
   const statsKey = useSessionQueryKey("me-stats");
+  const homeKey = useSessionQueryKey("home");
   const courses = useQuery({
     queryKey: listKey,
     queryFn: () => fetchCourses(20, 0),
@@ -74,6 +76,13 @@ export default function HomePage() {
   const stats = useQuery({
     queryKey: statsKey,
     queryFn: fetchMeStats,
+    enabled: !!user,
+    retry: false,
+    staleTime: 15_000,
+  });
+  const home = useQuery({
+    queryKey: homeKey,
+    queryFn: fetchHome,
     enabled: !!user,
     retry: false,
     staleTime: 15_000,
@@ -144,6 +153,8 @@ export default function HomePage() {
           )}
         </section>
       )}
+
+      {home.data && <WeekRecapCard home={home.data} />}
 
       <section aria-labelledby="my-courses">
         <div className="section-head">

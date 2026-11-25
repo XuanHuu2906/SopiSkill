@@ -79,3 +79,9 @@ sopiskill:
   s3-secret-key: ${S3_SECRET_KEY:sopiskill_minio_password}
   s3-bucket: ${S3_BUCKET:sopiskill-sources}
   s3-region: ${S3_REGION:us-east-1}
+  xp-lesson-base: ${XP_LESSON_BASE:80}
+  xp-perfect-bonus: ${XP_PERFECT_BONUS:20}
+  hearts-max: ${HEARTS_MAX:5}
+  hearts-refill-minutes: ${HEARTS_REFILL_MINUTES:30}
+  hearts-enforcement-enabled: ${HEARTS_ENFORCEMENT_ENABLED:false}
+  leagues-enabled: ${LEAGUES_ENABLED:false}

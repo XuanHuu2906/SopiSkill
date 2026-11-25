@@ -4843,3 +4843,314 @@ button.tutor-chip:disabled,
     animation: none;
   }
 }
+
+
+/* ---------- Phase 6: Gamification, WeekChart, Milestones, Complete & Leagues ---------- */
+
+.week-recap-card {
+  margin: 22px 0 28px;
+  padding: 20px 22px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--linen);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.week-recap-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.week-recap-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gamify-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--linen);
+  background: var(--cream);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.gamify-pill.is-freeze {
+  border-color: var(--ember);
+  color: var(--ember-deep);
+  background: var(--wash);
+}
+
+.gamify-pill.is-low-hearts {
+  border-color: var(--clay);
+  color: var(--clay);
+}
+
+.week-recap-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--linen);
+}
+
+.week-recap-goal {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.week-chart-bars {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.week-chart-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.week-chart-xp {
+  min-height: 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ember-deep);
+}
+
+.week-chart-track {
+  width: 100%;
+  max-width: 40px;
+  height: 84px;
+  border-radius: 10px;
+  background: var(--bone);
+  display: flex;
+  align-items: flex-end;
+  padding: 3px;
+}
+
+.week-chart-fill {
+  width: 100%;
+  border-radius: 7px;
+  background: var(--sand);
+}
+
+.week-chart-col.is-active .week-chart-fill {
+  background: var(--ember);
+}
+
+.week-chart-day {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.week-chart-col.is-today .week-chart-day {
+  color: var(--ember-deep);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.milestones-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.milestone-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--linen);
+  background: var(--surface);
+}
+
+.milestone-card.is-earned {
+  border-color: var(--ember);
+  background: var(--wash);
+}
+
+.milestone-card.is-locked {
+  opacity: 0.85;
+}
+
+.milestone-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--bone);
+  color: var(--ink-2);
+}
+
+.milestone-card.is-earned .milestone-icon {
+  background: var(--ember);
+  color: #ffffff;
+}
+
+.milestone-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.milestone-desc {
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
+
+.complete-page {
+  position: relative;
+  padding-bottom: 48px;
+}
+
+.complete-confetti {
+  position: relative;
+  height: 18px;
+  overflow: hidden;
+  pointer-events: none;
+  margin-bottom: 4px;
+}
+
+.complete-confetti-piece {
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  animation: sopi-confetti-fall 1.6s ease-out forwards;
+}
+
+@keyframes sopi-confetti-fall {
+  0% {
+    transform: translateY(-6px) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(18px) rotate(140deg);
+    opacity: 0;
+  }
+}
+
+.unit-breakdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.unit-breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--linen);
+}
+
+.unit-breakdown-row:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.unit-breakdown-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.complete-review-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.league-tier-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.league-tier-chip {
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--linen);
+  background: var(--cream);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.league-tier-chip.is-current {
+  background: var(--ember);
+  border-color: var(--ember);
+  color: #ffffff;
+}
+
+.league-standings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.league-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--linen);
+  background: var(--surface);
+}
+
+.league-row.is-me {
+  border-color: var(--ember);
+  background: var(--wash);
+  font-weight: 700;
+}
+
+.league-rank {
+  width: 38px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.league-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.league-xp {
+  font-weight: 700;
+  color: var(--ember-deep);
+}

@@ -7,17 +7,68 @@ import {
   fetchTutorThreads,
   fetchTutorUsage,
   newClientId,
+  resumeTutorStream,
   stopTutorMessage,
   streamTutorMessage,
   TutorStreamError,
+  type GlobalTutorSessionList,
+  type TutorAction,
   type TutorCitation,
+  type TutorEntryPoint,
   type TutorStreamEvent,
   type TutorThread,
 } from "@/lib/api";
 import { useSessionQueryKey } from "../../providers";
+import { Badge } from "@/components/ui/Badge";
 import { Button, IconButton } from "@/components/ui/Button";
 import Icon from "@/components/ui/Icon";
 import useModalPanel from "@/components/ui/useModalPanel";
+import ChangeCard from "@/components/tutor/ChangeCard";
+
+const TOOL_LABELS: Record<string, string> = {
+  read_lesson: "Đọc bài học",
+  explain_deeper: "Giải thích sâu hơn",
+  read_source: "Tra cứu nguồn",
+  flag_question: "Gắn cờ câu hỏi",
+  revise_proposal: "Chỉnh đề cương",
+  regenerate_unit: "Đề xuất viết lại chương",
+};
+
+const PROMPT_CHIPS_BY_ENTRY: Record<TutorEntryPoint, string[]> = {
+  tab: [
+    "Giải thích trong 30 giây",
+    "Cho mình một ví dụ thực tế",
+    "Phần này quá khó, viết lại chương giúp mình",
+    "Báo lỗi câu hỏi này",
+  ],
+  wrong_answer: [
+    "Vì sao đáp án của mình chưa đúng?",
+    "Gợi ý từng bước không lộ đáp án",
+    "Cho ví dụ tương tự dễ hơn",
+    "Báo lỗi câu hỏi này",
+  ],
+  teach_block: [
+    "Giải thích trực quan hơn",
+    "Phần này áp dụng ở đâu?",
+    "Đối chiếu với nguồn tài liệu",
+    "Mình nên lưu ý gì nhất?",
+  ],
+  term: [
+    "Giải thích thuật ngữ này bằng đời thường",
+    "Phân biệt với khái niệm dễ nhầm",
+    "Cho ví dụ ngắn có thuật ngữ này",
+  ],
+  path_harder: [
+    "Chương này quá khó, viết lại dễ hơn",
+    "Chương này quá dễ, tăng độ sâu hơn",
+    "Thêm bài tập tình huống thực tế",
+  ],
+  proposal: [
+    "Thêm bài dự án thực hành",
+    "Rút gọn kế hoạch học nhanh hơn",
+    "Tăng bài tập áp dụng",
+  ],
+};
 
 interface ToolNote {
   name: string;
@@ -69,16 +120,20 @@ export default function TutorPanel({
   lessonId,
   activeBlockIndex,
   blockLabel,
+  entryPoint = "tab",
   open,
   onClose,
   docked = false,
   courseOptions,
   onSelectCourse,
+  globalSessions,
+  onSelectSession,
 }: {
   courseId: string;
   lessonId: string;
   activeBlockIndex: number;
   blockLabel?: string;
+  entryPoint?: TutorEntryPoint;
   open: boolean;
   onClose: () => void;
   /** True when the viewport is wide enough to dock the rail beside the lesson. */
@@ -86,11 +141,14 @@ export default function TutorPanel({
   /** Optional course switcher when Sopi is opened globally outside a lesson. */
   courseOptions?: { id: string; topic: string }[];
   onSelectCourse?: (courseId: string) => void;
+  globalSessions?: GlobalTutorSessionList;
+  onSelectSession?: (courseId: string, threadId: string) => void;
 }) {
   const queryClient = useQueryClient();
   const threadsKey = useSessionQueryKey("tutor-threads", courseId);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [actions, setActions] = useState<TutorAction[]>([]);
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +157,8 @@ export default function TutorPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const messageIdRef = useRef<string | null>(null);
+  const lastEventIdRef = useRef<string | null>(null);
+  const terminalSeenRef = useRef<boolean>(false);
   const [stopping, setStopping] = useState(false);
   const [toolNotes, setToolNotes] = useState<ToolNote[]>([]);
 
@@ -133,6 +193,7 @@ export default function TutorPanel({
     abortRef.current?.abort();
     setThreadId(null);
     setMessages([]);
+    setActions([]);
     setToolNotes([]);
     setError(null);
     setNotice(null);
@@ -145,6 +206,7 @@ export default function TutorPanel({
         const thread: TutorThread = await fetchTutorThread(courseId, id);
         setThreadId(thread.id);
         setNotice(thread.notice);
+        setActions(thread.actions ?? []);
         setMessages(
           thread.messages.map((m) => ({
             id: m.id,
@@ -184,12 +246,41 @@ export default function TutorPanel({
       return;
     }
     if (event.event === "done") {
+      terminalSeenRef.current = true;
       const targetId = event.data.messageId ?? messageIdRef.current;
       setMessages((prev) =>
         prev.map((m) =>
           m.id === targetId ? { ...m, status: "completed" } : m
         )
       );
+      return;
+    }
+    if (event.event === "confirm" && event.data.actionId) {
+      const nextAction: TutorAction = {
+        actionId: event.data.actionId,
+        messageId: event.data.messageId,
+        toolName: event.data.toolName ?? "regenerate_unit",
+        status: (event.data.status as TutorAction["status"]) ?? "pending",
+        payload: event.data.payload as TutorAction["payload"],
+        preview: event.data.preview,
+      };
+      setActions((prev) =>
+        prev.some((a) => a.actionId === nextAction.actionId) ? prev : [...prev, nextAction]
+      );
+      return;
+    }
+    if (event.event === "restarted") {
+      terminalSeenRef.current = true;
+      const targetId = event.data.messageId ?? messageIdRef.current;
+      if (event.data.content) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === targetId
+              ? { ...m, content: event.data.content ?? m.content, status: "completed" }
+              : m
+          )
+        );
+      }
       return;
     }
     if (event.event === "citations") {
@@ -223,6 +314,7 @@ export default function TutorPanel({
       return;
     }
     if (event.event === "cancelled") {
+      terminalSeenRef.current = true;
       const targetId = event.data.messageId ?? messageIdRef.current;
       setMessages((prev) =>
         prev.map((m) =>
@@ -233,6 +325,7 @@ export default function TutorPanel({
       return;
     }
     if (event.event === "error") {
+      terminalSeenRef.current = true;
       const code = event.data.code ?? "TUTOR_PROVIDER_ERROR";
       const targetId = event.data.messageId ?? messageIdRef.current;
       setMessages((prev) =>
@@ -253,6 +346,8 @@ export default function TutorPanel({
     setError(null);
     const clientMessageId = newClientId("tmsg");
     messageIdRef.current = null;
+    lastEventIdRef.current = null;
+    terminalSeenRef.current = false;
     setNotice(null);
     setToolNotes([]);
     const localUser: ChatMessage = {
@@ -287,33 +382,46 @@ export default function TutorPanel({
     }
 
     try {
+      const streamHandlers = {
+        signal: controller.signal,
+        onThreadId: (id: string) => setThreadId(id),
+        onMessageId: adoptMessageId,
+        onEventId: (eid: string) => {
+          lastEventIdRef.current = eid;
+        },
+        onEvent: (event: TutorStreamEvent) => {
+          if (event.data.messageId) adoptMessageId(event.data.messageId);
+          if (event.event === "delta") {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, status: "streaming" }
+                  : m
+              )
+            );
+          }
+          handleEvent(event);
+        },
+      };
+
       await streamTutorMessage(
         courseId,
         {
           clientMessageId,
           threadId,
           text: question,
+          entryPoint,
+          contextLabel: blockLabel,
           contextRef: { lessonId, blockIndex: activeBlockIndex },
         },
-        {
-          signal: controller.signal,
-          onThreadId: (id) => setThreadId(id),
-          onMessageId: adoptMessageId,
-          onEvent: (event) => {
-            if (event.data.messageId) adoptMessageId(event.data.messageId);
-            if (event.event === "delta") {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, status: "streaming" }
-                    : m
-                )
-              );
-            }
-            handleEvent(event);
-          },
-        }
+        streamHandlers
       );
+
+      // Multi-pod automatic Last-Event-ID resume if connection closed before terminal event
+      if (!terminalSeenRef.current && !controller.signal.aborted && messageIdRef.current && lastEventIdRef.current) {
+        await resumeTutorStream(courseId, messageIdRef.current, lastEventIdRef.current, streamHandlers);
+      }
+
       queryClient.invalidateQueries({ queryKey: threadsKey });
       queryClient.invalidateQueries({ queryKey: usageKey });
     } catch (err) {
@@ -442,6 +550,66 @@ export default function TutorPanel({
           </div>
         )}
 
+        {globalSessions && globalSessions.total > 0 && (
+          <details className="tutor-threads" style={{ marginBottom: 8 }}>
+            <summary className="caption" style={{ cursor: "pointer", fontWeight: 600 }}>
+              Phiên hỏi Sopi gần đây ({globalSessions.total})
+            </summary>
+            <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+              {globalSessions.thisWeek.length > 0 && (
+                <div>
+                  <div className="caption" style={{ fontWeight: 700, marginBottom: 4 }}>Tuần này</div>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    {globalSessions.thisWeek.slice(0, 5).map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className="quick-chip"
+                        style={{ textAlign: "left", justifyContent: "space-between", width: "100%" }}
+                        onClick={() => {
+                          if (s.courseId === courseId) {
+                            void openThread(s.id);
+                          } else {
+                            onSelectSession?.(s.courseId, s.id);
+                          }
+                        }}
+                      >
+                        <span>{s.title || s.courseTopic}</span>
+                        <span className="caption">{s.courseTopic}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {globalSessions.earlier.length > 0 && (
+                <div>
+                  <div className="caption" style={{ fontWeight: 700, marginBottom: 4 }}>Trước đó</div>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    {globalSessions.earlier.slice(0, 5).map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className="quick-chip"
+                        style={{ textAlign: "left", justifyContent: "space-between", width: "100%" }}
+                        onClick={() => {
+                          if (s.courseId === courseId) {
+                            void openThread(s.id);
+                          } else {
+                            onSelectSession?.(s.courseId, s.id);
+                          }
+                        }}
+                      >
+                        <span>{s.title || s.courseTopic}</span>
+                        <span className="caption">{s.courseTopic}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </details>
+        )}
+
         {threads.data && threads.data.total > 0 && (
           <div className="tutor-threads" style={{ marginBottom: 8 }}>
             <label className="sr-only" htmlFor="tutor-thread-select">
@@ -489,6 +657,9 @@ export default function TutorPanel({
                   >
                     <Icon name={note.status === "ok" ? "check" : "close"} size={12} />
                   </span>
+                  <Badge tone={note.status === "ok" ? "muted" : "danger"}>
+                    {TOOL_LABELS[note.name] ?? note.name}
+                  </Badge>
                   <span>
                     {note.summary || (note.status === "ok" ? `Đã dùng ${note.name}` : `Không thể dùng ${note.name}`)}
                   </span>
@@ -570,17 +741,22 @@ export default function TutorPanel({
                 )}
             </div>
           ))}
+          {actions.map((act) => (
+            <ChangeCard
+              key={act.actionId || act.id}
+              courseId={courseId}
+              initialAction={act}
+              onReady={() => {
+                queryClient.invalidateQueries({ queryKey: ["session"] });
+              }}
+            />
+          ))}
         </div>
 
         {error && <div className="error-box" role="alert">{error}</div>}
 
         <div className="tutor-chips-row" aria-label="Gợi ý câu hỏi nhanh">
-          {[
-            "Giải thích trong 30 giây",
-            "Cho mình một ví dụ thực tế",
-            "Phần này áp dụng ở đâu?",
-            "Mình nên lưu ý gì nhất?",
-          ].map((chip) => (
+          {(PROMPT_CHIPS_BY_ENTRY[entryPoint] ?? PROMPT_CHIPS_BY_ENTRY.tab).map((chip) => (
             <button
               key={chip}
               type="button"
