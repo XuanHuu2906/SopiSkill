@@ -18,15 +18,17 @@
     - `contracts/internal-ai.yaml`: đóng băng hợp đồng nội bộ `core-api (Spring Boot) ↔ ai-engine (Python)` (OpenAPI 3.1 + `x-redis-streams` cho `queue:ai:llm` & `queue:ai:ingest`, xác thực `X-Internal-Service-Token` constant-time + HMAC-SHA256 replay protection `X-Internal-Timestamp` / `X-Internal-Signature` ±300s + `X-Correlation-Id`, và bất biến `0` answer key trên `TutorStreamInternalRequest`).
     - `backend/tests/test_contracts_openapi.py`: test chống drift tự động cho cả `public-api.yaml` và `internal-ai.yaml`.
   - **Decision Log & Architecture Docs:** ghi nhận `DEC-019`..`DEC-029` vào `docs/specs/17-DECISION-LOG.md` kèm tài liệu `docs/spring-boot-python-k8s-architecture.md` và `plans/sopiskill_master_parity_plan.md`.
-- **TESTED (100% offline/mock, 0đ chi phí LLM/Cloud):**
+- **TESTED (100% offline/mock + live Docker Compose 7/7 containers, 0đ chi phí LLM/Cloud):**
   - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build && npm run test:e2e` → exit `0` (`eslint` 0 warnings, `tsc --noEmit` 0 errors, `next build` 13/13 pages, **5 passed (16.4s)** trên Chromium thật + `axe-core` **0 violations**).
   - `cd backend && .venv/bin/python scripts/export_public_openapi.py` → exit `0` (`44 paths, 84 schemas`).
-  - `cd backend && .venv/bin/python -m pytest -q` (chạy trước khi sửa import `scripts` → `842 passed, 31 skipped, 1 failed` ở `test_p61_ci_contract.py`), sau khi đổi sang `importlib.util` chạy `cd backend && .venv/bin/python -m pytest tests/test_contracts_openapi.py tests/test_p61_ci_contract.py -v` → exit `0` (**19 passed**, 0 failed).
+  - `cd backend && .venv/bin/python -m pytest -q` → exit `0` (**843 passed, 31 skipped, 0 failed** trong `34.69s`, bao gồm `test_contracts_openapi.py` và `test_p61_ci_contract.py`).
   - `cd backend && .venv/bin/python -m bandit -r app scripts/export_public_openapi.py -q` → exit `0` (0 findings).
+  - **Live Docker Compose (`docker compose up -d --build`):** 7/7 containers UP & HEALTHY (`db`, `redis`, `minio` healthy; `backend`, `worker`, `beat`, `frontend` up); `GET http://127.0.0.1:8001/ready` → `200 OK` (`database=ok, redis=ok, config=ok`); `GET http://127.0.0.1:3000/profile` → `200 OK` + baseline security headers; `alembic current` = `0018_wave4_glossary (head)`.
+  - **Live PostgreSQL 16 (`:5433`, scratch DB `ailp_phase0_race_test`):** `alembic upgrade head` → `downgrade -1` → `upgrade head` exit `0`; `pytest tests/*postgres_concurrency*.py -q` → exit `0` (**29 passed, 0 failed** trong `24.32s`); đã dọn sạch scratch DB `ailp_phase0_race_test` (volume chính nguyên vẹn).
+  - **Legacy cleanup (`f74f745`):** dọn 255 file tracked cũ/không còn dùng + rác local/backup cũ theo xác nhận owner; `test_contracts_openapi.py` + `test_p61_ci_contract.py` tái kiểm **19 passed**.
   - `git diff --check` → exit `0`.
 - **NOT TESTED:**
-  - PostgreSQL concurrency/migration tests (`31 skipped` khi chạy SQLite cục bộ không có `POSTGRES_TEST_URL`, không thuộc phạm vi Phase 0 do Phase 0 chưa thay đổi DB schema hay backend runtime).
-  - Screen reader thật (NVDA/VoiceOver); Docker runtime (Phase 0 không thay đổi `docker-compose.yml`).
+  - 2 optional OCR engine tests (`rapidocr`/`vietocr` không cài trong `.venv` mặc định — ngoài phạm vi Phase 0); screen reader thật (NVDA/VoiceOver).
 - **ROLLBACK:** Thuần Git — giữ nguyên nhánh `feat/p6.0-ci-pipeline` (`a091ea7`); xóa/revert nhánh `feat/polyglot-phase0` để quay lại baseline trước Phase 0. Không có thay đổi DB hay volume.
 
 ## 2026-11-23 — Wave 4 — Product Gaps Ưu tiên (`P1-PROPOSAL-EDIT`, `P1-GLOSSARY`, Per-Block Grading + Short Dispute Rubric, `M1-ME-SURFACE`)
