@@ -80,10 +80,10 @@ function GeneratingInner() {
   });
 
   useEffect(() => {
-    if (gen.data?.status === "ready") {
+    if (gen.data?.status === "ready" || (gen.data?.lessonsDone ?? 0) >= 1) {
       router.push(`/course/${encodeURIComponent(courseId)}`);
     }
-  }, [gen.data?.status, courseId, router]);
+  }, [gen.data?.status, gen.data?.lessonsDone, courseId, router]);
 
   if (!courseId) return <p className="muted">Thiếu courseId.</p>;
   if (authLoading) return <p className="muted">Đang kiểm tra phiên đăng nhập…</p>;

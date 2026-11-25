@@ -15,7 +15,8 @@ class PublicBlockProjectorTest {
             "test", "http://localhost:3000", "jwt-secret-at-least-32-bytes-for-hmac-test",
             "iss", "aud", 60, false, "super-secret-shuffle-key-32-bytes!!",
             "http://127.0.0.1:8010", "tok", "hmac", 300,
-            "queue:ai:llm", "queue:ai:ingest", true, 30, 100000, 2, false, true, false, false
+            "queue:ai:llm", "queue:ai:ingest", true, 30, 100000, 2, false, true, false, false,
+            "http://127.0.0.1:9010", "http://127.0.0.1:9010", "minio", "minio-pass", "sopiskill-sources", "us-east-1"
     );
     private final PublicBlockProjector projector = new PublicBlockProjector(props);
 

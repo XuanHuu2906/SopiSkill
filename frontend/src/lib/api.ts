@@ -130,6 +130,20 @@ export function fetchCourses(limit = 20, offset = 0): Promise<CourseList> {
 
 // ---------- Source Registry (P3.0) ----------
 
+export interface SourceBriefSection {
+  anchor: string;
+  heading: string;
+  gist: string;
+}
+
+export interface SourceBrief {
+  what: string;
+  claims: string[];
+  notation: string[];
+  assumes: string[];
+  sections: SourceBriefSection[];
+}
+
 export interface SourceOut {
   id: string;
   sourceType: string;
@@ -148,6 +162,11 @@ export interface SourceOut {
   verificationStatus: string;
   ownerId: string | null;
   createdAt: string | null;
+  brief?: SourceBrief | null;
+  wordCount?: number | null;
+  durationMinutes?: number | null;
+  suggestedTopic?: string | null;
+  rejectReason?: string | null;
 }
 
 export interface CourseSourceList {
@@ -943,4 +962,108 @@ export function deleteMe(body: { confirmText: string; password?: string }): Prom
     method: "DELETE",
     body,
   });
+}
+
+// ---------- Phase 3: Presigned PDF Ingest, Course Path, Lifecycle ----------
+
+export interface PresignUploadResult {
+  sourceId: string;
+  documentId: string;
+  storageKey: string;
+  uploadUrl: string;
+  method: "PUT";
+  expiresInSeconds: number;
+}
+
+export interface TriggerIngestResult {
+  sourceId: string;
+  documentId: string;
+  status: string;
+}
+
+export function presignSourceUpload(body: {
+  filename: string;
+  contentType: string;
+  byteSize: number;
+  title?: string;
+}): Promise<PresignUploadResult> {
+  return api<PresignUploadResult>("/v1/sources/upload", {
+    method: "POST",
+    body,
+  });
+}
+
+export async function putPresignedFile(uploadUrl: string, file: File): Promise<void> {
+  const res = await fetch(uploadUrl, {
+    method: "PUT",
+    body: file,
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "STORAGE_UPLOAD_FAILED", `Tải tệp lên kho lưu trữ thất bại (${res.status}).`);
+  }
+}
+
+export function triggerSourceIngest(
+  sourceId: string,
+  body?: { documentId?: string; rawText?: string; ocrEnabled?: boolean }
+): Promise<TriggerIngestResult> {
+  return api<TriggerIngestResult>(`/v1/sources/${sourceId}/ingest`, {
+    method: "POST",
+    body: body ?? {},
+  });
+}
+
+export function fetchSource(sourceId: string): Promise<SourceOut> {
+  return api<SourceOut>(`/v1/sources/${sourceId}`);
+}
+
+export interface CoursePathLesson {
+  id: string;
+  orderIndex: number;
+  title: string;
+  status: string;
+  state: "done" | "next" | "open" | "preparing" | "failed";
+  contentVersion: number;
+  estimatedMinutes?: number;
+  kind?: string;
+  format?: string;
+  completed: boolean;
+}
+
+export interface CoursePathUnit {
+  id: string;
+  orderIndex: number;
+  kicker?: string | null;
+  title: string;
+  blurb: string;
+  tone?: string | null;
+  lessons: CoursePathLesson[];
+}
+
+export interface CoursePathOut {
+  id: string;
+  topic: string;
+  status: string;
+  language?: CourseLanguage;
+  units: CoursePathUnit[];
+  progress: { completed: number; total: number; percent: number };
+  hasPreparingLessons?: boolean;
+}
+
+export function fetchCoursePath(courseId: string): Promise<CoursePathOut> {
+  return api<CoursePathOut>(`/v1/courses/${courseId}/path`);
+}
+
+export function deleteCourse(courseId: string): Promise<void> {
+  return api<void>(`/v1/courses/${courseId}`, { method: "DELETE" });
+}
+
+export function retryLesson(lessonId: string): Promise<{ lessonId: string; jobId: string; status: string }> {
+  return api<{ lessonId: string; jobId: string; status: string }>(`/v1/lessons/${lessonId}/retry`, {
+    method: "POST",
+  });
+}
+
+export function prefetchLesson(lessonId: string): Promise<unknown> {
+  return api<unknown>(`/v1/lessons/${lessonId}?prefetch=1`);
 }

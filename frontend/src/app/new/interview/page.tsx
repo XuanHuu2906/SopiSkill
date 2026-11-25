@@ -9,8 +9,16 @@ import { Button, IconButton } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/Progress";
 import Icon from "@/components/ui/Icon";
 
+interface StructuredQuestion {
+  index: number;
+  prompt: string;
+  kind: "single" | "multi" | "freeform";
+  choices: string[];
+}
+
 interface InterviewOut {
   questions: string[];
+  structuredQuestions?: StructuredQuestion[];
   completedCount: number;
 }
 
@@ -53,9 +61,44 @@ function InterviewInner() {
   }, [interview.data, courseId, router]);
 
   const questions = interview.data?.questions ?? [];
+  const structuredQuestions = interview.data?.structuredQuestions ?? [];
+  const currentStructured = structuredQuestions[current] ?? null;
+  const currentChoices = currentStructured?.choices ?? [];
+  const currentKind = currentStructured?.kind ?? "freeform";
   const completedCount = Math.min(interview.data?.completedCount ?? 0, 5);
   const redirecting = completedCount >= 5;
   const percent = (Math.min(current, 5) / 5) * 100;
+
+  function toggleChoice(choice: string) {
+    setAnswers((prev) =>
+      prev.map((existing, idx) => {
+        if (idx !== current) return existing;
+        if (currentKind === "multi") {
+          const parts = existing
+            .split(",")
+            .map((p) => p.trim())
+            .filter(Boolean);
+          const next = parts.includes(choice)
+            ? parts.filter((p) => p !== choice)
+            : [...parts, choice];
+          return next.join(", ");
+        }
+        return choice;
+      })
+    );
+  }
+
+  function isChoiceSelected(choice: string): boolean {
+    const val = (answers[current] ?? "").trim();
+    if (!val) return false;
+    if (currentKind === "multi") {
+      return val
+        .split(",")
+        .map((p) => p.trim())
+        .includes(choice);
+    }
+    return val === choice;
+  }
 
   async function submitAnswer() {
     if (!courseId || current >= 5) return;
@@ -163,6 +206,39 @@ function InterviewInner() {
 
       {questions[current] && (
         <>
+          {currentChoices.length > 0 && (
+            <div
+              role="group"
+              aria-label={currentKind === "multi" ? "Chọn nhiều gợi ý" : "Chọn nhanh câu trả lời"}
+              style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "12px 0" }}
+            >
+              {currentChoices.map((choice) => {
+                const selected = isChoiceSelected(choice);
+                return (
+                  <button
+                    key={choice}
+                    type="button"
+                    className="quick-chip"
+                    aria-pressed={selected}
+                    disabled={submitting}
+                    style={
+                      selected
+                        ? {
+                            borderColor: "var(--ember)",
+                            background: "var(--wash)",
+                            color: "var(--ember-deep)",
+                            fontWeight: 600,
+                          }
+                        : undefined
+                    }
+                    onClick={() => toggleChoice(choice)}
+                  >
+                    {choice}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div className="interview-composer">
             <label htmlFor="interview-answer" className="sr-only">
               Câu trả lời

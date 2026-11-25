@@ -39,6 +39,7 @@ public class SourcesAndResearchController {
     private final RateLimiterService rateLimiter;
     private final SopiProperties props;
     private final AiEngineClient aiEngine;
+    private final S3PresignService s3Presign;
 
     public SourcesAndResearchController(
             JdbcClient jdbc,
@@ -46,7 +47,8 @@ public class SourcesAndResearchController {
             CsrfValidator csrf,
             RateLimiterService rateLimiter,
             SopiProperties props,
-            AiEngineClient aiEngine
+            AiEngineClient aiEngine,
+            S3PresignService s3Presign
     ) {
         this.jdbc = jdbc;
         this.json = json;
@@ -54,7 +56,17 @@ public class SourcesAndResearchController {
         this.rateLimiter = rateLimiter;
         this.props = props;
         this.aiEngine = aiEngine;
+        this.s3Presign = s3Presign;
     }
+
+    public record PresignUploadRequest(
+            @NotBlank String filename,
+            String contentType,
+            Long byteSize,
+            String title
+    ) {}
+
+    public record TriggerIngestRequest(String documentId, String rawText, Boolean ocrEnabled) {}
 
     public record CreateSourceRequest(
             @NotBlank String title,
@@ -119,7 +131,8 @@ public class SourcesAndResearchController {
         List<Map<String, Object>> items = jdbc.sql("""
                 SELECT id, source_type, title, canonical_url, author, publisher, publication_date,
                        source_updated_at, retrieved_at, language, version, visibility, license_info,
-                       content_hash, verification_status, owner_id, created_at
+                       content_hash, verification_status, owner_id, created_at,
+                       brief, word_count, duration_minutes, suggested_topic, reject_reason
                 FROM core.sources
                 WHERE owner_id = :uid OR visibility = 'public'
                 ORDER BY created_at DESC
@@ -175,6 +188,135 @@ public class SourcesAndResearchController {
                 .update();
 
         return ResponseEntity.status(HttpStatus.CREATED).body(loadOwnedOrPublicSource(principal.userId(), sid));
+    }
+
+    @PostMapping("/v1/sources/upload")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> presignPdfUpload(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @Valid @RequestBody PresignUploadRequest body,
+            HttpServletRequest request
+    ) {
+        csrf.verify(request);
+        rateLimiter.check(request, "source_presign", 20, 60);
+
+        long maxBytes = 25L * 1024 * 1024;
+        long size = body.byteSize() == null ? 0L : body.byteSize();
+        if (size <= 0 || size > maxBytes) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "PDF_SIZE_INVALID", "Dung lượng PDF phải lớn hơn 0 và không vượt quá 25 MB.");
+        }
+        String ct = body.contentType() == null ? "application/pdf" : body.contentType().trim().toLowerCase();
+        if (!"application/pdf".equals(ct)) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "PDF_CONTENT_TYPE_INVALID", "Chỉ hỗ trợ tệp PDF (application/pdf).");
+        }
+
+        UUID sid = UUID.randomUUID();
+        UUID did = UUID.randomUUID();
+        String cleanFilename = body.filename().trim().replaceAll("[^a-zA-Z0-9._-]", "_");
+        String title = (body.title() != null && !body.title().isBlank())
+                ? body.title().trim()
+                : cleanFilename.replaceAll("(?i)\\.pdf$", "").replace('_', ' ');
+        String storageKey = "sources/" + sid + "/" + did + ".pdf";
+
+        jdbc.sql("""
+                INSERT INTO core.sources (id, owner_id, source_type, title, visibility)
+                VALUES (:sid, :uid, 'user_document', :title, 'private')
+                """)
+                .param("sid", sid)
+                .param("uid", principal.userId())
+                .param("title", title.isBlank() ? "Tài liệu PDF" : title)
+                .update();
+
+        jdbc.sql("""
+                INSERT INTO core.source_documents (
+                    id, source_id, status, origin, mime, byte_size, original_filename, storage_key
+                ) VALUES (
+                    :did, :sid, 'queued', 'upload', 'application/pdf', :size, :fname, :skey
+                )
+                """)
+                .param("did", did)
+                .param("sid", sid)
+                .param("size", size)
+                .param("fname", cleanFilename)
+                .param("skey", storageKey)
+                .update();
+
+        int expires = 900;
+        String uploadUrl = s3Presign.createPresignedPutUrl(storageKey, expires);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sourceId", IdCodec.format("src", sid));
+        out.put("documentId", IdCodec.format("doc", did));
+        out.put("storageKey", storageKey);
+        out.put("uploadUrl", uploadUrl);
+        out.put("method", "PUT");
+        out.put("expiresInSeconds", expires);
+        return ResponseEntity.status(HttpStatus.CREATED).body(out);
+    }
+
+    @PostMapping("/v1/sources/{sourceId}/ingest")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> triggerSourceIngest(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String sourceId,
+            @RequestBody(required = false) TriggerIngestRequest body,
+            HttpServletRequest request
+    ) {
+        csrf.verify(request);
+        rateLimiter.check(request, "source_ingest", 20, 60);
+        UUID sid = IdCodec.parse(sourceId, "src");
+        loadOwnedSource(principal.userId(), sid);
+
+        String sourceTitle = jdbc.sql("SELECT title FROM core.sources WHERE id = :sid")
+                .param("sid", sid).query(String.class).single();
+
+        UUID docUuid;
+        String storageKey;
+        if (body != null && body.documentId() != null && !body.documentId().isBlank()) {
+            docUuid = IdCodec.parse(body.documentId(), "doc");
+            storageKey = jdbc.sql("SELECT storage_key FROM core.source_documents WHERE id = :did AND source_id = :sid")
+                    .param("did", docUuid).param("sid", sid).query(String.class).optional().orElse(null);
+        } else {
+            var latestDoc = jdbc.sql("""
+                    SELECT id, storage_key FROM core.source_documents
+                    WHERE source_id = :sid ORDER BY created_at DESC LIMIT 1
+                    """)
+                    .param("sid", sid)
+                    .query((rs, rowNum) -> Map.of(
+                            "id", rs.getObject("id", UUID.class),
+                            "storageKey", rs.getString("storage_key") == null ? "" : rs.getString("storage_key")
+                    ))
+                    .optional()
+                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "DOCUMENT_NOT_FOUND", "Chưa có tệp nào cho nguồn này."));
+            docUuid = (UUID) latestDoc.get("id");
+            storageKey = String.valueOf(latestDoc.get("storageKey"));
+        }
+
+        jdbc.sql("UPDATE core.source_documents SET status = 'extracting' WHERE id = :did")
+                .param("did", docUuid).update();
+
+        boolean useRawText = body != null && body.rawText() != null && !body.rawText().isBlank();
+        Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("sourceId", IdCodec.format("src", sid));
+        msg.put("documentId", IdCodec.format("doc", docUuid));
+        msg.put("idempotencyKey", "ing_" + docUuid + "_" + System.currentTimeMillis());
+        msg.put("ownerId", IdCodec.format("usr", principal.userId()));
+        msg.put("sourceTitle", sourceTitle);
+        msg.put("sourceKind", useRawText ? "raw_text" : "pdf_s3");
+        if (useRawText) {
+            msg.put("rawText", body.rawText());
+        } else {
+            msg.put("storageKey", storageKey);
+        }
+        msg.put("ocrEnabled", body != null && Boolean.TRUE.equals(body.ocrEnabled()));
+        msg.put("correlationId", "cor_" + docUuid.toString().replace("-", "").substring(0, 16));
+
+        aiEngine.enqueueIngestJob(msg);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of(
+                "sourceId", IdCodec.format("src", sid),
+                "documentId", IdCodec.format("doc", docUuid),
+                "status", "extracting"
+        ));
     }
 
     @GetMapping("/v1/sources/{sourceId}")
@@ -379,7 +521,8 @@ public class SourcesAndResearchController {
                        s.id, s.source_type, s.title, s.canonical_url, s.author, s.publisher,
                        s.publication_date, s.source_updated_at, s.retrieved_at, s.language,
                        s.version, s.visibility, s.license_info, s.content_hash,
-                       s.verification_status, s.owner_id, s.created_at
+                       s.verification_status, s.owner_id, s.created_at,
+                       s.brief, s.word_count, s.duration_minutes, s.suggested_topic, s.reject_reason
                 FROM core.course_sources cs
                 JOIN core.sources s ON s.id = cs.source_id
                 WHERE cs.course_id = :cid
@@ -617,7 +760,8 @@ public class SourcesAndResearchController {
         return jdbc.sql("""
                 SELECT id, source_type, title, canonical_url, author, publisher, publication_date,
                        source_updated_at, retrieved_at, language, version, visibility, license_info,
-                       content_hash, verification_status, owner_id, created_at
+                       content_hash, verification_status, owner_id, created_at,
+                       brief, word_count, duration_minutes, suggested_topic, reject_reason
                 FROM core.sources
                 WHERE id = :sid AND (owner_id = :uid OR visibility = 'public')
                 """)
@@ -649,6 +793,12 @@ public class SourcesAndResearchController {
         m.put("ownerId", IdCodec.format("usr", rs.getObject("owner_id", UUID.class)));
         var ca = rs.getTimestamp("created_at");
         m.put("createdAt", ca == null ? null : ca.toInstant().toString());
+        String briefStr = rs.getString("brief");
+        m.put("brief", briefStr == null ? null : json.fromJson(briefStr, new TypeReference<Map<String, Object>>() {}));
+        m.put("wordCount", rs.getObject("word_count"));
+        m.put("durationMinutes", rs.getObject("duration_minutes"));
+        m.put("suggestedTopic", rs.getString("suggested_topic"));
+        m.put("rejectReason", rs.getString("reject_reason"));
         return m;
     }
 

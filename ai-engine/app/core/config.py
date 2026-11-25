@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     ocr_enabled: bool = False
     ocr_engine: str = "vietocr"
 
+    # Phase 3: 2-Tier Validator QA & progressive generation
+    validator_llm_enabled: bool = False
+
     readiness_timeout_seconds: float = 2.0
 
     @property

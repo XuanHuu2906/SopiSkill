@@ -73,3 +73,9 @@ sopiskill:
   p50-enabled: ${P50_ENABLED:true}
   rate-limit-enabled: ${RATE_LIMIT_ENABLED:true}
   rate-limit-fail-closed: ${RATE_LIMIT_FAIL_CLOSED:false}
+  s3-endpoint: ${S3_ENDPOINT:http://127.0.0.1:9010}
+  s3-public-endpoint: ${S3_PUBLIC_ENDPOINT:http://127.0.0.1:9010}
+  s3-access-key: ${S3_ACCESS_KEY:sopiskill_minio}
+  s3-secret-key: ${S3_SECRET_KEY:sopiskill_minio_password}
+  s3-bucket: ${S3_BUCKET:sopiskill-sources}
+  s3-region: ${S3_REGION:us-east-1}

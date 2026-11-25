@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.callback_client import CoreApiCallbackClient
 from app.core.config import Settings, get_settings
 from app.db.session import dispose_engine, ensure_sqlite_tables, get_session_factory
+from app.rag.brief_builder import build_source_brief
 from app.rag.extractor import (
     ExtractionError,
     chunk_text_with_provenance,
@@ -104,16 +105,18 @@ async def handle_ingest_job(
                 source_title=resolved_title,
                 chunks=chunks,
             )
-            word_count = sum(len(c.content.split()) for c in chunks)
+            brief_bundle = build_source_brief(title=resolved_title, chunks=chunks)
             callback_payload = {
                 "sourceId": source_id,
                 "documentId": document_id,
                 "idempotencyKey": idempotency_key,
                 "status": "ready",
                 "chunkCount": inserted,
-                "wordCount": word_count,
+                "wordCount": brief_bundle["wordCount"],
+                "durationMinutes": brief_bundle["durationMinutes"],
+                "suggestedTopic": brief_bundle["suggestedTopic"],
                 "pipelineVersion": pipeline_version,
-                "brief": None,
+                "brief": brief_bundle["brief"],
                 "errorCode": None,
                 "errorMessage": None,
             }

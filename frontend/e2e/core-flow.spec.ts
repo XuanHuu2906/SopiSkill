@@ -414,3 +414,107 @@ test("Phase 0 UI baseline: /profile, GlobalSopiSheet modal/switching, Course Swi
   expect(overflow390).toBe(true);
   await expectNoAxeViolations(page);
 });
+
+function buildMinimalPdfBuffer(lines: string[]): Buffer {
+  const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  const contentOps = [
+    "BT",
+    "/F1 12 Tf",
+    "72 740 Td",
+    "16 TL",
+    ...lines.map((line, i) => (i === 0 ? `(${esc(line)}) Tj` : `T* (${esc(line)}) Tj`)),
+    "ET",
+  ].join("\n");
+  const contentBytes = Buffer.from(contentOps, "utf8");
+
+  const objects = [
+    "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+    "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
+    "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+    `5 0 obj\n<< /Length ${contentBytes.length} >>\nstream\n${contentOps}\nendstream\nendobj\n`,
+  ];
+
+  let body = "%PDF-1.4\n";
+  const offsets: number[] = [0];
+  for (const obj of objects) {
+    offsets.push(Buffer.byteLength(body, "utf8"));
+    body += obj;
+  }
+  const xrefStart = Buffer.byteLength(body, "utf8");
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= objects.length; i += 1) {
+    body += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  }
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return Buffer.from(body, "utf8");
+}
+
+test("Phase 3: YouTube guard, presigned PDF upload -> Source Brief -> interview chips -> course path & delete", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("phase3-pdf");
+  await registerUser(page, email);
+
+  // 1. YouTube URL guard on /new
+  await page.goto("/new");
+  await page.locator("#topic-input").fill("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+  await page.getByRole("button", { name: "Bắt đầu" }).click();
+  await expect(page.locator(".error-box")).toContainText("YouTube");
+
+  // 2. Navigate via banner to /new/source and upload a valid PDF via presigned MinIO PUT
+  await page.getByRole("link", { name: /Tạo khóa học từ tài liệu của bạn/ }).click();
+  await page.waitForURL("**/new/source");
+
+  const pdfBuffer = buildMinimalPdfBuffer([
+    "1. Vector Databases and HNSW",
+    "Hierarchical Navigable Small World graphs accelerate nearest neighbor search in high dimensions.",
+    "Prerequisites: basic cosine similarity and graph traversal.",
+    "2. Hybrid Retrieval with RRF",
+    "Reciprocal Rank Fusion combines BM25 lexical matching with dense vector recall for grounded answers.",
+  ]);
+
+  await page.locator("#pdf-upload-input").setInputFiles({
+    name: "vector_rag_notes.pdf",
+    mimeType: "application/pdf",
+    buffer: pdfBuffer,
+  });
+
+  // 3. Wait for ai-worker-ingest callback + SourceCard + structured brief
+  await expect(page.getByText("Sẵn sàng")).toBeVisible({ timeout: 25_000 });
+  await expect(page.getByRole("heading", { name: "Tóm tắt nội dung" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Luận điểm chính" })).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // 4. Start course from this source -> /new/interview with quick-select chips
+  await page.getByRole("button", { name: "English" }).click();
+  await page.getByRole("button", { name: "Tạo khóa học từ tài liệu này" }).click();
+  await page.waitForURL("**/new/interview?courseId=*");
+
+  for (let i = 0; i < 5; i += 1) {
+    await expect(page.locator(".flow-header-meta")).toHaveText(`Câu ${i + 1}/5`);
+    const chip = page.locator(".quick-chip").first();
+    await expect(chip).toBeVisible();
+    await chip.click();
+    if (i === 1) {
+      // Multi-select question: click a second chip too
+      await page.locator(".quick-chip").nth(1).click();
+    }
+    const label = i === 4 ? "Gửi câu trả lời cuối" : "Câu tiếp theo";
+    await page.getByRole("button", { name: label }).click();
+  }
+
+  await page.waitForURL("**/new/proposal?courseId=*");
+  await page.getByRole("button", { name: "Tạo khóa học" }).click();
+  await page.waitForURL("**/course/crs_*", { timeout: 25_000 });
+
+  // 5. Verify estimatedMinutes on course path + 0 axe violations
+  await expect(page.getByText(/~\d+ phút/).first()).toBeVisible({ timeout: 15_000 });
+  await expectNoAxeViolations(page);
+
+  // 6. Delete course cleanly and confirm redirect to /
+  await page.getByRole("button", { name: "Xóa khóa học" }).click();
+  await page.getByRole("button", { name: "Xác nhận xóa" }).click();
+  await page.waitForURL("**/");
+});

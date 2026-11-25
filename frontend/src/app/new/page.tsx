@@ -28,6 +28,8 @@ const LANGUAGES: { value: CourseLanguage; label: string }[] = [
   { value: "en", label: "English" },
 ];
 
+const YOUTUBE_URL_RE = /(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\b/i;
+
 export default function NewCoursePage() {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
@@ -39,6 +41,10 @@ export default function NewCoursePage() {
   async function start(value?: string) {
     const finalTopic = (value ?? topic).trim();
     if (!finalTopic) return;
+    if (YOUTUBE_URL_RE.test(finalTopic)) {
+      setError("Hiện chưa hỗ trợ tạo khóa học trực tiếp từ liên kết YouTube. Hãy nhập chủ đề học tập hoặc tải lên tệp PDF.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -147,7 +153,7 @@ export default function NewCoursePage() {
         </div>
       </div>
 
-      <Link href="/sources" className="home-review-banner" style={{ marginTop: 28 }}>
+      <Link href="/new/source" className="home-review-banner" style={{ marginTop: 28 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <span className="profile-stat-icon" style={{ marginBottom: 0 }} aria-hidden="true">
             <Icon name="file" size={18} />

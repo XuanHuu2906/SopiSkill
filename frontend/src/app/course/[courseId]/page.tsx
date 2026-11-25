@@ -1,19 +1,24 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
+  deleteCourse,
   fetchCourseMastery,
+  fetchCoursePath,
   fetchCourses,
   fetchCourseSources,
   fetchLearningPath,
   isVerifiedStatus,
   recordRecommendation,
+  retryLesson,
   verificationLabel,
+  type CoursePathLesson,
+  type CoursePathOut,
 } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
 import { Badge } from "@/components/ui/Badge";
@@ -23,38 +28,19 @@ import Icon from "@/components/ui/Icon";
 import VocabSheet from "@/components/course/VocabSheet";
 import { useSopi } from "@/components/layout/SopiContext";
 
-interface CourseDetail {
-  id: string;
-  topic: string;
-  status: string;
-  units: {
-    id: string;
-    orderIndex: number;
-    title: string;
-    blurb: string;
-    lessons: {
-      id: string;
-      orderIndex: number;
-      title: string;
-      status: string;
-      contentVersion: number;
-      completed: boolean;
-    }[];
-  }[];
-  progress: { completed: number; total: number; percent: number };
-}
-
 const LESSON_STATUS_LABEL: Record<string, string> = {
   ready: "Sẵn sàng",
-  generating: "Đang soạn",
-  queued: "Đang chờ",
+  generating: "Đang chuẩn bị…",
+  queued: "Đang chuẩn bị…",
+  preparing: "Đang chuẩn bị…",
   failed: "Lỗi",
 };
 
-function lessonMeta(lesson: CourseDetail["units"][number]["lessons"][number]) {
-  if (lesson.completed) return "Đã học";
-  if (lesson.status === "ready") return "Sẵn sàng";
-  return LESSON_STATUS_LABEL[lesson.status] ?? lesson.status;
+function lessonMeta(lesson: CoursePathLesson) {
+  const mins = lesson.estimatedMinutes ? `~${lesson.estimatedMinutes} phút · ` : "";
+  if (lesson.completed) return `${mins}Đã học`;
+  if (lesson.status === "ready") return `${mins}Sẵn sàng`;
+  return `${mins}${LESSON_STATUS_LABEL[lesson.status] ?? lesson.status}`;
 }
 
 /* The rail glyph tells you what a row *is* at a glance — done, next, or not yet
@@ -108,10 +94,15 @@ function LockGlyph() {
 
 export default function CoursePage() {
   const { courseId } = useParams<{ courseId: string }>();
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
   const { openSopi } = useSopi();
   const [vocabOpen, setVocabOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [retryingLessonId, setRetryingLessonId] = useState<string | null>(null);
   const switcherRef = useRef<HTMLDivElement | null>(null);
   const switcherTriggerRef = useRef<HTMLButtonElement | null>(null);
   const courseKey = useSessionQueryKey("course", courseId);
@@ -147,13 +138,38 @@ export default function CoursePage() {
     retry: false,
   });
 
-  const course = useQuery({
+  const course = useQuery<CoursePathOut>({
     queryKey: courseKey,
     enabled: !!courseId && isAuthenticated,
-    queryFn: () => api<CourseDetail>(`/v1/courses/${courseId}`),
-    refetchInterval: (q) =>
-      q.state.data && ["ready", "failed"].includes(q.state.data.status) ? false : 2000,
+    queryFn: () => fetchCoursePath(courseId),
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      if (!data) return false;
+      if (data.hasPreparingLessons) return 5000;
+      return ["ready", "failed"].includes(data.status) ? false : 2000;
+    },
   });
+
+  const deleteCourseMut = useMutation({
+    mutationFn: () => deleteCourse(courseId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: allCoursesKey });
+      router.push("/");
+    },
+    onError: (err) => {
+      setDeleteError(err instanceof Error ? err.message : "Không thể xóa khóa học.");
+    },
+  });
+
+  async function handleRetryLesson(lessonId: string) {
+    setRetryingLessonId(lessonId);
+    try {
+      await retryLesson(lessonId);
+      await course.refetch();
+    } finally {
+      setRetryingLessonId(null);
+    }
+  }
 
   const sources = useQuery({
     queryKey: sourcesKey,
@@ -203,16 +219,19 @@ export default function CoursePage() {
   // not claim the recommendation or its blocking rules.
   const firstUnfinished = course.data?.units
     .flatMap((unit) => unit.lessons)
-    .find((lesson) => !lesson.completed);
+    .find((lesson) => !lesson.completed && lesson.status === "ready");
   const resumeLessonId =
     learningPath.data?.nextLesson?.lessonId ?? firstUnfinished?.id ?? null;
   const blockedIds = new Set(
     (learningPath.data?.blockedBy ?? []).map((blocked) => blocked.lessonId),
   );
 
-  function nodeState(lesson: CourseDetail["units"][number]["lessons"][number]) {
+  function nodeState(lesson: CoursePathLesson) {
     if (lesson.completed) return "done" as const;
-    if (resumeLessonId === lesson.id) return "next" as const;
+    if (lesson.state === "preparing" || lesson.status === "queued" || lesson.status === "generating") {
+      return "blocked" as const;
+    }
+    if (resumeLessonId === lesson.id && lesson.status === "ready") return "next" as const;
     if (blockedIds.has(lesson.id)) return "blocked" as const;
     return "open" as const;
   }
@@ -372,17 +391,42 @@ export default function CoursePage() {
               <ol className="course-lessons">
                 {unit.lessons.map((lesson) => {
                   const state = nodeState(lesson);
-                  const isNext = state === "next";
+                  const isPreparing =
+                    lesson.state === "preparing" ||
+                    lesson.status === "queued" ||
+                    lesson.status === "generating";
+                  const isFailed = lesson.state === "failed" || lesson.status === "failed";
+                  const isNext = state === "next" && !isPreparing && !isFailed;
                   return (
                     <li key={lesson.id} className={`course-lesson is-${state}`}>
                       <span className="course-rail" aria-hidden="true">
                         <RailNode state={state} index={lesson.orderIndex + 1} />
                       </span>
 
-                      {isNext ? (
+                      {isPreparing ? (
+                        <div className="course-lesson-row" aria-disabled="true" style={{ opacity: 0.72, cursor: "default" }}>
+                          <span className="course-lesson-title">{lesson.title}</span>
+                          <span className="course-lesson-meta">{lessonMeta(lesson)}</span>
+                        </div>
+                      ) : isFailed ? (
+                        <div className="course-lesson-row" style={{ gap: 12 }}>
+                          <span className="course-lesson-title">{lesson.title}</span>
+                          <span className="course-lesson-meta">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={retryingLessonId === lesson.id}
+                              onClick={() => void handleRetryLesson(lesson.id)}
+                            >
+                              {retryingLessonId === lesson.id ? "Đang gửi…" : "Thử lại"}
+                            </Button>
+                          </span>
+                        </div>
+                      ) : isNext ? (
                         <Link href={`/lesson/${lesson.id}`} className="course-next-card">
                           <span className="course-next-eyebrow">
                             Học tiếp
+                            {lesson.estimatedMinutes ? ` · ~${lesson.estimatedMinutes} phút` : ""}
                             {learningPath.data?.nextLesson?.reason?.message
                               ? ` · ${learningPath.data.nextLesson.reason.message}`
                               : ""}
@@ -524,10 +568,49 @@ export default function CoursePage() {
             </div>
             <Icon name="chat" size={20} />
           </button>
-          <p className="caption course-footnote">
-            Nội dung bài học do AI sinh. Kiến thức chưa được đối chiếu với nguồn trừ khi bài
-            học ghi rõ trạng thái đã xác minh.
-          </p>
+          <div style={{ marginTop: 18, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <p className="caption course-footnote" style={{ margin: 0, flex: 1 }}>
+              Nội dung bài học do AI sinh. Kiến thức chưa được đối chiếu với nguồn trừ khi bài
+              học ghi rõ trạng thái đã xác minh.
+            </p>
+            {!confirmDeleteOpen ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setDeleteError(null);
+                  setConfirmDeleteOpen(true);
+                }}
+              >
+                Xóa khóa học
+              </Button>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }} role="group" aria-label="Xác nhận xóa khóa học">
+                <span className="caption" style={{ color: "var(--ink)" }}>Xóa khóa học này?</span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={deleteCourseMut.isPending}
+                  onClick={() => setConfirmDeleteOpen(false)}
+                >
+                  Hủy
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={deleteCourseMut.isPending}
+                  onClick={() => deleteCourseMut.mutate()}
+                >
+                  {deleteCourseMut.isPending ? "Đang xóa…" : "Xác nhận xóa"}
+                </Button>
+              </div>
+            )}
+          </div>
+          {deleteError && (
+            <div className="error-box" role="alert" style={{ marginTop: 10 }}>
+              {deleteError}
+            </div>
+          )}
         </>
       )}
     </div>

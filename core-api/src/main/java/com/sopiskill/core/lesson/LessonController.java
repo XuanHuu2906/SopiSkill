@@ -8,7 +8,9 @@ import com.sopiskill.core.internal.AiEngineClient;
 import com.sopiskill.core.security.AuthPrincipal;
 import com.sopiskill.core.security.CsrfValidator;
 import com.sopiskill.core.security.RateLimiterService;
+import com.sopiskill.core.sources.CitationLinkResolver;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -30,6 +32,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -81,10 +84,15 @@ public class LessonController {
     @GetMapping("/{lessonId}")
     public Map<String, Object> getLesson(
             @AuthenticationPrincipal AuthPrincipal principal,
-            @PathVariable String lessonId
+            @PathVariable String lessonId,
+            @RequestParam(defaultValue = "0") int prefetch,
+            HttpServletResponse response
     ) {
         UUID lid = IdCodec.parse(lessonId, "lsn");
         var lesson = loadOwnedLesson(principal.userId(), lid);
+        if (prefetch == 1) {
+            response.setHeader("Cache-Control", "private, max-age=30");
+        }
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> privateBlocks = (List<Map<String, Object>>) lesson.get("blocks");
         int contentVersion = ((Number) lesson.get("contentVersion")).intValue();
@@ -100,17 +108,19 @@ public class LessonController {
                 """)
                 .param("lid", lid)
                 .query((rs, rowNum) -> {
+                    String canonicalUrl = rs.getString("source_url");
+                    String anchor = rs.getString("section_anchor");
                     Map<String, Object> c = new LinkedHashMap<>();
                     c.put("citationId", IdCodec.format("cit", rs.getObject("id", UUID.class)));
                     c.put("sourceId", IdCodec.format("src", rs.getObject("source_id", UUID.class)));
                     c.put("sourceVersion", rs.getString("source_version"));
                     c.put("chunkId", rs.getString("chunk_id"));
                     c.put("pageNumber", rs.getObject("page_number"));
-                    c.put("sectionAnchor", rs.getString("section_anchor"));
+                    c.put("sectionAnchor", anchor);
                     c.put("evidenceText", rs.getString("evidence_text"));
                     c.put("validationStatus", rs.getString("validation_status"));
                     c.put("sourceTitle", rs.getString("source_title"));
-                    c.put("sourceUrl", rs.getString("source_url"));
+                    c.put("sourceUrl", CitationLinkResolver.resolveDeepLink(canonicalUrl, anchor));
                     c.put("sourceVerificationStatus", rs.getString("source_verification_status"));
                     return c;
                 })
@@ -123,11 +133,77 @@ public class LessonController {
         out.put("orderIndex", lesson.get("orderIndex"));
         out.put("contentVersion", contentVersion);
         out.put("status", lesson.get("status"));
+        out.put("estimatedMinutes", lesson.get("estimatedMinutes"));
+        out.put("kind", lesson.get("kind"));
+        out.put("format", lesson.get("format"));
         out.put("blocks", projector.toPublicBlocks(lid, contentVersion, privateBlocks));
         out.put("grounding", lesson.get("grounding"));
         out.put("citations", citations);
         out.put("evidenceNotice", lesson.get("evidenceNotice"));
         return out;
+    }
+
+    @PostMapping("/{lessonId}/retry")
+    @Transactional
+    public Map<String, Object> retryLesson(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String lessonId,
+            HttpServletRequest request
+    ) {
+        csrf.verify(request);
+        rateLimiter.check(request, "lesson_retry", 20, 60);
+        UUID lid = IdCodec.parse(lessonId, "lsn");
+        var lesson = loadOwnedLesson(principal.userId(), lid);
+        UUID cid = (UUID) lesson.get("courseUuid");
+
+        String unitTitle = jdbc.sql("""
+                SELECT u.title FROM core.units u
+                JOIN core.lessons l ON l.unit_id = u.id
+                WHERE l.id = :lid
+                """).param("lid", lid).query(String.class).single();
+        String topic = jdbc.sql("SELECT topic FROM core.courses WHERE id = :cid")
+                .param("cid", cid).query(String.class).single();
+
+        jdbc.sql("UPDATE core.lessons SET status = 'queued', updated_at = now() WHERE id = :lid")
+                .param("lid", lid)
+                .update();
+
+        UUID jobId = UUID.randomUUID();
+        String idempKey = "retry_lsn_" + lid + "_" + jobId;
+        jdbc.sql("""
+                INSERT INTO core.generation_jobs (
+                    id, course_id, idempotency_key, status, stage, lessons_done, lessons_total, attempts, dispatched
+                ) VALUES (
+                    :jid, :cid, :idem, 'queued', 'lessons', 0, 1, 1, TRUE
+                )
+                """)
+                .param("jid", jobId)
+                .param("cid", cid)
+                .param("idem", idempKey)
+                .update();
+
+        aiEngine.enqueueLlmJob(Map.of(
+                "jobId", IdCodec.format("job", jobId),
+                "idempotencyKey", idempKey,
+                "jobType", "generate_lesson",
+                "ownerId", IdCodec.format("usr", principal.userId()),
+                "courseId", IdCodec.format("crs", cid),
+                "correlationId", "cor_" + jobId.toString().replace("-", "").substring(0, 16),
+                "attempt", 1,
+                "payload", Map.of(
+                        "topic", topic,
+                        "language", lesson.getOrDefault("language", "vi"),
+                        "unitTitle", unitTitle,
+                        "lessonTitle", lesson.get("title"),
+                        "lessonIds", List.of(IdCodec.format("lsn", lid))
+                )
+        ));
+
+        return Map.of(
+                "lessonId", IdCodec.format("lsn", lid),
+                "jobId", IdCodec.format("job", jobId),
+                "status", "queued"
+        );
     }
 
     @PostMapping("/{lessonId}/attempts")
@@ -452,7 +528,8 @@ public class LessonController {
     private Map<String, Object> loadOwnedLesson(UUID userId, UUID lessonId) {
         return jdbc.sql("""
                 SELECT l.id, l.course_id, l.title, l.order_index, l.status, l.content_version,
-                       l.content_json, l.grounding, l.evidence_notice, c.language
+                       l.content_json, l.grounding, l.evidence_notice, l.estimated_minutes,
+                       l.kind, l.format, c.language
                 FROM core.lessons l
                 JOIN core.courses c ON c.id = l.course_id
                 WHERE l.id = :lid AND c.user_id = :uid
@@ -470,6 +547,9 @@ public class LessonController {
                     m.put("blocks", json.fromJson(rs.getString("content_json"), new TypeReference<List<Map<String, Object>>>() {}));
                     m.put("grounding", rs.getString("grounding"));
                     m.put("evidenceNotice", rs.getString("evidence_notice"));
+                    m.put("estimatedMinutes", rs.getInt("estimated_minutes"));
+                    m.put("kind", rs.getString("kind"));
+                    m.put("format", rs.getString("format"));
                     m.put("language", rs.getString("language"));
                     return m;
                 })
