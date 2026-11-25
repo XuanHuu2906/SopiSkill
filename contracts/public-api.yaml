@@ -1,0 +1,4970 @@
+# AUTO-GENERATED FROM LIVE FASTAPI APP + CONTRACT ENRICHMENTS (Phase 0 Freeze)
+# Regenerate via: cd backend && .venv/bin/python scripts/export_public_openapi.py
+# Verified by: backend/tests/test_contracts_openapi.py
+openapi: 3.1.0
+info:
+  title: SopiSkill Public API
+  version: 1.0.0-wave4-baseline
+  description: 'Frozen Phase 0 public HTTP/SSE API contract between frontend (Next.js 15) and core-api (Spring Boot 3.4+ cutover
+    target, parity 100% with Wave 4 backend). Authentication uses HttpOnly JWT cookie (`access_token`) plus double-submit
+    CSRF (`csrf_token` cookie matched against `X-CSRF-Token` header on mutating routes). All quiz grading is strictly server-authoritative:
+    GET /v1/lessons/{lesson_id} never exposes answer keys.'
+  x-contract-freeze:
+    phase: phase-0
+    baseline: wave-4
+    compatibilityPolicy: strict-parity-through-phase-2-additive-only-from-phase-3
+paths:
+  /health:
+    get:
+      summary: Health
+      description: Fast liveness probe (không truy cập external dependencies).
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Health Health Get
+      security: []
+  /ready:
+    get:
+      summary: Ready
+      description: 'Deep readiness probe (OPS-005): kiểm tra DB, Redis (nếu cấu hình) và activation guardrails.
+
+
+        Không bao giờ trả connection string, credentials hay traceback.'
+      operationId: ready_ready_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+      security: []
+  /v1/auth/login:
+    post:
+      tags:
+      - auth
+      summary: Login
+      operationId: login_v1_auth_login_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security: []
+  /v1/auth/logout:
+    post:
+      tags:
+      - auth
+      summary: Logout
+      operationId: logout_v1_auth_logout_post
+      responses:
+        '204':
+          description: Successful Response
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - CsrfHeaderAuth: []
+  /v1/auth/me:
+    get:
+      tags:
+      - auth
+      summary: Me
+      operationId: me_v1_auth_me_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/auth/register:
+    post:
+      tags:
+      - auth
+      summary: Register
+      operationId: register_v1_auth_register_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security: []
+  /v1/courses:
+    post:
+      summary: Create Course
+      operationId: create_course_v1_courses_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseCreateRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+    get:
+      summary: List Courses
+      operationId: list_courses_v1_courses_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 50
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 10000
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseListOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}:
+    get:
+      summary: Get Course
+      operationId: get_course_v1_courses__course_id__get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseDetailOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/approve:
+    post:
+      summary: Approve Course
+      operationId: approve_course_v1_courses__course_id__approve_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/generation:
+    get:
+      summary: Get Generation
+      operationId: get_generation_v1_courses__course_id__generation_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/glossary:
+    get:
+      summary: Get Course Glossary
+      operationId: get_course_glossary_v1_courses__course_id__glossary_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      - name: lessonId
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lessonid
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseGlossaryOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/interview:
+    get:
+      summary: Get Interview
+      operationId: get_interview_v1_courses__course_id__interview_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/interview/answer:
+    post:
+      summary: Answer Interview
+      operationId: answer_interview_v1_courses__course_id__interview_answer_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InterviewAnswerRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/learning-path:
+    get:
+      summary: Get Learning Path
+      operationId: get_learning_path_v1_courses__course_id__learning_path_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LearningPathOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/mastery:
+    get:
+      summary: Get Course Mastery
+      operationId: get_course_mastery_v1_courses__course_id__mastery_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MasteryOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/proposal:
+    get:
+      summary: Get Proposal
+      operationId: get_proposal_v1_courses__course_id__proposal_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+    patch:
+      summary: Update Proposal
+      operationId: update_proposal_v1_courses__course_id__proposal_patch
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProposalUpdateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/recommendation-events:
+    post:
+      summary: Record Recommendation Event
+      description: 'Ghi exposure của một gợi ý đã hiển thị (P5.2b). Idempotent theo context+arm.
+
+
+        Thứ tự kiểm tra quan trọng: cờ TẮT phải trả 503 **trước** khi chạm bảng
+
+        `recommendation_events`, để DB cũ chưa chạy migration 0016 vẫn an toàn.'
+      operationId: record_recommendation_event_v1_courses__course_id__recommendation_events_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecommendationEventRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationEventOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/research-runs:
+    post:
+      tags:
+      - source-research
+      summary: Create Research Run
+      operationId: create_research_run_v1_courses__course_id__research_runs_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResearchRequestIn'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchRunOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+    get:
+      tags:
+      - source-research
+      summary: List Research Runs
+      operationId: list_research_runs_v1_courses__course_id__research_runs_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 50
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 10000
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchRunListOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/research-runs/{run_id}:
+    get:
+      tags:
+      - source-research
+      summary: Get Research Run
+      operationId: get_research_run_v1_courses__course_id__research_runs__run_id__get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Run Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchRunOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/research-runs/{run_id}/accept:
+    post:
+      tags:
+      - source-research
+      summary: Accept Research Run
+      operationId: accept_research_run_v1_courses__course_id__research_runs__run_id__accept_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Run Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchRunOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/retry:
+    post:
+      summary: Retry Course
+      operationId: retry_course_v1_courses__course_id__retry_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/sources:
+    post:
+      tags:
+      - sources
+      summary: Link Course Source
+      operationId: link_course_source_v1_courses__course_id__sources_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceLinkRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseSourceOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+    get:
+      tags:
+      - sources
+      summary: List Course Sources
+      operationId: list_course_sources_v1_courses__course_id__sources_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseSourceListOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/sources/search:
+    post:
+      tags:
+      - sources
+      summary: Search Course Sources
+      description: 'Tìm đoạn tài liệu liên quan trong phạm vi khóa học (lexical+vector+RRF).
+
+
+        Bảo mật: `course_id` phải thuộc user; `sourceIds` chỉ thu hẹp phạm vi và bị
+
+        giao với các nguồn đã liên kết — không thể dùng để đọc nguồn của người khác.
+
+        Không gọi LLM; không trả về chunk ngoài scope.'
+      operationId: search_course_sources_v1_courses__course_id__sources_search_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RagSearchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RagSearchOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/tutor/messages:
+    post:
+      tags:
+      - tutor
+      summary: Send Tutor Message
+      operationId: send_tutor_message_v1_courses__course_id__tutor_messages_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TutorMessageRequest'
+      responses:
+        '200':
+          description: SSE stream of TutorSseEvent frames (`delta`, `tool`, `citations`, `done`, `cancelled`, `error`, `heartbeat`).
+          headers:
+            X-Tutor-Thread-Id:
+              description: Resolved tutor thread identifier.
+              schema:
+                type: string
+            X-Tutor-Message-Id:
+              description: Assistant message identifier for stop/correlation.
+              schema:
+                type: string
+            X-Accel-Buffering:
+              description: Disabled (`no`) to prevent reverse-proxy buffering of SSE frames.
+              schema:
+                type: string
+                enum:
+                - 'no'
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/TutorSseEvent'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/tutor/messages/{message_id}/stop:
+    post:
+      tags:
+      - tutor
+      summary: Stop Tutor Message
+      description: Yêu cầu dừng một câu trả lời đang stream (best-effort, owner-scoped).
+      operationId: stop_tutor_message_v1_courses__course_id__tutor_messages__message_id__stop_post
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      - name: message_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Message Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TutorStopOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/courses/{course_id}/tutor/threads:
+    get:
+      tags:
+      - tutor
+      summary: List Threads
+      operationId: list_threads_v1_courses__course_id__tutor_threads_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 50
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 10000
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TutorThreadListOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/tutor/threads/{thread_id}:
+    get:
+      tags:
+      - tutor
+      summary: Get Thread
+      operationId: get_thread_v1_courses__course_id__tutor_threads__thread_id__get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      - name: thread_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Thread Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TutorThreadOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/courses/{course_id}/tutor/usage:
+    get:
+      tags:
+      - tutor
+      summary: Get Tutor Usage
+      description: Allowance 24h của user. Không gọi provider, không tiêu quota.
+      operationId: get_tutor_usage_v1_courses__course_id__tutor_usage_get
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Course Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TutorUsageOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/lessons/{lesson_id}:
+    get:
+      summary: Get Lesson
+      operationId: get_lesson_v1_lessons__lesson_id__get
+      parameters:
+      - name: lesson_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Lesson Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LessonOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/lessons/{lesson_id}/attempts:
+    post:
+      summary: Submit Attempt
+      operationId: submit_attempt_v1_lessons__lesson_id__attempts_post
+      parameters:
+      - name: lesson_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Lesson Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttemptRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/lessons/{lesson_id}/blocks/{block_index}/grade:
+    post:
+      summary: Grade Lesson Block
+      operationId: grade_lesson_block_v1_lessons__lesson_id__blocks__block_index__grade_post
+      parameters:
+      - name: lesson_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Lesson Id
+      - name: block_index
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Block Index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlockGradeRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockGradeOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/me:
+    delete:
+      tags:
+      - me
+      summary: Delete Me
+      operationId: delete_me_v1_me_delete
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeDeleteRequest'
+        required: true
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+    patch:
+      tags:
+      - me
+      summary: Update Me
+      operationId: update_me_v1_me_patch
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeUpdateRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/me/stats:
+    get:
+      tags:
+      - me
+      summary: Get My Stats
+      operationId: get_my_stats_v1_me_stats_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeStatsOut'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/reviews/due:
+    get:
+      summary: Get Due Reviews
+      operationId: get_due_reviews_v1_reviews_due_get
+      parameters:
+      - name: courseId
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 64
+          - type: 'null'
+          title: Courseid
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDueOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/reviews/{card_id}/grade:
+    post:
+      summary: Grade Review
+      operationId: grade_review_v1_reviews__card_id__grade_post
+      parameters:
+      - name: card_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Card Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewGradeRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewGradeOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/sources:
+    post:
+      tags:
+      - sources
+      summary: Create Source
+      operationId: create_source_v1_sources_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceCreateRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+    get:
+      tags:
+      - sources
+      summary: List Sources
+      operationId: list_sources_v1_sources_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 50
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 10000
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceListOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/sources/discover:
+    get:
+      tags:
+      - sources
+      summary: Discover Sources
+      operationId: discover_sources_v1_sources_discover_get
+      parameters:
+      - name: topic
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+          title: Topic
+      - name: adapter
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 32
+          - type: 'null'
+          title: Adapter
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceDiscoveryOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/sources/ingest-config:
+    get:
+      tags:
+      - sources
+      summary: Ingest Config
+      description: Cấu hình công khai cho UI (không lộ endpoint/credential storage).
+      operationId: ingest_config_v1_sources_ingest_config_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceIngestConfigOut'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/sources/{source_id}:
+    get:
+      tags:
+      - sources
+      summary: Get Source
+      operationId: get_source_v1_sources__source_id__get
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Source Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+    delete:
+      tags:
+      - sources
+      summary: Delete Source
+      description: 'Xóa nguồn private của chính user cùng document/chunk + object storage.
+
+
+        Không xóa nguồn public (dùng chung) và không cho xóa nguồn của người khác
+
+        (404 — không xác nhận sự tồn tại).'
+      operationId: delete_source_v1_sources__source_id__delete
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Source Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/sources/{source_id}/document:
+    post:
+      tags:
+      - sources
+      summary: Upload Source Document
+      description: Upload PDF (stream, giới hạn size/magic/page) và xếp hàng ingest bất đồng bộ.
+      operationId: upload_source_document_v1_sources__source_id__document_post
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Source Id
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_upload_source_document_v1_sources__source_id__document_post'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceDocumentOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/sources/{source_id}/documents:
+    get:
+      tags:
+      - sources
+      summary: List Source Documents
+      operationId: list_source_documents_v1_sources__source_id__documents_get
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Source Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceDocumentListOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/sources/{source_id}/documents/{document_id}:
+    get:
+      tags:
+      - sources
+      summary: Get Source Document
+      operationId: get_source_document_v1_sources__source_id__documents__document_id__get
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Source Id
+      - name: document_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Document Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceDocumentOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+    delete:
+      tags:
+      - sources
+      summary: Delete Source Document
+      description: Xóa tài liệu đã ingest (chunk đi theo cascade) + dọn object storage.
+      operationId: delete_source_document_v1_sources__source_id__documents__document_id__delete
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Source Id
+      - name: document_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Document Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+  /v1/sources/{source_id}/evaluation:
+    get:
+      tags:
+      - sources
+      summary: Evaluate Source
+      operationId: evaluate_source_v1_sources__source_id__evaluation_get
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Source Id
+      - name: topic
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Topic
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceEvaluationOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+      - BearerAuth: []
+  /v1/sources/{source_id}/web-document:
+    post:
+      tags:
+      - sources
+      summary: Ingest Web Document
+      description: 'Fetch URL/arXiv và xếp hàng ingest (P4.2).
+
+
+        Bảo mật: CSRF + rate limit + nguồn private thuộc user; URL phải qua allowlist
+
+        và chống SSRF của `url_fetcher`. `userConfirmedRights` đã được validate ở
+
+        schema (thiếu ⇒ 422 trước khi có bất kỳ request outbound nào).'
+      operationId: ingest_web_document_v1_sources__source_id__web_document_post
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Source Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebDocumentRequest'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceDocumentOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '401':
+          description: Unauthorized (missing or invalid session JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden (invalid or missing CSRF token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      security:
+      - AccessCookieAuth: []
+        CsrfHeaderAuth: []
+      - BearerAuth: []
+        CsrfHeaderAuth: []
+components:
+  schemas:
+    AttemptAnswer:
+      properties:
+        index:
+          type: integer
+          minimum: 0.0
+          title: Index
+        answer:
+          anyOf:
+          - type: string
+          - type: integer
+          - items: {}
+            type: array
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Answer
+      additionalProperties: false
+      type: object
+      required:
+      - index
+      title: AttemptAnswer
+    AttemptOut:
+      properties:
+        attemptId:
+          type: string
+          title: Attemptid
+        duplicate:
+          type: boolean
+          title: Duplicate
+        score:
+          additionalProperties: true
+          type: object
+          title: Score
+        rewards:
+          additionalProperties: true
+          type: object
+          title: Rewards
+        results:
+          items:
+            $ref: '#/components/schemas/AttemptResultOut'
+          type: array
+          title: Results
+        reviewCardCreated:
+          type: boolean
+          title: Reviewcardcreated
+          default: false
+      type: object
+      required:
+      - attemptId
+      - duplicate
+      - score
+      - rewards
+      - results
+      title: AttemptOut
+    AttemptRequest:
+      properties:
+        clientAttemptId:
+          type: string
+          maxLength: 64
+          minLength: 8
+          title: Clientattemptid
+        contentVersion:
+          type: integer
+          title: Contentversion
+        durationMs:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Durationms
+        answers:
+          items:
+            $ref: '#/components/schemas/AttemptAnswer'
+          type: array
+          minItems: 1
+          title: Answers
+      type: object
+      required:
+      - clientAttemptId
+      - contentVersion
+      - answers
+      title: AttemptRequest
+    AttemptResultOut:
+      properties:
+        index:
+          type: integer
+          title: Index
+        type:
+          type: string
+          title: Type
+        correct:
+          type: boolean
+          title: Correct
+        solution:
+          additionalProperties: true
+          type: object
+          title: Solution
+      type: object
+      required:
+      - index
+      - type
+      - correct
+      title: AttemptResultOut
+    BlockGradeOut:
+      properties:
+        blockIndex:
+          type: integer
+          title: Blockindex
+        type:
+          type: string
+          title: Type
+        correct:
+          type: boolean
+          title: Correct
+        grader:
+          type: string
+          enum:
+          - deterministic
+          - semantic_rubric
+          - llm_rubric
+          title: Grader
+        feedback:
+          type: string
+          title: Feedback
+        solution:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Solution
+        disputeAllowed:
+          type: boolean
+          title: Disputeallowed
+          default: false
+      type: object
+      required:
+      - blockIndex
+      - type
+      - correct
+      - grader
+      - feedback
+      title: BlockGradeOut
+    BlockGradeRequest:
+      properties:
+        contentVersion:
+          type: integer
+          minimum: 1.0
+          title: Contentversion
+        answer:
+          anyOf:
+          - type: string
+          - type: integer
+          - items: {}
+            type: array
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Answer
+        dispute:
+          type: boolean
+          title: Dispute
+          default: false
+        disputeReason:
+          anyOf:
+          - type: string
+            maxLength: 400
+          - type: 'null'
+          title: Disputereason
+      additionalProperties: false
+      type: object
+      required:
+      - contentVersion
+      title: BlockGradeRequest
+      description: Body của POST /v1/lessons/{lessonId}/blocks/{blockIndex}/grade (Wave 4 / GAP-11).
+    Body_upload_source_document_v1_sources__source_id__document_post:
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          title: File
+          description: PDF có quyền sử dụng
+      type: object
+      required:
+      - file
+      title: Body_upload_source_document_v1_sources__source_id__document_post
+    CitationOut:
+      properties:
+        citationId:
+          type: string
+          title: Citationid
+        sourceId:
+          type: string
+          title: Sourceid
+        sourceVersion:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourceversion
+        chunkId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Chunkid
+        pageNumber:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Pagenumber
+        sectionAnchor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sectionanchor
+        evidenceText:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Evidencetext
+        validationStatus:
+          type: string
+          title: Validationstatus
+        sourceTitle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourcetitle
+        sourceUrl:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourceurl
+        sourceVerificationStatus:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourceverificationstatus
+      type: object
+      required:
+      - citationId
+      - sourceId
+      - sourceVersion
+      - chunkId
+      - pageNumber
+      - sectionAnchor
+      - evidenceText
+      - validationStatus
+      title: CitationOut
+    CourseCreateRequest:
+      properties:
+        topic:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Topic
+        clientCourseId:
+          type: string
+          maxLength: 64
+          minLength: 8
+          title: Clientcourseid
+        language:
+          type: string
+          enum:
+          - vi
+          - en
+          title: Language
+          default: vi
+      type: object
+      required:
+      - topic
+      - clientCourseId
+      title: CourseCreateRequest
+    CourseDetailOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        topic:
+          type: string
+          title: Topic
+        status:
+          type: string
+          title: Status
+        language:
+          type: string
+          enum:
+          - vi
+          - en
+          title: Language
+          default: vi
+        units:
+          items:
+            $ref: '#/components/schemas/UnitOut'
+          type: array
+          title: Units
+        progress:
+          additionalProperties: true
+          type: object
+          title: Progress
+      type: object
+      required:
+      - id
+      - topic
+      - status
+      - units
+      - progress
+      title: CourseDetailOut
+    CourseGlossaryOut:
+      properties:
+        courseId:
+          type: string
+          title: Courseid
+        total:
+          type: integer
+          title: Total
+        items:
+          items:
+            $ref: '#/components/schemas/GlossaryTermOut'
+          type: array
+          title: Items
+      type: object
+      required:
+      - courseId
+      - total
+      title: CourseGlossaryOut
+    CourseListItemOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        topic:
+          type: string
+          title: Topic
+        status:
+          type: string
+          title: Status
+        language:
+          type: string
+          enum:
+          - vi
+          - en
+          title: Language
+          default: vi
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+        updatedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Updatedat
+        progress:
+          additionalProperties: true
+          type: object
+          title: Progress
+        resumeLessonId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Resumelessonid
+        resumeLessonTitle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Resumelessontitle
+        lastCompletedLessonTitle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lastcompletedlessontitle
+      type: object
+      required:
+      - id
+      - topic
+      - status
+      - progress
+      title: CourseListItemOut
+    CourseListOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CourseListItemOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+        hasMore:
+          type: boolean
+          title: Hasmore
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      - hasMore
+      title: CourseListOut
+    CourseOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        topic:
+          type: string
+          title: Topic
+        status:
+          type: string
+          title: Status
+        clientCourseId:
+          type: string
+          title: Clientcourseid
+        language:
+          type: string
+          enum:
+          - vi
+          - en
+          title: Language
+          default: vi
+      type: object
+      required:
+      - id
+      - topic
+      - status
+      - clientCourseId
+      title: CourseOut
+    CourseSourceListOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CourseSourceOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        groundingAvailable:
+          type: boolean
+          title: Groundingavailable
+        contentIngested:
+          type: boolean
+          title: Contentingested
+        notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notice
+      type: object
+      required:
+      - items
+      - total
+      - groundingAvailable
+      - contentIngested
+      title: CourseSourceListOut
+    CourseSourceOut:
+      properties:
+        courseId:
+          type: string
+          title: Courseid
+        source:
+          $ref: '#/components/schemas/SourceOut'
+        evaluation:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Evaluation
+        linkedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Linkedat
+      type: object
+      required:
+      - courseId
+      - source
+      - evaluation
+      title: CourseSourceOut
+    DueReviewOut:
+      properties:
+        cardId:
+          type: string
+          title: Cardid
+        lessonId:
+          type: string
+          title: Lessonid
+        lessonTitle:
+          type: string
+          title: Lessontitle
+        skillTitle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Skilltitle
+        dueAt:
+          type: string
+          title: Dueat
+        state:
+          type: integer
+          title: State
+        overdueDays:
+          type: integer
+          title: Overduedays
+      type: object
+      required:
+      - cardId
+      - lessonId
+      - lessonTitle
+      - dueAt
+      - state
+      - overdueDays
+      title: DueReviewOut
+    ErrorDetail:
+      type: object
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          examples:
+          - NOT_AUTHENTICATED
+          - CSRF_INVALID
+          - RATE_LIMITED
+        message:
+          type: string
+        currentVersion:
+          type: integer
+        details:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+    ErrorEnvelope:
+      type: object
+      required:
+      - detail
+      properties:
+        detail:
+          oneOf:
+          - $ref: '#/components/schemas/ErrorDetail'
+          - type: string
+    GenerationOut:
+      properties:
+        jobId:
+          type: string
+          title: Jobid
+        status:
+          type: string
+          title: Status
+        stage:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Stage
+        lessonsDone:
+          type: integer
+          title: Lessonsdone
+        lessonsTotal:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Lessonstotal
+        error:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Error
+        attempts:
+          type: integer
+          title: Attempts
+          default: 0
+        dispatched:
+          type: boolean
+          title: Dispatched
+          default: true
+        lastErrorCode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lasterrorcode
+        llmCalls:
+          type: integer
+          title: Llmcalls
+          default: 0
+        promptTokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Prompttokens
+        completionTokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Completiontokens
+        costEstimateUsd:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Costestimateusd
+        costKnown:
+          type: boolean
+          title: Costknown
+          default: false
+      type: object
+      required:
+      - jobId
+      - status
+      - stage
+      - lessonsDone
+      - lessonsTotal
+      - error
+      title: GenerationOut
+    GlossaryTermOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        termKey:
+          type: string
+          title: Termkey
+        term:
+          type: string
+          title: Term
+        definition:
+          type: string
+          title: Definition
+        example:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Example
+        lessonId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lessonid
+        lessonTitle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lessontitle
+      type: object
+      required:
+      - id
+      - termKey
+      - term
+      - definition
+      title: GlossaryTermOut
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    InterviewAnswerRequest:
+      properties:
+        position:
+          type: integer
+          maximum: 4.0
+          minimum: 0.0
+          title: Position
+        answer:
+          type: string
+          maxLength: 2000
+          minLength: 1
+          title: Answer
+      type: object
+      required:
+      - position
+      - answer
+      title: InterviewAnswerRequest
+    InterviewOut:
+      properties:
+        questions:
+          items:
+            type: string
+          type: array
+          title: Questions
+        completedCount:
+          type: integer
+          title: Completedcount
+      type: object
+      required:
+      - questions
+      - completedCount
+      title: InterviewOut
+    LearningPathBlockedOut:
+      properties:
+        lessonId:
+          type: string
+          title: Lessonid
+        title:
+          type: string
+          title: Title
+        prerequisites:
+          items:
+            $ref: '#/components/schemas/LearningPathPrerequisiteOut'
+          type: array
+          title: Prerequisites
+        reason:
+          $ref: '#/components/schemas/LearningPathReasonOut'
+      type: object
+      required:
+      - lessonId
+      - title
+      - prerequisites
+      - reason
+      title: LearningPathBlockedOut
+    LearningPathNextLessonOut:
+      properties:
+        lessonId:
+          type: string
+          title: Lessonid
+        title:
+          type: string
+          title: Title
+        reason:
+          $ref: '#/components/schemas/LearningPathReasonOut'
+      type: object
+      required:
+      - lessonId
+      - title
+      - reason
+      title: LearningPathNextLessonOut
+    LearningPathOut:
+      properties:
+        nextLesson:
+          anyOf:
+          - $ref: '#/components/schemas/LearningPathNextLessonOut'
+          - type: 'null'
+        reviewLessonId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reviewlessonid
+        reviewDueCount:
+          type: integer
+          title: Reviewduecount
+        blockedBy:
+          items:
+            $ref: '#/components/schemas/LearningPathBlockedOut'
+          type: array
+          title: Blockedby
+        prerequisitesDag:
+          $ref: '#/components/schemas/PrerequisiteDagOut'
+        recommendationToken:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Recommendationtoken
+      type: object
+      required:
+      - reviewDueCount
+      - blockedBy
+      - prerequisitesDag
+      title: LearningPathOut
+    LearningPathPrerequisiteOut:
+      properties:
+        skillId:
+          type: string
+          title: Skillid
+        title:
+          type: string
+          title: Title
+        masteryScore:
+          type: number
+          title: Masteryscore
+        met:
+          type: boolean
+          title: Met
+      type: object
+      required:
+      - skillId
+      - title
+      - masteryScore
+      - met
+      title: LearningPathPrerequisiteOut
+    LearningPathReasonOut:
+      properties:
+        code:
+          type: string
+          title: Code
+        message:
+          type: string
+          title: Message
+      type: object
+      required:
+      - code
+      - message
+      title: LearningPathReasonOut
+    LessonOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        courseId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Courseid
+        title:
+          type: string
+          title: Title
+        orderIndex:
+          type: integer
+          title: Orderindex
+        contentVersion:
+          type: integer
+          title: Contentversion
+        status:
+          type: string
+          title: Status
+        blocks:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Blocks
+        grounding:
+          type: string
+          enum:
+          - source_grounded
+          - general_ai_knowledge
+          title: Grounding
+          default: general_ai_knowledge
+        citations:
+          items:
+            $ref: '#/components/schemas/CitationOut'
+          type: array
+          title: Citations
+        evidenceNotice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Evidencenotice
+      type: object
+      required:
+      - id
+      - title
+      - orderIndex
+      - contentVersion
+      - status
+      - blocks
+      title: LessonOut
+    LessonSummaryOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        orderIndex:
+          type: integer
+          title: Orderindex
+        title:
+          type: string
+          title: Title
+        status:
+          type: string
+          title: Status
+        contentVersion:
+          type: integer
+          title: Contentversion
+        completed:
+          type: boolean
+          title: Completed
+          default: false
+      type: object
+      required:
+      - id
+      - orderIndex
+      - title
+      - status
+      - contentVersion
+      title: LessonSummaryOut
+    LoginRequest:
+      properties:
+        email:
+          type: string
+          maxLength: 254
+          minLength: 3
+          title: Email
+        password:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Password
+      type: object
+      required:
+      - email
+      - password
+      title: LoginRequest
+    MasteryOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/SkillMasteryOut'
+          type: array
+          title: Items
+        coursePercent:
+          type: number
+          title: Coursepercent
+        reviewDueCount:
+          type: integer
+          title: Reviewduecount
+      type: object
+      required:
+      - items
+      - coursePercent
+      - reviewDueCount
+      title: MasteryOut
+    MeDeleteRequest:
+      properties:
+        confirmText:
+          type: string
+          maxLength: 32
+          minLength: 1
+          title: Confirmtext
+        password:
+          anyOf:
+          - type: string
+            maxLength: 128
+          - type: 'null'
+          title: Password
+      additionalProperties: false
+      type: object
+      required:
+      - confirmText
+      title: MeDeleteRequest
+    MeStatsOut:
+      properties:
+        userId:
+          type: string
+          title: Userid
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+        displayName:
+          type: string
+          title: Displayname
+        xp:
+          type: integer
+          title: Xp
+        streakDays:
+          type: integer
+          title: Streakdays
+          default: 0
+        lastActiveDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lastactivedate
+        coursesTotal:
+          type: integer
+          title: Coursestotal
+          default: 0
+        coursesReady:
+          type: integer
+          title: Coursesready
+          default: 0
+        lessonsCompleted:
+          type: integer
+          title: Lessonscompleted
+          default: 0
+        lessonsTotal:
+          type: integer
+          title: Lessonstotal
+          default: 0
+        attemptsTotal:
+          type: integer
+          title: Attemptstotal
+          default: 0
+        reviewsDue:
+          type: integer
+          title: Reviewsdue
+          default: 0
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+      type: object
+      required:
+      - userId
+      - displayName
+      - xp
+      title: MeStatsOut
+      description: Thống kê học tập thực từ DB cho người dùng hiện tại (Wave 4 / M1-ME-SURFACE).
+    MeUpdateRequest:
+      properties:
+        displayName:
+          type: string
+          maxLength: 80
+          minLength: 1
+          title: Displayname
+      additionalProperties: false
+      type: object
+      required:
+      - displayName
+      title: MeUpdateRequest
+    PrerequisiteDagNodeOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        title:
+          type: string
+          title: Title
+        bloomLevel:
+          type: string
+          title: Bloomlevel
+      type: object
+      required:
+      - id
+      - title
+      - bloomLevel
+      title: PrerequisiteDagNodeOut
+    PrerequisiteDagOut:
+      properties:
+        nodes:
+          items:
+            $ref: '#/components/schemas/PrerequisiteDagNodeOut'
+          type: array
+          title: Nodes
+        edges:
+          items:
+            items:
+              type: string
+            type: array
+          type: array
+          title: Edges
+      type: object
+      required:
+      - nodes
+      - edges
+      title: PrerequisiteDagOut
+    ProposalOut:
+      properties:
+        version:
+          type: integer
+          title: Version
+        approved:
+          type: boolean
+          title: Approved
+        payload:
+          additionalProperties: true
+          type: object
+          title: Payload
+      type: object
+      required:
+      - version
+      - approved
+      - payload
+      title: ProposalOut
+    ProposalUnit:
+      properties:
+        title:
+          type: string
+          maxLength: 160
+          minLength: 1
+          title: Title
+        blurb:
+          type: string
+          maxLength: 400
+          title: Blurb
+          default: ''
+        lessonTitles:
+          items:
+            type: string
+          type: array
+          maxItems: 12
+          minItems: 1
+          title: Lessontitles
+      type: object
+      required:
+      - title
+      - lessonTitles
+      title: ProposalUnit
+    ProposalUpdateRequest:
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1.0
+          title: Expectedversion
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+        objective:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Objective
+        units:
+          items:
+            $ref: '#/components/schemas/ProposalUnit'
+          type: array
+          maxItems: 8
+          minItems: 1
+          title: Units
+        outcomes:
+          items:
+            type: string
+          type: array
+          maxItems: 8
+          title: Outcomes
+      additionalProperties: false
+      type: object
+      required:
+      - expectedVersion
+      - name
+      - objective
+      - units
+      title: ProposalUpdateRequest
+      description: 'Body của PATCH /v1/courses/{courseId}/proposal (Wave 4 / P1-PROPOSAL-EDIT).
+
+
+        Yêu cầu `expectedVersion` (optimistic concurrency) và không nhận `learnerProfile`
+
+        từ client — server giữ nguyên hồ sơ học viên đã suy từ phỏng vấn.'
+    RagChunkOut:
+      properties:
+        chunkId:
+          type: string
+          title: Chunkid
+        sourceId:
+          type: string
+          title: Sourceid
+        documentId:
+          type: string
+          title: Documentid
+        pageNumber:
+          type: integer
+          title: Pagenumber
+        charStart:
+          type: integer
+          title: Charstart
+        charEnd:
+          type: integer
+          title: Charend
+        sectionAnchor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sectionanchor
+        textHash:
+          type: string
+          title: Texthash
+        sourceTitle:
+          type: string
+          title: Sourcetitle
+        sourceVersion:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourceversion
+        sourceUrl:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourceurl
+        textSource:
+          type: string
+          enum:
+          - native
+          - ocr
+          title: Textsource
+          default: native
+        ocrConfidence:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Ocrconfidence
+        ocrBbox:
+          anyOf:
+          - items:
+              type: number
+            type: array
+          - type: 'null'
+          title: Ocrbbox
+        snippet:
+          type: string
+          title: Snippet
+        lexicalRank:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Lexicalrank
+        vectorRank:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Vectorrank
+        similarity:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Similarity
+        rrfScore:
+          type: number
+          title: Rrfscore
+      type: object
+      required:
+      - chunkId
+      - sourceId
+      - documentId
+      - pageNumber
+      - charStart
+      - charEnd
+      - textHash
+      - sourceTitle
+      - snippet
+      - rrfScore
+      title: RagChunkOut
+    RagSearchOut:
+      properties:
+        query:
+          type: string
+          title: Query
+        embeddingSpec:
+          type: string
+          title: Embeddingspec
+        items:
+          items:
+            $ref: '#/components/schemas/RagChunkOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        insufficientEvidence:
+          type: boolean
+          title: Insufficientevidence
+        notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notice
+      type: object
+      required:
+      - query
+      - embeddingSpec
+      - items
+      - total
+      - insufficientEvidence
+      title: RagSearchOut
+    RagSearchRequest:
+      properties:
+        query:
+          type: string
+          maxLength: 1000
+          minLength: 1
+          title: Query
+        sourceIds:
+          items:
+            type: string
+          type: array
+          maxItems: 20
+          title: Sourceids
+        topK:
+          type: integer
+          maximum: 20.0
+          minimum: 1.0
+          title: Topk
+          default: 6
+      additionalProperties: false
+      type: object
+      required:
+      - query
+      title: RagSearchRequest
+      description: 'Body của POST /v1/courses/{id}/sources/search.
+
+
+        `sourceIds` chỉ THU HẸP phạm vi: server luôn giao với các nguồn đã liên kết
+
+        và thuộc quyền user, nên client không thể mở rộng sang nguồn khác.'
+    RecommendationEventOut:
+      properties:
+        recorded:
+          type: boolean
+          title: Recorded
+        duplicate:
+          type: boolean
+          title: Duplicate
+          default: false
+        exposureId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Exposureid
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+      type: object
+      required:
+      - recorded
+      title: RecommendationEventOut
+    RecommendationEventRequest:
+      properties:
+        recommendationToken:
+          type: string
+          maxLength: 4096
+          minLength: 8
+          title: Recommendationtoken
+      additionalProperties: false
+      type: object
+      required:
+      - recommendationToken
+      title: RecommendationEventRequest
+      description: 'Body của POST /v1/courses/{courseId}/recommendation-events.
+
+
+        Chỉ nhận token do server phát. `arm`, `propensity`, `userId`, `courseId`,
+
+        `contextHash` tự tính đều bị từ chối (extra=forbid) để client không ghi khống.'
+    RegisterRequest:
+      properties:
+        email:
+          type: string
+          maxLength: 254
+          minLength: 3
+          title: Email
+        password:
+          type: string
+          maxLength: 128
+          minLength: 8
+          title: Password
+      type: object
+      required:
+      - email
+      - password
+      title: RegisterRequest
+    ResearchRequestIn:
+      properties:
+        maxSources:
+          type: integer
+          maximum: 20.0
+          minimum: 1.0
+          title: Maxsources
+          default: 8
+        learningGoals:
+          items:
+            type: string
+          type: array
+          maxItems: 8
+          title: Learninggoals
+        learnerLevel:
+          anyOf:
+          - type: string
+            enum:
+            - beginner
+            - intermediate
+            - advanced
+          - type: 'null'
+          title: Learnerlevel
+      additionalProperties: false
+      type: object
+      title: ResearchRequestIn
+      description: 'Body của POST /v1/courses/{id}/research-runs.
+
+
+        KHÔNG có `courseId`/`ownerId`: server lấy từ path + identity đã xác thực.'
+    ResearchRunListOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ResearchRunOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: ResearchRunListOut
+    ResearchRunOut:
+      properties:
+        researchRunId:
+          type: string
+          title: Researchrunid
+        courseId:
+          type: string
+          title: Courseid
+        topic:
+          type: string
+          title: Topic
+        domain:
+          type: string
+          title: Domain
+        status:
+          type: string
+          title: Status
+        sources:
+          items:
+            $ref: '#/components/schemas/ResearchSourceOut'
+          type: array
+          title: Sources
+        warnings:
+          items:
+            type: string
+          type: array
+          title: Warnings
+        insufficientEvidence:
+          type: boolean
+          title: Insufficientevidence
+        analysis:
+          additionalProperties: true
+          type: object
+          title: Analysis
+        error:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Error
+        adapter:
+          type: string
+          title: Adapter
+        isMock:
+          type: boolean
+          title: Ismock
+        toolCalls:
+          type: integer
+          title: Toolcalls
+        notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notice
+        reused:
+          type: boolean
+          title: Reused
+          default: false
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+      type: object
+      required:
+      - researchRunId
+      - courseId
+      - topic
+      - domain
+      - status
+      - sources
+      - warnings
+      - insufficientEvidence
+      - analysis
+      - adapter
+      - isMock
+      - toolCalls
+      title: ResearchRunOut
+    ResearchSourceOut:
+      properties:
+        candidateId:
+          type: string
+          title: Candidateid
+        title:
+          type: string
+          title: Title
+        sourceType:
+          type: string
+          title: Sourcetype
+        canonicalUrl:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Canonicalurl
+        publisher:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Publisher
+        author:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Author
+        publicationDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Publicationdate
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Version
+        licenseInfo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Licenseinfo
+        verificationStatus:
+          type: string
+          title: Verificationstatus
+        relevanceScore:
+          type: number
+          title: Relevancescore
+        selectionReason:
+          type: string
+          title: Selectionreason
+        isMock:
+          type: boolean
+          title: Ismock
+        scores:
+          additionalProperties: true
+          type: object
+          title: Scores
+      type: object
+      required:
+      - candidateId
+      - title
+      - sourceType
+      - canonicalUrl
+      - publisher
+      - author
+      - publicationDate
+      - language
+      - version
+      - licenseInfo
+      - verificationStatus
+      - relevanceScore
+      - selectionReason
+      - isMock
+      - scores
+      title: ResearchSourceOut
+    ReviewCardOut:
+      properties:
+        cardId:
+          type: string
+          title: Cardid
+        lessonId:
+          type: string
+          title: Lessonid
+        state:
+          type: integer
+          title: State
+        dueAt:
+          type: string
+          title: Dueat
+        lastReviewAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lastreviewat
+      type: object
+      required:
+      - cardId
+      - lessonId
+      - state
+      - dueAt
+      title: ReviewCardOut
+    ReviewDueOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/DueReviewOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: ReviewDueOut
+    ReviewGradeOut:
+      properties:
+        card:
+          $ref: '#/components/schemas/ReviewCardOut'
+        eventId:
+          type: string
+          title: Eventid
+        duplicate:
+          type: boolean
+          title: Duplicate
+      type: object
+      required:
+      - card
+      - eventId
+      - duplicate
+      title: ReviewGradeOut
+    ReviewGradeRequest:
+      properties:
+        rating:
+          type: integer
+          maximum: 4.0
+          minimum: 1.0
+          title: Rating
+        clientReviewId:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Clientreviewid
+        durationMs:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Durationms
+      type: object
+      required:
+      - rating
+      - clientReviewId
+      title: ReviewGradeRequest
+    SkillMasteryOut:
+      properties:
+        skillId:
+          type: string
+          title: Skillid
+        title:
+          type: string
+          title: Title
+        bloomLevel:
+          type: string
+          title: Bloomlevel
+        masteryScore:
+          type: number
+          title: Masteryscore
+        method:
+          type: string
+          title: Method
+          default: rule_based
+        attempts:
+          type: integer
+          title: Attempts
+        correct:
+          type: integer
+          title: Correct
+        total:
+          type: integer
+          title: Total
+        lastAttemptAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lastattemptat
+        passThreshold:
+          type: number
+          title: Passthreshold
+      type: object
+      required:
+      - skillId
+      - title
+      - bloomLevel
+      - masteryScore
+      - attempts
+      - correct
+      - total
+      - passThreshold
+      title: SkillMasteryOut
+    SourceCandidateOut:
+      properties:
+        adapter:
+          type: string
+          title: Adapter
+        externalId:
+          type: string
+          title: Externalid
+        sourceType:
+          type: string
+          title: Sourcetype
+        title:
+          type: string
+          title: Title
+        canonicalUrl:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Canonicalurl
+        author:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Author
+        publisher:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Publisher
+        publicationDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Publicationdate
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Version
+        licenseInfo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Licenseinfo
+        deterministic:
+          type: boolean
+          title: Deterministic
+        isMock:
+          type: boolean
+          title: Ismock
+      type: object
+      required:
+      - adapter
+      - externalId
+      - sourceType
+      - title
+      - canonicalUrl
+      - author
+      - publisher
+      - publicationDate
+      - language
+      - version
+      - licenseInfo
+      - deterministic
+      - isMock
+      title: SourceCandidateOut
+      description: Kết quả discovery. Chưa phải Source đã đăng ký — cần người dùng xác nhận.
+    SourceCreateRequest:
+      properties:
+        sourceType:
+          type: string
+          enum:
+          - official_documentation
+          - academic
+          - user_document
+          - webpage
+          title: Sourcetype
+        title:
+          type: string
+          maxLength: 300
+          minLength: 1
+          title: Title
+        canonicalUrl:
+          anyOf:
+          - type: string
+            maxLength: 2048
+          - type: 'null'
+          title: Canonicalurl
+        author:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Author
+        publisher:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Publisher
+        publicationDate:
+          anyOf:
+          - type: string
+            maxLength: 40
+          - type: 'null'
+          title: Publicationdate
+        sourceUpdatedAt:
+          anyOf:
+          - type: string
+            maxLength: 40
+          - type: 'null'
+          title: Sourceupdatedat
+        language:
+          anyOf:
+          - type: string
+            maxLength: 20
+          - type: 'null'
+          title: Language
+        version:
+          anyOf:
+          - type: string
+            maxLength: 120
+          - type: 'null'
+          title: Version
+        visibility:
+          type: string
+          enum:
+          - public
+          - private
+          title: Visibility
+          default: private
+        licenseInfo:
+          anyOf:
+          - type: string
+            maxLength: 300
+          - type: 'null'
+          title: Licenseinfo
+      additionalProperties: false
+      type: object
+      required:
+      - sourceType
+      - title
+      title: SourceCreateRequest
+    SourceCriterionOut:
+      properties:
+        key:
+          type: string
+          title: Key
+        label:
+          type: string
+          title: Label
+        status:
+          type: string
+          enum:
+          - strong
+          - moderate
+          - weak
+          - unknown
+          - penalized
+          title: Status
+        score:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Score
+        reasons:
+          items:
+            type: string
+          type: array
+          title: Reasons
+      type: object
+      required:
+      - key
+      - label
+      - status
+      - score
+      title: SourceCriterionOut
+      description: Một tiêu chí đánh giá. `status=unknown` nghĩa là THIẾU dữ liệu, không phải 0 điểm.
+    SourceDiscoveryOut:
+      properties:
+        adapter:
+          type: string
+          title: Adapter
+        query:
+          type: string
+          title: Query
+        deterministic:
+          type: boolean
+          title: Deterministic
+        isMock:
+          type: boolean
+          title: Ismock
+        items:
+          items:
+            $ref: '#/components/schemas/SourceCandidateOut'
+          type: array
+          title: Items
+        notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notice
+      type: object
+      required:
+      - adapter
+      - query
+      - deterministic
+      - isMock
+      - items
+      title: SourceDiscoveryOut
+    SourceDocumentListOut:
+      properties:
+        sourceId:
+          type: string
+          title: Sourceid
+        items:
+          items:
+            $ref: '#/components/schemas/SourceDocumentOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        contentIngested:
+          type: boolean
+          title: Contentingested
+        notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notice
+      type: object
+      required:
+      - sourceId
+      - items
+      - total
+      - contentIngested
+      title: SourceDocumentListOut
+    SourceDocumentOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        sourceId:
+          type: string
+          title: Sourceid
+        status:
+          type: string
+          enum:
+          - queued
+          - extracting
+          - ready
+          - no_text
+          - failed
+          title: Status
+        origin:
+          type: string
+          enum:
+          - upload
+          - web
+          - arxiv
+          title: Origin
+          default: upload
+        originUrl:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Originurl
+        mime:
+          type: string
+          title: Mime
+        byteSize:
+          type: integer
+          title: Bytesize
+        pageCount:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Pagecount
+        pipelineVersion:
+          type: string
+          title: Pipelineversion
+        originalFilename:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Originalfilename
+        chunkCount:
+          type: integer
+          title: Chunkcount
+          default: 0
+        preview:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Preview
+        error:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Error
+        attempts:
+          type: integer
+          title: Attempts
+          default: 0
+        rightsConfirmed:
+          type: boolean
+          title: Rightsconfirmed
+          default: false
+        textSource:
+          anyOf:
+          - type: string
+            enum:
+            - native
+            - ocr
+            - mixed
+          - type: 'null'
+          title: Textsource
+        ocrPages:
+          type: integer
+          title: Ocrpages
+          default: 0
+        ocrEngine:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ocrengine
+        ocrVersion:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ocrversion
+        ingestedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ingestedat
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+      type: object
+      required:
+      - id
+      - sourceId
+      - status
+      - mime
+      - byteSize
+      - pageCount
+      - pipelineVersion
+      - originalFilename
+      title: SourceDocumentOut
+      description: 'Trạng thái ingest của MỘT file. Không bao giờ chứa text hay storage key.
+
+
+        `chunkCount` chỉ > 0 khi `status=ready`. `preview` là vài trăm ký tự đầu của
+
+        chunk đầu tiên, chỉ để người dùng nhận biết tài liệu — KHÔNG phải bằng chứng
+
+        và không được dùng làm citation.'
+    SourceEvaluationOut:
+      properties:
+        sourceId:
+          type: string
+          title: Sourceid
+        criteria:
+          items:
+            $ref: '#/components/schemas/SourceCriterionOut'
+          type: array
+          title: Criteria
+        knownWeight:
+          type: number
+          title: Knownweight
+        totalWeight:
+          type: number
+          title: Totalweight
+        weightedScore:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Weightedscore
+        verdict:
+          type: string
+          enum:
+          - insufficient_metadata
+          - weak
+          - moderate
+          - strong
+          title: Verdict
+        suggestedVerificationStatus:
+          type: string
+          title: Suggestedverificationstatus
+        limitations:
+          items:
+            type: string
+          type: array
+          title: Limitations
+        evaluator:
+          additionalProperties: true
+          type: object
+          title: Evaluator
+      type: object
+      required:
+      - sourceId
+      - criteria
+      - knownWeight
+      - totalWeight
+      - weightedScore
+      - verdict
+      - suggestedVerificationStatus
+      - evaluator
+      title: SourceEvaluationOut
+    SourceIngestConfigOut:
+      properties:
+        ingestEnabled:
+          type: boolean
+          title: Ingestenabled
+        storageConfigured:
+          type: boolean
+          title: Storageconfigured
+        maxPdfBytes:
+          type: integer
+          title: Maxpdfbytes
+        maxPdfPages:
+          type: integer
+          title: Maxpdfpages
+        pipelineVersion:
+          type: string
+          title: Pipelineversion
+        embeddingEnabled:
+          type: boolean
+          title: Embeddingenabled
+          default: true
+        embeddingConfigured:
+          type: boolean
+          title: Embeddingconfigured
+          default: true
+        embeddingProvider:
+          type: string
+          title: Embeddingprovider
+          default: hashing
+        embeddingModel:
+          type: string
+          title: Embeddingmodel
+          default: hashing-ngram-v1
+        embeddingDimension:
+          type: integer
+          title: Embeddingdimension
+          default: 256
+        ragEnabled:
+          type: boolean
+          title: Ragenabled
+          default: false
+        webEnabled:
+          type: boolean
+          title: Webenabled
+          default: false
+        webAllowedHostCount:
+          type: integer
+          title: Weballowedhostcount
+          default: 0
+        webMaxFetchBytes:
+          type: integer
+          title: Webmaxfetchbytes
+          default: 0
+        webRespectRobots:
+          type: boolean
+          title: Webrespectrobots
+          default: true
+        arxivEnabled:
+          type: boolean
+          title: Arxivenabled
+          default: false
+        ocrEnabled:
+          type: boolean
+          title: Ocrenabled
+          default: false
+        ocrConfigured:
+          type: boolean
+          title: Ocrconfigured
+          default: false
+        ocrEngine:
+          type: string
+          title: Ocrengine
+          default: ''
+        ocrVersion:
+          type: string
+          title: Ocrversion
+          default: ''
+        ocrMaxPages:
+          type: integer
+          title: Ocrmaxpages
+          default: 0
+        ocrDpi:
+          type: integer
+          title: Ocrdpi
+          default: 0
+      type: object
+      required:
+      - ingestEnabled
+      - storageConfigured
+      - maxPdfBytes
+      - maxPdfPages
+      - pipelineVersion
+      title: SourceIngestConfigOut
+      description: Cho UI biết upload có khả dụng hay không (không lộ endpoint/credential).
+    SourceLinkRequest:
+      properties:
+        sourceId:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Sourceid
+      additionalProperties: false
+      type: object
+      required:
+      - sourceId
+      title: SourceLinkRequest
+    SourceListOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/SourceOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+        limit:
+          type: integer
+          title: Limit
+        offset:
+          type: integer
+          title: Offset
+        hasMore:
+          type: boolean
+          title: Hasmore
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      - hasMore
+      title: SourceListOut
+    SourceOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        sourceType:
+          type: string
+          title: Sourcetype
+        title:
+          type: string
+          title: Title
+        canonicalUrl:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Canonicalurl
+        author:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Author
+        publisher:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Publisher
+        publicationDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Publicationdate
+        sourceUpdatedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourceupdatedat
+        retrievedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Retrievedat
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Version
+        visibility:
+          type: string
+          title: Visibility
+        licenseInfo:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Licenseinfo
+        contentHash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Contenthash
+        verificationStatus:
+          type: string
+          title: Verificationstatus
+        ownerId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ownerid
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+      type: object
+      required:
+      - id
+      - sourceType
+      - title
+      - canonicalUrl
+      - author
+      - publisher
+      - publicationDate
+      - sourceUpdatedAt
+      - retrievedAt
+      - language
+      - version
+      - visibility
+      - licenseInfo
+      - contentHash
+      - verificationStatus
+      - ownerId
+      title: SourceOut
+    TutorCitationOut:
+      properties:
+        chunkId:
+          type: string
+          title: Chunkid
+        sourceId:
+          type: string
+          title: Sourceid
+        documentId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Documentid
+        pageNumber:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Pagenumber
+        charStart:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Charstart
+        charEnd:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Charend
+        sectionAnchor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sectionanchor
+        textHash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Texthash
+        sourceTitle:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourcetitle
+        sourceVersion:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourceversion
+        sourceUrl:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sourceurl
+        evidenceText:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Evidencetext
+        validationStatus:
+          type: string
+          title: Validationstatus
+        evidenceSupported:
+          type: boolean
+          title: Evidencesupported
+          default: false
+      type: object
+      required:
+      - chunkId
+      - sourceId
+      - validationStatus
+      title: TutorCitationOut
+      description: Citation đã verify server-side (P4.1). Chỉ id do retrieval trả về.
+    TutorContextRef:
+      properties:
+        lessonId:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Lessonid
+        blockIndex:
+          type: integer
+          maximum: 200.0
+          minimum: 0.0
+          title: Blockindex
+      additionalProperties: false
+      type: object
+      required:
+      - lessonId
+      - blockIndex
+      title: TutorContextRef
+      description: Tham chiếu ngữ cảnh do client gửi. Server luôn resolve lại từ DB.
+    TutorMessageOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        role:
+          type: string
+          enum:
+          - user
+          - assistant
+          title: Role
+        status:
+          type: string
+          title: Status
+        content:
+          type: string
+          title: Content
+        contextRef:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Contextref
+        errorCode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Errorcode
+        finishReason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Finishreason
+        citations:
+          items:
+            $ref: '#/components/schemas/TutorCitationOut'
+          type: array
+          title: Citations
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+      type: object
+      required:
+      - id
+      - role
+      - status
+      - content
+      title: TutorMessageOut
+    TutorMessageRequest:
+      properties:
+        clientMessageId:
+          type: string
+          maxLength: 64
+          minLength: 8
+          title: Clientmessageid
+        threadId:
+          anyOf:
+          - type: string
+            maxLength: 64
+          - type: 'null'
+          title: Threadid
+        text:
+          type: string
+          maxLength: 4000
+          minLength: 1
+          title: Text
+        contextRef:
+          $ref: '#/components/schemas/TutorContextRef'
+      additionalProperties: false
+      type: object
+      required:
+      - clientMessageId
+      - text
+      - contextRef
+      title: TutorMessageRequest
+      description: 'Body của POST /v1/courses/{courseId}/tutor/messages.
+
+
+        KHÔNG có `userId`, `courseId`, `systemPrompt`, `lessonContent`, `sources`
+
+        hay `ownerId`: server lấy identity từ session, course/lesson từ DB, và các
+
+        field đó bị từ chối rõ ràng (extra=forbid).'
+    TutorQuotaLimitsOut:
+      properties:
+        messagesPerDay:
+          type: integer
+          title: Messagesperday
+        tokensPerDay:
+          type: integer
+          title: Tokensperday
+        maxConcurrentStreams:
+          type: integer
+          title: Maxconcurrentstreams
+      type: object
+      required:
+      - messagesPerDay
+      - tokensPerDay
+      - maxConcurrentStreams
+      title: TutorQuotaLimitsOut
+      description: 0 = không giới hạn (không phải "cấm dùng").
+    TutorQuotaRemainingOut:
+      properties:
+        messages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Messages
+        tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens
+      type: object
+      title: TutorQuotaRemainingOut
+      description: 'None = không có trần tương ứng, không phải "còn 0". '
+    TutorQuotaUsageOut:
+      properties:
+        messages:
+          type: integer
+          title: Messages
+        tokens:
+          type: integer
+          title: Tokens
+      type: object
+      required:
+      - messages
+      - tokens
+      title: TutorQuotaUsageOut
+    TutorSseEvent:
+      type: object
+      description: 'Server-Sent Event payload emitted by POST /v1/courses/{course_id}/tutor/messages. Each SSE frame follows
+        `id: <stream_id>:<seq>\nevent: <kind>\ndata: <single-line JSON>\n\n`.'
+      required:
+      - event
+      - data
+      properties:
+        id:
+          type: string
+          examples:
+          - tmsg_abc123:1
+        event:
+          type: string
+          enum:
+          - delta
+          - tool
+          - citations
+          - done
+          - cancelled
+          - error
+          - heartbeat
+        data:
+          type: object
+          properties:
+            messageId:
+              type: string
+            threadId:
+              type: string
+            text:
+              type: string
+            name:
+              type: string
+            status:
+              type: string
+            summary:
+              type: string
+            code:
+              type: string
+            message:
+              type: string
+            citations:
+              type: array
+              items:
+                type: object
+            unverified:
+              type: array
+              items:
+                type: object
+            insufficientEvidence:
+              type: boolean
+          additionalProperties: true
+    TutorStopOut:
+      properties:
+        messageId:
+          type: string
+          title: Messageid
+        status:
+          type: string
+          title: Status
+        providerStopGuaranteed:
+          type: boolean
+          title: Providerstopguaranteed
+          default: false
+        notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notice
+      type: object
+      required:
+      - messageId
+      - status
+      title: TutorStopOut
+    TutorThreadListOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/TutorThreadSummaryOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: TutorThreadListOut
+    TutorThreadOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        courseId:
+          type: string
+          title: Courseid
+        lessonId:
+          type: string
+          title: Lessonid
+        title:
+          type: string
+          title: Title
+        messageCount:
+          type: integer
+          title: Messagecount
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+        updatedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Updatedat
+        messages:
+          items:
+            $ref: '#/components/schemas/TutorMessageOut'
+          type: array
+          title: Messages
+        replaySupported:
+          type: boolean
+          title: Replaysupported
+          default: false
+        notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notice
+      type: object
+      required:
+      - id
+      - courseId
+      - lessonId
+      - title
+      - messageCount
+      title: TutorThreadOut
+    TutorThreadSummaryOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        courseId:
+          type: string
+          title: Courseid
+        lessonId:
+          type: string
+          title: Lessonid
+        title:
+          type: string
+          title: Title
+        messageCount:
+          type: integer
+          title: Messagecount
+        createdAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Createdat
+        updatedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Updatedat
+      type: object
+      required:
+      - id
+      - courseId
+      - lessonId
+      - title
+      - messageCount
+      title: TutorThreadSummaryOut
+    TutorUsageOut:
+      properties:
+        courseId:
+          type: string
+          title: Courseid
+        windowSeconds:
+          type: integer
+          title: Windowseconds
+        used:
+          $ref: '#/components/schemas/TutorQuotaUsageOut'
+        limits:
+          $ref: '#/components/schemas/TutorQuotaLimitsOut'
+        remaining:
+          $ref: '#/components/schemas/TutorQuotaRemainingOut'
+        runningStreams:
+          type: integer
+          title: Runningstreams
+        tokensKnown:
+          type: boolean
+          title: Tokensknown
+      type: object
+      required:
+      - courseId
+      - windowSeconds
+      - used
+      - limits
+      - remaining
+      - runningStreams
+      - tokensKnown
+      title: TutorUsageOut
+    UnitOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        orderIndex:
+          type: integer
+          title: Orderindex
+        title:
+          type: string
+          title: Title
+        blurb:
+          type: string
+          title: Blurb
+        lessons:
+          items:
+            $ref: '#/components/schemas/LessonSummaryOut'
+          type: array
+          title: Lessons
+      type: object
+      required:
+      - id
+      - orderIndex
+      - title
+      - blurb
+      - lessons
+      title: UnitOut
+    UserOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+        displayName:
+          type: string
+          title: Displayname
+        xp:
+          type: integer
+          title: Xp
+      type: object
+      required:
+      - id
+      - email
+      - displayName
+      - xp
+      title: UserOut
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    WebDocumentRequest:
+      properties:
+        url:
+          anyOf:
+          - type: string
+            maxLength: 2048
+          - type: 'null'
+          title: Url
+        arxivId:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Arxivid
+        userConfirmedRights:
+          type: boolean
+          title: Userconfirmedrights
+          default: false
+        title:
+          anyOf:
+          - type: string
+            maxLength: 300
+          - type: 'null'
+          title: Title
+      additionalProperties: false
+      type: object
+      title: WebDocumentRequest
+      description: 'Body của ingest từ URL/arXiv (P4.2).
+
+
+        `userConfirmedRights` BẮT BUỘC và phải đúng `true`; đây là audit xác nhận
+
+        quyền sử dụng, không phải checkbox trang trí. Chỉ một trong `url`/`arxivId`.'
+  securitySchemes:
+    AccessCookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: HttpOnly SameSite=Lax JWT access token issued by /v1/auth/login or /v1/auth/register.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Optional Bearer JWT fallback for non-browser CLI/tests.
+    CsrfHeaderAuth:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Double-submit CSRF token matching the non-HttpOnly `csrf_token` cookie on mutating requests.

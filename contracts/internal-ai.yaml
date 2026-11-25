@@ -1,0 +1,867 @@
+# SopiSkill Internal Service Contract: core-api (Spring Boot) <-> ai-engine (Python)
+# Frozen in Phase 0 (DEC-019, DEC-020, DEC-022, DEC-025).
+# Verified by: backend/tests/test_contracts_openapi.py
+openapi: 3.1.0
+info:
+  title: SopiSkill Internal AI Engine Contract
+  version: 1.0.0-phase0
+  description: >
+    Internal service-to-service HTTP/SSE and Redis Streams contract between
+    core-api (Spring Boot 3.4+, owner of `core.*` PostgreSQL schema) and
+    ai-engine (Python 3.12+, owner of `rag.*` PostgreSQL/pgvector schema).
+
+    Security invariants:
+    1. Exposed strictly on Kubernetes ClusterIP / internal network (never public Ingress).
+    2. Every HTTP request and callback MUST carry:
+       - `X-Internal-Service-Token` verified in constant time (`hmac.compare_digest` / `MessageDigest.isEqual`).
+       - `X-Internal-Timestamp` (Unix epoch seconds; rejected outside a ±300s replay window).
+       - `X-Internal-Signature` (`sha256=<hex(HMAC-SHA256(INTERNAL_HMAC_SECRET, "{timestamp}.{METHOD}.{path}.{sha256(raw_body)}"))>`).
+       - `X-Correlation-Id` propagated across logs and traces.
+    3. Answer-key privacy invariant: `core-api` NEVER sends answer keys
+       (`answerIndex`, `acceptedAnswers`, `answer_key`, `solution`, `pairs` answers)
+       to `POST /internal/tutor/stream`. Tutor requests receive `publicBlocks` only.
+  x-domain-ownership:
+    core-api:
+      runtime: spring-boot-3.4-java-21
+      schema: core
+      migrator: flyway
+      owns:
+        - users_auth_sessions
+        - courses_proposals_units_lessons
+        - server_authoritative_grading_and_attempts
+        - xp_streak_hearts_mastery_fsrs
+        - sources_metadata_and_citations
+        - tutor_threads_quota_and_changecard_state
+        - entitlements_and_billing
+    ai-engine:
+      runtime: python-3.12-fastapi-redis-streams
+      schema: rag
+      migrator: alembic
+      owns:
+        - rag_document_chunks_and_pgvector_index
+        - llm_orchestration_interview_planner_generator_validator
+        - short_answer_semantic_and_llm_rubric_grading
+        - tutor_reasoning_and_tools
+        - document_extraction_ocr_and_source_brief
+
+servers:
+  - url: http://ai-api.sopiskill.svc.cluster.local:8000
+    description: ai-api ClusterIP endpoint (called by core-api)
+  - url: http://core-api.sopiskill.svc.cluster.local:8080
+    description: core-api internal callback endpoint (called by ai-worker-llm and ai-worker-ingest)
+
+security:
+  - InternalServiceToken: []
+    InternalTimestamp: []
+    InternalHmacSignature: []
+    CorrelationId: []
+
+x-replay-protection:
+  algorithm: HMAC-SHA256
+  signatureHeader: X-Internal-Signature
+  signatureFormat: "sha256=<lowercase_hex>"
+  timestampHeader: X-Internal-Timestamp
+  canonicalString: "{timestamp}.{UPPERCASE_HTTP_METHOD}.{request_path_with_query}.{lowercase_hex_sha256_of_raw_body}"
+  maxClockSkewSeconds: 300
+  constantTimeComparisonRequired: true
+
+x-redis-streams:
+  broker: redis-7
+  streams:
+    queue:ai:llm:
+      producer: core-api
+      consumerGroup: ai-worker-llm-group
+      kedaMetric: streamLength
+      visibilityTimeoutSeconds: 300
+      claimStrategy: XREADGROUP + XAUTOCLAIM + periodic-heartbeat
+      maxRetries: 3
+      deadLetterStream: queue:ai:llm:dlq
+      payloadSchemaRef: "#/components/schemas/LlmQueueJobMessage"
+    queue:ai:ingest:
+      producer: core-api
+      consumerGroup: ai-worker-ingest-group
+      kedaMetric: streamLength
+      visibilityTimeoutSeconds: 600
+      claimStrategy: XREADGROUP + XAUTOCLAIM + periodic-heartbeat
+      maxRetries: 3
+      deadLetterStream: queue:ai:ingest:dlq
+      payloadSchemaRef: "#/components/schemas/IngestQueueJobMessage"
+
+paths:
+  /ready:
+    get:
+      summary: Readiness probe for ai-api (no secrets exposed)
+      tags: [health]
+      security: []
+      responses:
+        "200":
+          description: ai-api is ready to accept internal requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalReadyOut"
+        "503":
+          description: ai-api is not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalReadyOut"
+
+  /internal/interview/questions:
+    post:
+      summary: Generate adaptive onboarding interview questions for a course topic
+      tags: [interview]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InterviewQuestionsRequest"
+      responses:
+        "200":
+          description: Ordered interview questions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewQuestionsResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/interview/evaluate:
+    post:
+      summary: Evaluate completed interview answers into a structured learnerProfile
+      tags: [interview]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InterviewEvaluateRequest"
+      responses:
+        "200":
+          description: Derived learner profile and normalized pedagogy hints
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterviewEvaluateResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/lessons/grade-short:
+    post:
+      summary: Grade a short-answer learner response against rubric (keyword + optional bounded LLM dispute)
+      tags: [grading]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GradeShortRequest"
+      responses:
+        "200":
+          description: Short-answer verdict, matched key points, feedback, and token usage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GradeShortResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/tutor/stream:
+    post:
+      summary: Execute Sopi AI Tutor reasoning and stream SSE frames to core-api gateway
+      description: >
+        Strictly receives sanitized `publicBlocks` (NEVER quiz answer keys).
+        Streams SSE frames (`delta`, `tool`, `citations`, `confirm`, `done`, `cancelled`, `error`, `heartbeat`)
+        back to `core-api`, which buffers them in Redis for multi-pod `Last-Event-ID` resume.
+      tags: [tutor]
+      x-answer-key-privacy:
+        publicBlocksOnly: true
+        forbiddenFields:
+          - answerIndex
+          - acceptedAnswers
+          - answer_key
+          - solution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TutorStreamInternalRequest"
+      responses:
+        "200":
+          description: Internal SSE frame stream
+          headers:
+            X-Accel-Buffering:
+              schema:
+                type: string
+                enum: ["no"]
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/InternalTutorSseEvent"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/rag/search:
+    post:
+      summary: Owner-scoped and course-scoped Hybrid RAG search (pgvector + PostgreSQL FTS + RRF)
+      tags: [rag]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RagSearchRequest"
+      responses:
+        "200":
+          description: Ranked verified chunks with provenance locators
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RagSearchResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/rag/users/{userId}:
+    delete:
+      summary: Cascade delete all rag.document_chunks belonging to a deleted user (called by core-api DELETE /v1/me)
+      tags: [rag]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deletion summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RagDeleteResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/rag/courses/{courseId}:
+    delete:
+      summary: Cascade delete course-scoped rag links/chunks when a course is deleted
+      tags: [rag]
+      parameters:
+        - name: courseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deletion summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RagDeleteResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/rag/sources/{sourceId}:
+    delete:
+      summary: Delete all rag.document_chunks belonging to a removed source document
+      tags: [rag]
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deletion summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RagDeleteResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/jobs/{jobId}/complete:
+    post:
+      summary: Callback from ai-worker-llm to core-api delivering validated generation results or terminal failure
+      tags: [callbacks-core-api]
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobCompleteCallbackRequest"
+      responses:
+        "200":
+          description: Callback acknowledged and persisted idempotently by core-api
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallbackAckResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/jobs/{jobId}/lesson-ready:
+    post:
+      summary: Progressive callback from ai-worker-llm to core-api as each lesson finishes (Phase 3 Lesson-1-First)
+      tags: [callbacks-core-api]
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LessonReadyCallbackRequest"
+      responses:
+        "200":
+          description: Lesson persisted and course unlocked when Lesson 1 becomes ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallbackAckResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/sources/{sourceId}/complete:
+    post:
+      summary: Callback from ai-worker-ingest to core-api after PDF/Web/OCR chunking and pgvector indexing
+      tags: [callbacks-core-api]
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceIngestCompleteCallbackRequest"
+      responses:
+        "200":
+          description: Source metadata updated in core.sources / core.source_documents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallbackAckResponse"
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+components:
+  securitySchemes:
+    InternalServiceToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Service-Token
+      description: Shared internal service token verified in constant time.
+    InternalTimestamp:
+      type: apiKey
+      in: header
+      name: X-Internal-Timestamp
+      description: Unix epoch timestamp in seconds (must be within ±300s of server clock).
+    InternalHmacSignature:
+      type: apiKey
+      in: header
+      name: X-Internal-Signature
+      description: >
+        Replay-protected HMAC-SHA256 signature formatted as `sha256=<hex>` over
+        `{timestamp}.{METHOD}.{path}.{sha256(raw_body)}`.
+    CorrelationId:
+      type: apiKey
+      in: header
+      name: X-Correlation-Id
+      description: End-to-end request correlation identifier propagated between core-api and ai-engine.
+
+  responses:
+    InternalUnauthorized:
+      description: Missing/invalid internal service token, expired timestamp, or invalid HMAC signature
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/InternalErrorEnvelope"
+
+  schemas:
+    InternalErrorEnvelope:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          examples: [INTERNAL_AUTH_INVALID, INTERNAL_SIGNATURE_INVALID, INTERNAL_TIMESTAMP_EXPIRED]
+        message:
+          type: string
+        correlationId:
+          type: string
+
+    InternalReadyOut:
+      type: object
+      required: [status, provider, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        provider:
+          type: string
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+
+    LlmUsageOut:
+      type: object
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        promptTokens:
+          type: integer
+          minimum: 0
+        completionTokens:
+          type: integer
+          minimum: 0
+        totalTokens:
+          type: integer
+          minimum: 0
+        latencyMs:
+          type: integer
+          minimum: 0
+
+    InterviewQuestionsRequest:
+      type: object
+      required: [courseId, topic, language]
+      properties:
+        courseId:
+          type: string
+        topic:
+          type: string
+        language:
+          type: string
+          enum: [vi, en]
+        sourceBrief:
+          type: [object, "null"]
+        onboardingProfile:
+          type: [object, "null"]
+
+    InterviewQuestionsResponse:
+      type: object
+      required: [questions]
+      properties:
+        questions:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [index, prompt]
+            properties:
+              index:
+                type: integer
+                minimum: 0
+              prompt:
+                type: string
+              kind:
+                type: string
+                enum: [freeform, single, multi]
+              choices:
+                type: array
+                items:
+                  type: string
+        usage:
+          $ref: "#/components/schemas/LlmUsageOut"
+
+    InterviewEvaluateRequest:
+      type: object
+      required: [courseId, topic, language, answers]
+      properties:
+        courseId:
+          type: string
+        topic:
+          type: string
+        language:
+          type: string
+          enum: [vi, en]
+        answers:
+          type: array
+          items:
+            type: object
+            required: [question, answer]
+            properties:
+              question:
+                type: string
+              answer:
+                type: string
+        onboardingProfile:
+          type: [object, "null"]
+
+    InterviewEvaluateResponse:
+      type: object
+      required: [learnerProfile]
+      properties:
+        learnerProfile:
+          type: object
+          required: [currentLevel, depth, preferredStyles]
+          properties:
+            currentLevel:
+              type: string
+              enum: [beginner, intermediate, advanced]
+            depth:
+              type: string
+              enum: [overview, practical, deep]
+            preferredStyles:
+              type: array
+              items:
+                type: string
+          additionalProperties: true
+
+    GradeShortRequest:
+      type: object
+      required: [lessonId, blockIndex, language, prompt, learnerAnswer, acceptedAnswers]
+      properties:
+        lessonId:
+          type: string
+        blockIndex:
+          type: integer
+          minimum: 0
+        language:
+          type: string
+          enum: [vi, en]
+        prompt:
+          type: string
+        learnerAnswer:
+          type: string
+          maxLength: 4000
+        acceptedAnswers:
+          type: array
+          items:
+            type: string
+        modelAnswer:
+          type: [string, "null"]
+        rubric:
+          type: [string, "null"]
+        dispute:
+          type: boolean
+          default: false
+
+    GradeShortResponse:
+      type: object
+      required: [correct, verdict, feedback, method]
+      properties:
+        correct:
+          type: boolean
+        verdict:
+          type: string
+          enum: [got_it, almost, not_yet]
+        keyPoints:
+          type: array
+          items:
+            type: string
+        feedback:
+          type: string
+        method:
+          type: string
+          enum: [exact, semantic_rubric, llm_dispute, fallback]
+        usage:
+          $ref: "#/components/schemas/LlmUsageOut"
+
+    TutorStreamInternalRequest:
+      type: object
+      required:
+        - ownerId
+        - courseId
+        - threadId
+        - messageId
+        - language
+        - userMessage
+        - lessonContext
+        - history
+      additionalProperties: false
+      properties:
+        ownerId:
+          type: string
+        courseId:
+          type: string
+        threadId:
+          type: string
+        messageId:
+          type: string
+        language:
+          type: string
+          enum: [vi, en]
+        entryPoint:
+          type: string
+          enum: [tab, wrong_answer, teach_block, term, path_harder, proposal]
+          default: tab
+        userMessage:
+          type: string
+          maxLength: 2000
+        lessonContext:
+          type: object
+          required: [lessonId, lessonTitle, activeBlockIndex, publicBlocks]
+          additionalProperties: false
+          description: Sanitized lesson payload produced by core-api PublicBlockProjector (0 answer keys).
+          properties:
+            lessonId:
+              type: string
+            lessonTitle:
+              type: string
+            activeBlockIndex:
+              type: integer
+              minimum: 0
+            publicBlocks:
+              type: array
+              items:
+                type: object
+                description: Public-safe block projection without answerIndex/acceptedAnswers/answer_key/solution.
+        history:
+          type: array
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content:
+                type: string
+        ragEnabled:
+          type: boolean
+          default: false
+        allowedTools:
+          type: array
+          items:
+            type: string
+            enum:
+              - read_lesson
+              - explain_deeper
+              - read_source
+              - flag_question
+              - revise_proposal
+              - regenerate_unit
+
+    InternalTutorSseEvent:
+      type: object
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          enum: [delta, tool, citations, confirm, done, cancelled, error, heartbeat]
+        data:
+          type: object
+          additionalProperties: true
+
+    RagSearchRequest:
+      type: object
+      required: [ownerId, courseId, query]
+      properties:
+        ownerId:
+          type: string
+        courseId:
+          type: string
+        sourceIds:
+          type: array
+          items:
+            type: string
+        query:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        topK:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+
+    RagSearchResponse:
+      type: object
+      required: [chunks, retrievalMode]
+      properties:
+        retrievalMode:
+          type: string
+          enum: [hybrid_rrf, fts_only, hashing_baseline]
+        chunks:
+          type: array
+          items:
+            type: object
+            required: [chunkId, sourceId, content, score]
+            properties:
+              chunkId:
+                type: string
+              sourceId:
+                type: string
+              documentId:
+                type: [string, "null"]
+              sourceTitle:
+                type: [string, "null"]
+              pageNumber:
+                type: [integer, "null"]
+              sectionAnchor:
+                type: [string, "null"]
+              content:
+                type: string
+              score:
+                type: number
+
+    RagDeleteResponse:
+      type: object
+      required: [deletedChunks]
+      properties:
+        deletedChunks:
+          type: integer
+          minimum: 0
+
+    LlmQueueJobMessage:
+      type: object
+      required: [jobId, idempotencyKey, jobType, ownerId, courseId, correlationId, payload]
+      properties:
+        jobId:
+          type: string
+        idempotencyKey:
+          type: string
+        jobType:
+          type: string
+          enum: [generate_proposal, generate_course, generate_lesson, regenerate_unit, generate_reel]
+        ownerId:
+          type: string
+        courseId:
+          type: string
+        correlationId:
+          type: string
+        attempt:
+          type: integer
+          minimum: 1
+          default: 1
+        payload:
+          type: object
+          additionalProperties: true
+
+    IngestQueueJobMessage:
+      type: object
+      required: [sourceId, documentId, idempotencyKey, ownerId, sourceKind, correlationId]
+      properties:
+        sourceId:
+          type: string
+        documentId:
+          type: string
+        idempotencyKey:
+          type: string
+        ownerId:
+          type: string
+        courseId:
+          type: [string, "null"]
+        sourceKind:
+          type: string
+          enum: [pdf_s3, web_url, arxiv_url, raw_text]
+        storageKey:
+          type: [string, "null"]
+        url:
+          type: [string, "null"]
+        ocrEnabled:
+          type: boolean
+          default: false
+        correlationId:
+          type: string
+
+    JobCompleteCallbackRequest:
+      type: object
+      required: [jobId, idempotencyKey, status]
+      properties:
+        jobId:
+          type: string
+        idempotencyKey:
+          type: string
+        status:
+          type: string
+          enum: [completed, failed]
+        result:
+          type: [object, "null"]
+        contentFlags:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        errorCode:
+          type: [string, "null"]
+        errorMessage:
+          type: [string, "null"]
+        usage:
+          $ref: "#/components/schemas/LlmUsageOut"
+
+    LessonReadyCallbackRequest:
+      type: object
+      required: [jobId, idempotencyKey, courseId, lessonId, status]
+      properties:
+        jobId:
+          type: string
+        idempotencyKey:
+          type: string
+        courseId:
+          type: string
+        lessonId:
+          type: string
+        lessonOrder:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [ready, failed]
+        content:
+          type: [object, "null"]
+        contentFlags:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        errorCode:
+          type: [string, "null"]
+        usage:
+          $ref: "#/components/schemas/LlmUsageOut"
+
+    SourceIngestCompleteCallbackRequest:
+      type: object
+      required: [sourceId, documentId, idempotencyKey, status]
+      properties:
+        sourceId:
+          type: string
+        documentId:
+          type: string
+        idempotencyKey:
+          type: string
+        status:
+          type: string
+          enum: [ready, failed, rejected]
+        chunkCount:
+          type: integer
+          minimum: 0
+        wordCount:
+          type: [integer, "null"]
+        pipelineVersion:
+          type: [string, "null"]
+        brief:
+          type: [object, "null"]
+        errorCode:
+          type: [string, "null"]
+        errorMessage:
+          type: [string, "null"]
+
+    CallbackAckResponse:
+      type: object
+      required: [accepted, duplicate]
+      properties:
+        accepted:
+          type: boolean
+        duplicate:
+          type: boolean
