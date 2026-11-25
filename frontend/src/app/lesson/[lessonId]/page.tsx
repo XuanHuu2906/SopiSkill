@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   citationStatusLabel,
+  disputeShortGrade,
   fetchCourseGlossary,
   gradeLessonBlock,
   newClientId,
@@ -21,20 +22,63 @@ import Icon from "@/components/ui/Icon";
 import useModalPanel from "@/components/ui/useModalPanel";
 import useMediaQuery from "@/components/ui/useMediaQuery";
 import VocabSheet from "@/components/course/VocabSheet";
+import CitationChip, { type InlineCite } from "@/components/lesson/CitationChip";
+import FigureRenderer, { type LessonFigure } from "@/components/lesson/FigureRenderer";
+import MathText, { type InlineTermSpec } from "@/components/lesson/MathText";
+import MultiBlankWordBank from "@/components/lesson/MultiBlankWordBank";
+import RecapView, { type RecapSourceStat } from "@/components/lesson/RecapView";
+import { ScenarioQuestion, StepsQuestion } from "@/components/lesson/ScenarioAndSteps";
+import SpeedRound, { type SpeedItem } from "@/components/lesson/SpeedRound";
 import TutorPanel from "./TutorPanel";
+
+const CLIENT_BLOCKS_CAPABILITIES =
+  "teach,mc,blank,multi_blank,order,match,short,speed,recap,figure";
 
 interface IdText {
   id: number;
   text: string;
 }
 
+interface TeachImage {
+  url: string;
+  alt?: string;
+  caption?: string;
+}
+
 type Block =
-  | { type: "teach"; title: string; paragraphs: string[] }
-  | { type: "mc"; question: string; options: string[] }
-  | { type: "blank"; sentence: string }
+  | {
+      type: "teach";
+      kicker?: string;
+      title: string;
+      paragraphs: string[];
+      takeaway?: string;
+      terms?: InlineTermSpec[];
+      cite?: InlineCite;
+      figure?: LessonFigure;
+      image?: TeachImage;
+    }
+  | {
+      type: "mc";
+      format?: string;
+      display?: string;
+      context?: string;
+      steps?: string[];
+      question: string;
+      options: string[];
+    }
+  | {
+      type: "blank";
+      mode?: "multi_bank";
+      sentence: string;
+      parts?: string[];
+      blankCount?: number;
+      bank?: string[];
+    }
   | { type: "order"; prompt: string; items: IdText[] }
   | { type: "match"; prompt: string; lefts: IdText[]; rights: IdText[] }
-  | { type: "short"; question: string };
+  | { type: "short"; format?: string; hint?: string; question: string }
+  | { type: "speed"; prompt: string; timeLimitSeconds?: number; items: SpeedItem[] }
+  | { type: "recap"; title: string; points: string[]; sources?: RecapSourceStat[] };
 
 interface LessonOut {
   id: string;
@@ -65,14 +109,16 @@ interface AttemptOut {
   reviewCardCreated?: boolean;
 }
 
-type AnswerValue = number | string | number[] | Record<string, number> | null;
+type AnswerValue = number | string | string[] | number[] | Record<string, number> | null;
 
 interface AnswerState {
   mc: Record<number, number>;
   blank: Record<number, string>;
+  multiBlank: Record<number, string[]>;
   short: Record<number, string>;
   order: Record<number, number[]>;
   match: Record<number, Record<number, number>>;
+  speed: Record<number, number[]>;
 }
 
 const BLOCK_EYEBROW: Record<Block["type"], string> = {
@@ -82,6 +128,8 @@ const BLOCK_EYEBROW: Record<Block["type"], string> = {
   order: "Sắp xếp",
   match: "Ghép cặp",
   short: "Trả lời ngắn",
+  speed: "Vòng tốc độ",
+  recap: "Tổng kết",
 };
 
 const BLOCK_LABELS: Record<Block["type"], string> = {
@@ -91,7 +139,13 @@ const BLOCK_LABELS: Record<Block["type"], string> = {
   order: "Sắp xếp",
   match: "Ghép cặp",
   short: "Trả lời ngắn",
+  speed: "Vòng tốc độ",
+  recap: "Tổng kết",
 };
+
+function isNonGradable(block: Block): boolean {
+  return block.type === "teach" || block.type === "recap";
+}
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
@@ -113,12 +167,23 @@ function buildAnswers(
 ): { index: number; answer: AnswerValue }[] {
   const out: { index: number; answer: AnswerValue }[] = [];
   blocks.forEach((b, i) => {
-    if (b.type === "teach") return;
+    if (isNonGradable(b)) return;
     if (b.type === "mc") out.push({ index: i, answer: state.mc[i] ?? -1 });
-    if (b.type === "blank") out.push({ index: i, answer: state.blank[i] ?? "" });
+    if (b.type === "blank") {
+      if (b.mode === "multi_bank" && b.blankCount) {
+        const slots = state.multiBlank[i] ?? [];
+        out.push({
+          index: i,
+          answer: Array.from({ length: b.blankCount }, (_, idx) => slots[idx] ?? ""),
+        });
+      } else {
+        out.push({ index: i, answer: state.blank[i] ?? "" });
+      }
+    }
     if (b.type === "short") out.push({ index: i, answer: state.short[i] ?? "" });
     if (b.type === "order") out.push({ index: i, answer: orderAnswer(i, state, defaults) });
     if (b.type === "match") out.push({ index: i, answer: state.match[i] ?? {} });
+    if (b.type === "speed") out.push({ index: i, answer: state.speed[i] ?? [] });
   });
   return out;
 }
@@ -133,10 +198,18 @@ function isAnswered(
 ): boolean {
   switch (block.type) {
     case "teach":
+    case "recap":
       return false;
     case "mc":
       return state.mc[index] !== undefined;
     case "blank":
+      if (block.mode === "multi_bank" && block.blankCount) {
+        const slots = state.multiBlank[index] ?? [];
+        return (
+          slots.length >= block.blankCount &&
+          Array.from({ length: block.blankCount }, (_, i) => slots[i]?.trim()).every(Boolean)
+        );
+      }
       return Boolean(state.blank[index]?.trim());
     case "short":
       return Boolean(state.short[index]?.trim());
@@ -147,12 +220,21 @@ function isAnswered(
         Object.keys(state.match[index] ?? {}).length === block.lefts.length &&
         block.lefts.length > 0
       );
+    case "speed": {
+      const vals = state.speed[index] ?? [];
+      return (
+        block.items.length > 0 &&
+        vals.length === block.items.length &&
+        vals.every((v) => typeof v === "number" && v >= 0)
+      );
+    }
   }
 }
 
 function blockPrompt(block: Block): string {
   switch (block.type) {
     case "teach":
+    case "recap":
       return block.title;
     case "mc":
     case "short":
@@ -161,6 +243,7 @@ function blockPrompt(block: Block): string {
       return block.sentence;
     case "order":
     case "match":
+    case "speed":
       return block.prompt;
   }
 }
@@ -175,6 +258,9 @@ function solutionText(block: Block, solution: Record<string, unknown>): string |
       return typeof idx === "number" ? `${LETTERS[idx] ?? idx + 1}. ${text}` : text;
     }
     case "blank":
+      if (Array.isArray(solution.answers)) {
+        return solution.answers.map(String).join(" · ");
+      }
       return typeof solution.answer === "string" ? solution.answer : null;
     case "short": {
       const accepted = solution.acceptedAnswers;
@@ -186,7 +272,11 @@ function solutionText(block: Block, solution: Record<string, unknown>): string |
       const ids = solution.order;
       if (!Array.isArray(ids)) return null;
       return ids
-        .map((id) => block.items.find((it) => it.id === id)?.text ?? String(id))
+        .map((id) =>
+          typeof id === "number"
+            ? (block.items.find((it) => it.id === id)?.text ?? String(id))
+            : String(id),
+        )
         .join(" → ");
     }
     case "match": {
@@ -195,12 +285,30 @@ function solutionText(block: Block, solution: Record<string, unknown>): string |
       const out = pairs
         .map((pair) => {
           if (!Array.isArray(pair) || pair.length < 2) return "";
-          const left = block.lefts.find((it) => it.id === Number(pair[0]))?.text ?? String(pair[0]);
-          const right = block.rights.find((it) => it.id === Number(pair[1]))?.text ?? String(pair[1]);
+          const left =
+            typeof pair[0] === "number"
+              ? (block.lefts.find((it) => it.id === pair[0])?.text ?? String(pair[0]))
+              : String(pair[0]);
+          const right =
+            typeof pair[1] === "number"
+              ? (block.rights.find((it) => it.id === pair[1])?.text ?? String(pair[1]))
+              : String(pair[1]);
           return `${left} → ${right}`;
         })
         .filter(Boolean);
       return out.length > 0 ? out.join(" · ") : null;
+    }
+    case "speed": {
+      const idxs = solution.answerIndices;
+      if (!Array.isArray(idxs)) return null;
+      return idxs
+        .map((choiceIdx, itemIdx) => {
+          const item = block.items[itemIdx];
+          if (!item || typeof choiceIdx !== "number") return "";
+          return `#${itemIdx + 1}: ${item.choices[choiceIdx] ?? choiceIdx}`;
+        })
+        .filter(Boolean)
+        .join(" · ");
     }
     default:
       return null;
@@ -216,19 +324,25 @@ export default function LessonPage() {
 
   const lesson = useQuery({
     queryKey: lessonKey,
-    queryFn: () => api<LessonOut>(`/v1/lessons/${lessonId}`),
+    queryFn: () =>
+      api<LessonOut>(`/v1/lessons/${lessonId}`, {
+        headers: { "X-Client-Blocks": CLIENT_BLOCKS_CAPABILITIES },
+      }),
     enabled: !!lessonId && isAuthenticated,
   });
 
   const [mcAnswers, setMcAnswers] = useState<Record<number, number>>({});
   const [blankAnswers, setBlankAnswers] = useState<Record<number, string>>({});
+  const [multiBlankAnswers, setMultiBlankAnswers] = useState<Record<number, string[]>>({});
   const [shortAnswers, setShortAnswers] = useState<Record<number, string>>({});
   const [orderAnswers, setOrderAnswers] = useState<Record<number, number[]>>({});
   const [matchAnswers, setMatchAnswers] = useState<Record<number, Record<number, number>>>({});
+  const [speedAnswers, setSpeedAnswers] = useState<Record<number, number[]>>({});
   const [step, setStep] = useState(0);
   const [tutorOpen, setTutorOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [vocabOpen, setVocabOpen] = useState(false);
+  const [vocabInitialQuery, setVocabInitialQuery] = useState("");
   const [blockChecks, setBlockChecks] = useState<Record<number, BlockGradeResult>>({});
   const [checkingBlock, setCheckingBlock] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
@@ -282,7 +396,7 @@ export default function LessonPage() {
 
   const blocks: Block[] = lesson.data?.blocks ?? [];
   const gradableIndices = blocks
-    .map((b, i) => (b.type === "teach" ? -1 : i))
+    .map((b, i) => (isNonGradable(b) ? -1 : i))
     .filter((i) => i >= 0);
   const gradableCount = gradableIndices.length;
   const lastGradableIndex = gradableIndices.length > 0 ? gradableIndices[gradableIndices.length - 1] : -1;
@@ -293,9 +407,11 @@ export default function LessonPage() {
   const answerState: AnswerState = {
     mc: mcAnswers,
     blank: blankAnswers,
+    multiBlank: multiBlankAnswers,
     short: shortAnswers,
     order: orderAnswers,
     match: matchAnswers,
+    speed: speedAnswers,
   };
   const answeredCount = blocks.filter((b, i) => isAnswered(b, i, answerState, orderCandidates)).length;
   const submitted = !!result;
@@ -324,7 +440,15 @@ export default function LessonPage() {
     if (!lesson.data) return;
     const answers = buildAnswers(
       lesson.data.blocks,
-      { mc: mcAnswers, blank: blankAnswers, short: shortAnswers, order: orderAnswers, match: matchAnswers },
+      {
+        mc: mcAnswers,
+        blank: blankAnswers,
+        multiBlank: multiBlankAnswers,
+        short: shortAnswers,
+        order: orderAnswers,
+        match: matchAnswers,
+        speed: speedAnswers,
+      },
       orderCandidates,
     );
     const fingerprint = JSON.stringify({
@@ -382,9 +506,9 @@ export default function LessonPage() {
   }
 
   const isLastStep = safeStep === blocks.length - 1;
-  const submitHere = !submitted && (lastGradableIndex === safeStep || (isLastStep && lastGradableIndex >= 0));
+  const submitHere = !submitted && isLastStep && lastGradableIndex >= 0;
   const answeredCurrent = current ? isAnswered(current, safeStep, answerState, orderCandidates) : false;
-  const isQuestionStep = current ? current.type !== "teach" : false;
+  const isQuestionStep = current ? !isNonGradable(current) : false;
 
   function goNext() {
     setStep((s) => Math.min(s + 1, blocks.length - 1));
@@ -450,11 +574,18 @@ export default function LessonPage() {
           className="lesson-step-panel"
           aria-label={`${BLOCK_EYEBROW[current!.type]} — bước ${safeStep + 1} trên ${blocks.length}`}
         >
-          <span className="block-eyebrow">{BLOCK_EYEBROW[current!.type]}</span>
+          <span className="block-eyebrow">
+            {current!.type === "teach" && current!.kicker ? current!.kicker : BLOCK_EYEBROW[current!.type]}
+          </span>
 
           {current!.type === "teach" && (
             <>
               <h1 className="block-title">{current!.title}</h1>
+              {current!.cite && (
+                <div style={{ marginBottom: 12 }}>
+                  <CitationChip cite={current!.cite} />
+                </div>
+              )}
               {safeStep === 0 && lesson.data.grounding === "general_ai_knowledge" && (
                 <div className="notice-box">
                   <Badge tone="muted">Chưa xác minh</Badge>{" "}
@@ -464,9 +595,44 @@ export default function LessonPage() {
               )}
               <div className="prose">
                 {current!.paragraphs.map((p, j) => (
-                  <p key={j}>{p}</p>
+                  <p key={j}>
+                    <MathText
+                      text={p}
+                      terms={current!.terms}
+                      onTermClick={(_termKey, label) => {
+                        setVocabInitialQuery(label);
+                        setVocabOpen(true);
+                      }}
+                    />
+                  </p>
                 ))}
               </div>
+
+              {current!.figure && <FigureRenderer figure={current!.figure} />}
+              {!current!.figure && current!.image && (
+                <figure style={{ margin: "18px 0" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={current!.image.url}
+                    alt={current!.image.alt ?? current!.title}
+                    style={{ maxWidth: "100%", borderRadius: "var(--radius-md)" }}
+                  />
+                  {current!.image.caption && (
+                    <figcaption className="caption" style={{ marginTop: 8 }}>
+                      {current!.image.caption}
+                    </figcaption>
+                  )}
+                </figure>
+              )}
+
+              {current!.takeaway && (
+                <div
+                  className="notice-box"
+                  style={{ marginTop: 14, borderLeft: "3px solid var(--ember)", paddingLeft: 14 }}
+                >
+                  <strong>Ghi nhớ nhanh:</strong> <MathText text={current!.takeaway} />
+                </div>
+              )}
 
               {lessonGlossary.data && lessonGlossary.data.items.length > 0 && (
                 <div className="teach-terms-row" aria-label="Thuật ngữ chính trong bài">
@@ -475,7 +641,10 @@ export default function LessonPage() {
                       key={term.id}
                       type="button"
                       className="term-pill"
-                      onClick={() => setVocabOpen(true)}
+                      onClick={() => {
+                        setVocabInitialQuery(term.term);
+                        setVocabOpen(true);
+                      }}
                     >
                       {term.term}
                     </button>
@@ -523,7 +692,24 @@ export default function LessonPage() {
             </>
           )}
 
-          {current!.type === "mc" && (
+          {current!.type === "mc" && current!.display === "steps" && current!.steps ? (
+            <StepsQuestion
+              question={current!.question}
+              steps={current!.steps}
+              options={current!.options}
+              selectedIndex={mcAnswers[safeStep]}
+              onSelect={(j) => setMcAnswers((p) => ({ ...p, [safeStep]: j }))}
+            />
+          ) : current!.type === "mc" && current!.format === "scenario" ? (
+            <ScenarioQuestion
+              context={current!.context}
+              question={current!.question}
+              options={current!.options}
+              selectedIndex={mcAnswers[safeStep]}
+              outcome={blockChecks[safeStep]?.outcome}
+              onSelect={(j) => setMcAnswers((p) => ({ ...p, [safeStep]: j }))}
+            />
+          ) : current!.type === "mc" ? (
             <>
               <h1 className="block-title-sm">{current!.question}</h1>
               <div role="radiogroup" aria-label={current!.question}>
@@ -545,9 +731,25 @@ export default function LessonPage() {
                 })}
               </div>
             </>
-          )}
+          ) : null}
 
-          {current!.type === "blank" && (
+          {current!.type === "blank" &&
+          current!.mode === "multi_bank" &&
+          current!.parts &&
+          current!.bank &&
+          current!.blankCount ? (
+            <>
+              <h1 className="block-title-sm">Chọn từ thích hợp điền vào từng chỗ trống</h1>
+              <MultiBlankWordBank
+                parts={current!.parts}
+                blankCount={current!.blankCount}
+                bank={current!.bank}
+                values={multiBlankAnswers[safeStep] ?? []}
+                lockedIndices={blockChecks[safeStep]?.correctIndices ?? []}
+                onChange={(next) => setMultiBlankAnswers((p) => ({ ...p, [safeStep]: next }))}
+              />
+            </>
+          ) : current!.type === "blank" ? (
             <>
               <h1 className="block-title-sm">{current!.sentence}</h1>
               <label className="blank-label" htmlFor={`blank-${safeStep}`}>
@@ -561,6 +763,24 @@ export default function LessonPage() {
                 autoComplete="off"
               />
             </>
+          ) : null}
+
+          {current!.type === "speed" && (
+            <SpeedRound
+              prompt={current!.prompt}
+              timeLimitSeconds={current!.timeLimitSeconds}
+              items={current!.items}
+              values={speedAnswers[safeStep] ?? []}
+              onChange={(next) => setSpeedAnswers((p) => ({ ...p, [safeStep]: next }))}
+            />
+          )}
+
+          {current!.type === "recap" && (
+            <RecapView
+              title={current!.title}
+              points={current!.points}
+              sources={current!.sources}
+            />
           )}
 
           {current!.type === "short" && (
@@ -751,11 +971,15 @@ export default function LessonPage() {
           setCheckingBlock(true);
           setCheckError(null);
           try {
-            const res = await gradeLessonBlock(lessonId, safeStep, {
-              contentVersion: lesson.data.contentVersion,
-              answer: single.answer,
-              ...(dispute ? { dispute: true } : {}),
-            });
+            const existingGradeId = blockChecks[safeStep]?.gradeId;
+            const res =
+              dispute && existingGradeId
+                ? await disputeShortGrade(lessonId, existingGradeId)
+                : await gradeLessonBlock(lessonId, safeStep, {
+                    contentVersion: lesson.data.contentVersion,
+                    answer: single.answer,
+                    ...(dispute ? { dispute: true } : {}),
+                  });
             setBlockChecks((prev) => ({ ...prev, [safeStep]: res }));
           } catch (e) {
             setCheckError(
@@ -878,8 +1102,12 @@ export default function LessonPage() {
         <VocabSheet
           courseId={lesson.data.courseId}
           lessonId={lesson.data.id}
+          initialQuery={vocabInitialQuery}
           open={vocabOpen}
-          onClose={() => setVocabOpen(false)}
+          onClose={() => {
+            setVocabOpen(false);
+            setVocabInitialQuery("");
+          }}
         />
       )}
 
@@ -1030,7 +1258,7 @@ function ResultView({
 
       <ol className="lesson-result-list">
         {blocks.map((block, index) => {
-          if (block.type === "teach") return null;
+          if (isNonGradable(block)) return null;
           const graded = result.results.find((x) => x.index === index);
           const solution = graded ? solutionText(block, graded.solution) : null;
           return (

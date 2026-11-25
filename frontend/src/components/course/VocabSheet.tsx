@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchCourseGlossary } from "@/lib/api";
 import { useSessionQueryKey } from "@/app/providers";
 import { Badge } from "@/components/ui/Badge";
@@ -12,17 +12,25 @@ import useModalPanel from "@/components/ui/useModalPanel";
 export default function VocabSheet({
   courseId,
   lessonId,
+  initialQuery,
   open,
   onClose,
 }: {
   courseId: string;
   lessonId?: string;
+  initialQuery?: string;
   open: boolean;
   onClose: () => void;
 }) {
   const sheetRef = useRef<HTMLDivElement | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialQuery ?? "");
   const [scopeLessonOnly, setScopeLessonOnly] = useState(Boolean(lessonId));
+
+  useEffect(() => {
+    if (open) {
+      setSearch(initialQuery ?? "");
+    }
+  }, [open, initialQuery]);
   const activeLessonId = scopeLessonOnly ? lessonId : undefined;
   const glossaryKey = useSessionQueryKey("course-glossary", courseId, activeLessonId ?? "all");
 

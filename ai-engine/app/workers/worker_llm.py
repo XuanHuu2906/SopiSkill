@@ -68,8 +68,9 @@ async def handle_llm_job(
             for unit in unit_specs:
                 u_title = str(unit.get("title") or "Unit")
                 for l_title in unit.get("lessonTitles") or []:
+                    lesson_profile = {**learner_profile, "_lessonOrder": lesson_order}
                     lesson, usage = await llm.generate_lesson(
-                        topic, u_title, str(l_title), language, learner_profile
+                        topic, u_title, str(l_title), language, lesson_profile
                     )
                     qa = await run_two_tier_validator(
                         lesson,

@@ -222,6 +222,17 @@ class MockProvider:
         learner_profile: dict[str, Any],
     ) -> tuple[dict[str, Any], LlmUsageOut]:
         level = learner_profile.get("currentLevel", "beginner")
+        lesson_order = int(learner_profile.get("_lessonOrder", 0) or 0)
+
+        # Lesson 1+ (`_lessonOrder >= 1`): Phase 4 Rich Practice Showcase
+        # (TableFigure moss/clay/neutral, Formula KaTeX, Multi-Blank Word Bank,
+        #  Scenario MC, Spot/Steps MC, SpeedRound 60s, Explain Short w/ keyPoints, RecapView).
+        if lesson_order >= 1:
+            return self._build_rich_practice_lesson(topic, unit_title, lesson_title, language, level)
+
+        # Lesson 0 (first lesson): keeps exact 6-block structure (1/6..6/6) for 100% E2E backward compat,
+        # while enriching Teach with Phase 4 kicker, takeaway, inline KaTeX, `{core_concept}` term chip,
+        # CitationChip, and a validated `flow` SVG diagram figure + Scenario outcomes on MC.
         if language == "en":
             lesson = {
                 "title": lesson_title,
@@ -229,20 +240,50 @@ class MockProvider:
                 "blocks": [
                     {
                         "type": "teach",
+                        "kicker": f"{unit_title} · Foundation",
                         "title": f"Core concepts: {lesson_title}",
                         "paragraphs": [
-                            f"This lesson introduces core concepts of {topic} tailored for a {level} learner.",
-                            f"Focus on how {lesson_title} connects theory to practical execution.",
+                            f"This lesson introduces core concepts of {{core_concept}} tailored for a {level} learner, balancing clarity with practical throughput ($O(n \\log n)$).",
+                            f"Focus on how {lesson_title} connects mental models directly to verified execution.",
                         ],
-                        "terms": [{"term": topic, "definition": f"Primary subject of {lesson_title}."}],
+                        "takeaway": f"Always link {topic} principles to a small concrete check before scaling up.",
+                        "terms": [
+                            {
+                                "term": topic,
+                                "termKey": "core_concept",
+                                "definition": f"Primary subject of {lesson_title}.",
+                            }
+                        ],
+                        "cite": {"label": f"{topic} Reference · §1", "anchor": "sec-1"},
+                        "figure": {
+                            "kind": "diagram",
+                            "layout": "flow",
+                            "title": f"{topic} learning flow",
+                            "caption": "Three-stage mental model from concept to verified practice.",
+                            "nodes": [
+                                {"id": "n1", "label": "Concept"},
+                                {"id": "n2", "label": "Example"},
+                                {"id": "n3", "label": "Verify"},
+                            ],
+                            "edges": [
+                                {"from": "n1", "to": "n2"},
+                                {"from": "n2", "to": "n3"},
+                            ],
+                        },
                     },
                     {
                         "type": "mc",
+                        "format": "scenario",
                         "question": f"Which statement best describes the focus of {lesson_title}?",
                         "options": [
                             f"Understanding core principles of {topic}",
                             "Skipping foundational concepts completely",
                             "Memorizing unrelated trivia",
+                        ],
+                        "outcomes": [
+                            f"Great choice — grounding in {topic} fundamentals prevents fragile habits later.",
+                            "Skipping foundations usually leads to subtle bugs when tasks get harder.",
+                            "Unrelated trivia will not help you apply the concept in practice.",
                         ],
                         "answerIndex": 0,
                     },
@@ -266,8 +307,10 @@ class MockProvider:
                     },
                     {
                         "type": "short",
+                        "format": "explain",
                         "question": f"In one short phrase, name the topic covered in {lesson_title}.",
                         "acceptedAnswers": [topic],
+                        "keyPoints": [topic],
                     },
                 ],
             }
@@ -278,20 +321,50 @@ class MockProvider:
                 "blocks": [
                     {
                         "type": "teach",
+                        "kicker": f"{unit_title} · Nền tảng",
                         "title": f"Khái niệm cốt lõi: {lesson_title}",
                         "paragraphs": [
-                            f"Bài học này giới thiệu các khái niệm cốt lõi của {topic} phù hợp cho trình độ {level}.",
+                            f"Bài học này giới thiệu các khái niệm cốt lõi của {{core_concept}} phù hợp cho trình độ {level}, tối ưu tư duy hệ thống ($O(n \\log n)$).",
                             f"Hãy tập trung vào cách {lesson_title} nối lý thuyết với ví dụ thực tế.",
                         ],
-                        "terms": [{"term": topic, "definition": f"Chủ đề chính của {lesson_title}."}],
+                        "takeaway": f"Luôn gắn nguyên lý {topic} với một ví dụ kiểm chứng nhỏ trước khi mở rộng.",
+                        "terms": [
+                            {
+                                "term": topic,
+                                "termKey": "core_concept",
+                                "definition": f"Chủ đề chính của {lesson_title}.",
+                            }
+                        ],
+                        "cite": {"label": f"Tài liệu {topic} · §1", "anchor": "sec-1"},
+                        "figure": {
+                            "kind": "diagram",
+                            "layout": "flow",
+                            "title": f"Luồng học {topic}",
+                            "caption": "Ba bước từ khái niệm đến thực hành có kiểm chứng.",
+                            "nodes": [
+                                {"id": "n1", "label": "Khái niệm"},
+                                {"id": "n2", "label": "Ví dụ"},
+                                {"id": "n3", "label": "Kiểm chứng"},
+                            ],
+                            "edges": [
+                                {"from": "n1", "to": "n2"},
+                                {"from": "n2", "to": "n3"},
+                            ],
+                        },
                     },
                     {
                         "type": "mc",
+                        "format": "scenario",
                         "question": f"Phát biểu nào mô tả đúng nhất trọng tâm của {lesson_title}?",
                         "options": [
                             f"Hiểu nguyên lý cốt lõi của {topic}",
                             "Bỏ qua hoàn toàn nền tảng",
                             "Học thuộc lòng chi tiết không liên quan",
+                        ],
+                        "outcomes": [
+                            f"Chính xác — nắm vững nền tảng {topic} giúp bạn giải quyết bài toán phức tạp hơn.",
+                            "Bỏ qua nền tảng dễ dẫn tới lỗi khó phát hiện khi áp dụng thực tế.",
+                            "Học thuộc lòng chi tiết rời rạc không tạo ra khả năng vận dụng.",
                         ],
                         "answerIndex": 0,
                     },
@@ -315,11 +388,234 @@ class MockProvider:
                     },
                     {
                         "type": "short",
+                        "format": "explain",
                         "question": f"Hãy nêu ngắn gọn tên chủ đề chính của bài {lesson_title}.",
                         "acceptedAnswers": [topic],
+                        "keyPoints": [topic],
                     },
                 ],
             }
+        return lesson, LlmUsageOut(provider=self.name, model=self.model)
+
+    def _build_rich_practice_lesson(
+        self,
+        topic: str,
+        unit_title: str,
+        lesson_title: str,
+        language: str,
+        level: str,
+    ) -> tuple[dict[str, Any], LlmUsageOut]:
+        is_en = language == "en"
+        lesson = {
+            "title": lesson_title,
+            "unitTitle": unit_title,
+            "blocks": [
+                {
+                    "type": "teach",
+                    "kicker": f"{unit_title} · {'Applied Lab' if is_en else 'Thực hành chuyên sâu'}",
+                    "title": f"{'Applying' if is_en else 'Áp dụng'} {topic}: {lesson_title}",
+                    "paragraphs": [
+                        (
+                            f"When scaling {{practice_loop}} in {topic} for a {level} workflow, compare trade-offs quantitatively using $\\text{{score}} = \\frac{{1}}{{k + r}}$."
+                            if is_en
+                            else f"Khi áp dụng {{practice_loop}} trong {topic} ở mức {level}, hãy so sánh đánh đổi định lượng bằng công thức $\\text{{score}} = \\frac{{1}}{{k + r}}$."
+                        ),
+                    ],
+                    "takeaway": (
+                        f"Verify assumptions with a quick test before committing changes in {topic}."
+                        if is_en
+                        else f"Kiểm chứng giả định bằng bước thử nhỏ trước khi triển khai rộng trong {topic}."
+                    ),
+                    "terms": [
+                        {
+                            "term": "Feedback Loop" if is_en else "Vòng phản hồi",
+                            "termKey": "practice_loop",
+                            "definition": (
+                                "Iterative cycle of hypothesis, execution, and verification."
+                                if is_en
+                                else "Chu trình lặp gồm giả thuyết, thực thi và kiểm chứng kết quả."
+                            ),
+                        }
+                    ],
+                    "figure": {
+                        "kind": "table",
+                        "title": "Approach comparison" if is_en else "So sánh phương án",
+                        "headers": ["Approach", "Outcome"] if is_en else ["Cách làm", "Kết quả"],
+                        "rows": [
+                            {
+                                "tone": "moss",
+                                "cells": (
+                                    ["Incremental verify", "Catches defects early"]
+                                    if is_en
+                                    else ["Kiểm chứng từng bước", "Phát hiện lỗi sớm"]
+                                ),
+                            },
+                            {
+                                "tone": "clay",
+                                "cells": (
+                                    ["Blind guess", "Hidden regressions"]
+                                    if is_en
+                                    else ["Đoán mò không thử", "Dễ phát sinh lỗi ẩn"]
+                                ),
+                            },
+                            {
+                                "tone": "neutral",
+                                "cells": (
+                                    ["Baseline checklist", "Predictable reference"]
+                                    if is_en
+                                    else ["Checklist cơ bản", "Mốc tham chiếu ổn định"]
+                                ),
+                            },
+                        ],
+                    },
+                },
+                {
+                    "type": "blank",
+                    "parts": (
+                        [f"In {topic}, start with a clear ", " and verify results with a ", "."]
+                        if is_en
+                        else [f"Trong {topic}, hãy bắt đầu từ ", " rõ ràng rồi kiểm tra bằng ", "."]
+                    ),
+                    "answers": ["hypothesis", "test"] if is_en else ["giả thuyết", "bài thử"],
+                    "bank": (
+                        ["hypothesis", "test", "rumor", "delay", "guesswork"]
+                        if is_en
+                        else ["giả thuyết", "bài thử", "tin đồn", "trì hoãn", "đoán mò"]
+                    ),
+                },
+                {
+                    "type": "mc",
+                    "format": "scenario",
+                    "context": (
+                        f"You are debugging a tricky {topic} edge case right before a demo."
+                        if is_en
+                        else f"Bạn đang xử lý một trường hợp biên trong {topic} ngay trước buổi trình diễn."
+                    ),
+                    "question": (
+                        "What is the safest next action?"
+                        if is_en
+                        else "Bước tiếp theo an toàn nhất là gì?"
+                    ),
+                    "options": (
+                        [
+                            "Isolate the minimal failing case first",
+                            "Rewrite every module at once",
+                            "Disable validation checks",
+                        ]
+                        if is_en
+                        else [
+                            "Cô lập trường hợp lỗi tối giản trước",
+                            "Viết lại toàn bộ hệ thống cùng lúc",
+                            "Tắt hết bước kiểm tra hợp lệ",
+                        ]
+                    ),
+                    "outcomes": (
+                        [
+                            "Spot on — minimal reproduction pinpoints the root cause in minutes.",
+                            "Large rewrites right before a demo usually multiply unknown bugs.",
+                            "Disabling validation hides defects instead of fixing them.",
+                        ]
+                        if is_en
+                        else [
+                            "Chuẩn xác — tái hiện tối giản giúp tìm đúng nguyên nhân gốc rất nhanh.",
+                            "Viết lại hàng loạt trước giờ chạy rất dễ làm phát sinh nhiều lỗi mới.",
+                            "Tắt bước kiểm tra chỉ che giấu lỗi chứ không giải quyết vấn đề.",
+                        ]
+                    ),
+                    "answerIndex": 0,
+                },
+                {
+                    "type": "mc",
+                    "format": "spot",
+                    "display": "steps",
+                    "question": (
+                        "Which step introduces the flaw?"
+                        if is_en
+                        else "Bước nào dưới đây chứa sai sót?"
+                    ),
+                    "steps": (
+                        [
+                            "1. Define the input specification clearly.",
+                            "2. Skip boundary checks to save time.",
+                            "3. Record test output for comparison.",
+                        ]
+                        if is_en
+                        else [
+                            "1. Xác định rõ đầu vào mong đợi.",
+                            "2. Bỏ qua kiểm tra giá trị biên cho nhanh.",
+                            "3. Ghi lại kết quả chạy để đối chiếu.",
+                        ]
+                    ),
+                    "options": ["Step 1", "Step 2", "Step 3"] if is_en else ["Bước 1", "Bước 2", "Bước 3"],
+                    "answerIndex": 1,
+                },
+                {
+                    "type": "speed",
+                    "prompt": (
+                        f"Speed round: classify each {topic} habit (60s)"
+                        if is_en
+                        else f"Vòng tốc độ: phân loại nhanh thói quen {topic} (60s)"
+                    ),
+                    "timeLimitSeconds": 60,
+                    "items": [
+                        {
+                            "prompt": "Verify with a small test case" if is_en else "Kiểm tra bằng ví dụ nhỏ",
+                            "choices": ["Good habit", "Anti-pattern"] if is_en else ["Nên làm", "Tránh làm"],
+                            "answerIndex": 0,
+                        },
+                        {
+                            "prompt": "Ignore error messages" if is_en else "Bỏ qua thông báo lỗi",
+                            "choices": ["Good habit", "Anti-pattern"] if is_en else ["Nên làm", "Tránh làm"],
+                            "answerIndex": 1,
+                        },
+                        {
+                            "prompt": "Document assumptions" if is_en else "Ghi rõ các giả định",
+                            "choices": ["Good habit", "Anti-pattern"] if is_en else ["Nên làm", "Tránh làm"],
+                            "answerIndex": 0,
+                        },
+                    ],
+                },
+                {
+                    "type": "short",
+                    "format": "explain",
+                    "question": (
+                        f"Explain why minimal tests matter in {topic}."
+                        if is_en
+                        else f"Giải thích ngắn gọn vì sao ví dụ kiểm chứng nhỏ quan trọng trong {topic}."
+                    ),
+                    "acceptedAnswers": (
+                        ["minimal tests isolate root causes quickly", "isolate root cause"]
+                        if is_en
+                        else ["cô lập nguyên nhân gốc nhanh", "phát hiện lỗi sớm"]
+                    ),
+                    "keyPoints": (
+                        ["isolate root cause", "verify early"]
+                        if is_en
+                        else ["cô lập nguyên nhân gốc", "kiểm chứng sớm"]
+                    ),
+                },
+                {
+                    "type": "recap",
+                    "title": f"{'Lesson Recap' if is_en else 'Tổng kết bài học'}: {lesson_title}",
+                    "points": (
+                        [
+                            f"Compare approaches with structured criteria in {topic}.",
+                            "Lock in verified steps before expanding scope.",
+                            "Isolate minimal failing cases when debugging.",
+                        ]
+                        if is_en
+                        else [
+                            f"So sánh phương án bằng tiêu chí rõ ràng trong {topic}.",
+                            "Khóa chắc từng bước đã kiểm chứng trước khi mở rộng.",
+                            "Cô lập trường hợp tối giản khi tìm lỗi.",
+                        ]
+                    ),
+                    "sources": [
+                        {"label": f"{unit_title} · {lesson_title}", "count": 5},
+                    ],
+                },
+            ],
+        }
         return lesson, LlmUsageOut(provider=self.name, model=self.model)
 
     async def grade_short_dispute(

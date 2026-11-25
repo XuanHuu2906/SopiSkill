@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Providers from "./providers";
 import AppFrame from "@/components/layout/AppFrame";
 import "./fonts.css";
+import "./katex-selfhosted.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

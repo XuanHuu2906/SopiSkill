@@ -518,3 +518,113 @@ test("Phase 3: YouTube guard, presigned PDF upload -> Source Brief -> interview 
   await page.getByRole("button", { name: "Xác nhận xóa" }).click();
   await page.waitForURL("**/");
 });
+
+test("Phase 4: Rich Lesson — KaTeX, SVG FigureRenderer, {termKey} VocabSheet, MultiBlank, Scenario/Steps/Speed/Recap, 0 answer keys & axe-core", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("phase4-rich");
+  await registerUser(page, email);
+
+  const interceptedLessonBodies: string[] = [];
+  page.on("response", async (res) => {
+    if (res.url().includes("/v1/lessons/") && res.request().method() === "GET") {
+      try {
+        interceptedLessonBodies.push(await res.text());
+      } catch {
+        // ignore aborted responses
+      }
+    }
+  });
+
+  const courseUrl = await createAndGenerateCourse(page, "Graph Algorithms", "en");
+
+  // 1. Open Lesson 1: verify KaTeX, flow SVG FigureRenderer, inline {termKey} -> VocabSheet, and 0 axe violations
+  await page.locator('a[href^="/lesson/"]').first().click();
+  await page.waitForURL("**/lesson/lsn_*");
+  await expect(page.locator(".katex").first()).toBeVisible();
+  await expect(page.locator('figure[data-figure-layout="flow"] svg[role="img"]')).toBeVisible();
+  await expect(page.locator(".citation-chip")).toBeVisible();
+
+  await page.locator(".inline-term-chip").first().click();
+  const vocabDialog = page.getByRole("dialog", { name: "Bảng thuật ngữ" });
+  await expect(vocabDialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(vocabDialog).toBeHidden();
+  await expectNoAxeViolations(page);
+
+  // 2. Return to course path and open Lesson 2 (Rich Practice Showcase: 7 blocks)
+  await page.goto(courseUrl);
+  const lessonLinks = page.locator('.course-lessons a[href^="/lesson/"]');
+  await expect(lessonLinks.nth(1)).toBeVisible({ timeout: 15_000 });
+  await lessonLinks.nth(1).click();
+  await page.waitForURL("**/lesson/lsn_*");
+  await expect(page.locator(".lesson-counter")).toHaveText("1/7");
+
+  // Block 1 (Teach): TableFigure with moss/clay/neutral tones + KaTeX
+  await expect(page.locator('figure[data-figure-kind="table"] table')).toBeVisible();
+  await expect(page.locator('tr[data-tone="moss"]')).toBeVisible();
+  await expect(page.locator('tr[data-tone="clay"]')).toBeVisible();
+  await expect(page.locator(".katex").first()).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  const nextBtn = page.locator(".lesson-bar-primary");
+  await nextBtn.click();
+  await expect(page.locator(".lesson-counter")).toHaveText("2/7");
+
+  // Block 2 (Multi-Blank Word Bank): partial check locks slot 0 (`hypothesis`), retries slot 1 (`test`)
+  await page.locator('button[data-bank-word="hypothesis"]').click();
+  await page.locator('button[data-bank-word="rumor"]').click();
+  await page.getByRole("button", { name: "Kiểm tra câu này" }).click();
+  await expect(page.locator('button[data-blank-slot="0"]')).toBeDisabled();
+  await page.locator('button[data-blank-slot="1"]').click();
+  await page.locator('button[data-bank-word="test"]').click();
+  await expectNoAxeViolations(page);
+  await nextBtn.click();
+  await expect(page.locator(".lesson-counter")).toHaveText("3/7");
+
+  // Block 3 (Scenario MC): pick option 0 -> per-block check reveals scenario outcome
+  await page.locator('[role="radio"]').first().click();
+  await page.getByRole("button", { name: "Kiểm tra câu này" }).click();
+  await expect(page.locator('[data-scenario-outcome="true"]')).toBeVisible();
+  await nextBtn.click();
+  await expect(page.locator(".lesson-counter")).toHaveText("4/7");
+
+  // Block 4 (Spot / Steps MC): verify steps card, pick option 1 (Step 2)
+  await expect(page.locator(".steps-card")).toBeVisible();
+  await page.locator('[role="radio"]').nth(1).click();
+  await nextBtn.click();
+  await expect(page.locator(".lesson-counter")).toHaveText("5/7");
+
+  // Block 5 (SpeedRound): keyboard ArrowLeft / ArrowRight WCAG 2.1 AA flow
+  const speedRegion = page.locator(".speed-round");
+  await expect(speedRegion).toBeVisible();
+  await speedRegion.focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowLeft");
+  await expectNoAxeViolations(page);
+  await nextBtn.click();
+  await expect(page.locator(".lesson-counter")).toHaveText("6/7");
+
+  // Block 6 (Explain Short): partial answer -> per-block check -> dispute via /grades/{gradeId}/dispute
+  await page.locator('input[id^="short-"]').fill("isolate root cause");
+  await page.getByRole("button", { name: "Kiểm tra câu này" }).click();
+  await expect(page.getByRole("status").first()).toBeVisible();
+  await nextBtn.click();
+  await expect(page.locator(".lesson-counter")).toHaveText("7/7");
+
+  // Block 7 (RecapView): verify non-gradable recap + 0 axe violations -> submit attempt
+  await expect(page.locator(".recap-view")).toBeVisible();
+  await expectNoAxeViolations(page);
+  await nextBtn.click();
+  await expect(page.getByRole("link", { name: "Về trang chủ" })).toBeVisible();
+
+  // 3. Assert 0 bytes of answer keys or outcomes leaked in ANY GET /v1/lessons/{id} response!
+  expect(interceptedLessonBodies.length).toBeGreaterThanOrEqual(2);
+  for (const body of interceptedLessonBodies) {
+    for (const forbidden of ['"answerIndex"', '"answers"', '"outcomes"', '"acceptedAnswers"', '"keyPoints"', '"solution"']) {
+      expect(body).not.toContain(forbidden);
+    }
+  }
+});

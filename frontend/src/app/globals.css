@@ -12,8 +12,8 @@
   --bone: #f2edfe;
   --linen: #e6defa;
   --sand: #cdc1ef;
-  --ember: #7b5be6;
-  --ember-deep: #5a38c6;
+  --ember: #6746d9;
+  --ember-deep: #5031b8;
   --wash: #ebe3ff;
   --wash-soft: #f7f3ff;
   --moss: #2f9b86;
@@ -751,8 +751,7 @@ button,
   letter-spacing: -0.009em;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color var(--motion-press) var(--ease-settle),
-    transform var(--motion-press) var(--ease-settle),
+  transition: transform var(--motion-press) var(--ease-settle),
     opacity var(--motion-press) var(--ease-settle);
 }
 

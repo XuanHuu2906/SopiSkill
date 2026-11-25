@@ -2,6 +2,32 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 4 — Rich Lesson Content: KaTeX `.woff2`, 4 Loại Figure (7 SVG Layouts), Multi-Blank Word Bank & 5 Practice Formats
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase4` (tách từ `feat/polyglot-phase3` `4e309f4`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
+- **IMPLEMENTED:**
+  - **Flyway `core` V3 (`core-api/src/main/resources/db/migration/V3__short_answer_grades.sql`):** tạo bảng `core.short_answer_grades` (`sag_`) lưu kết quả chấm 3 mức (`got_it | almost | not_yet`), `key_points JSONB`, và cờ `disputed` cho quy trình phúc khảo câu trả lời ngắn.
+  - **`core-api/` Phase 4:**
+    - `PublicBlockProjector.java`: đàm phán năng lực qua header `X-Client-Blocks`; mở rộng `teach` giữ `kicker`, `takeaway`, `terms[]`, `cite`, và **loại trừ tương hỗ** `figure` (`formula`, `table` với `moss/clay/neutral`, `visual`, `diagram` 7 layouts: `flow | timeline | branch | cycle | stack | split | hub`) **HOẶC** `image`; nâng cấp `blank` sang **Multi-Blank Word Bank** (`parts`, `answers[1..4]` ẩn trên server, `bank[2..10]` trộn HMAC, tương thích ngược hoàn toàn với 1-blank); lọc sạch `mc.outcomes[]` & `answerIndex` ở `GET /v1/lessons/{id}`; bổ sung `speed` (`SpeedRound` 60s chấm server), `recap` (không chấm điểm), `computeCorrectIndices` khóa vị trí đúng khi thử lại mà không lộ đáp án còn lại, `selectedOutcomeFor` chỉ mở hệ quả cho lựa chọn người học vừa bấm, và `evaluateShortThreeLevel` (`got_it | almost | not_yet`).
+    - `LessonController.java`: đọc `X-Client-Blocks`, trả `correctIndices`/`outcome`/`verdict`/`gradeId`/`keyPoints` tại `POST /v1/lessons/{id}/blocks/{idx}/grade` (ẩn `solution` trên multi-blank/speed sai để không lộ đáp án khi thử lại), và thêm endpoint `POST /v1/lessons/{id}/grades/{gradeId}/dispute` gọi `ai-api /internal/lessons/grade-short` cập nhật `core.short_answer_grades`.
+  - **`ai-engine/` Phase 4:**
+    - `ai-engine/app/agents/figure_validator.py`: kiểm định tất định 4 loại figure & 7 layout SVG (chặn node mồ côi, cạnh trỏ node không tồn tại, số lẻ ở `split`, nhãn >48 ký tự ở `cycle`, tone bảng ngoài `moss/clay/neutral`, và xung đột `figure` + `image`).
+    - `ai-engine/app/agents/validation.py` & `providers.py` & `config.py`: thêm `lesson_images_enabled=False`; xác thực multi-blank + 1-blank, `speed`, `recap`, `mc.outcomes`/`display='steps'`; làm giàu `MockProvider.generate_lesson` (Bài 1 giữ 6 block tương thích ngược kèm KaTeX + `diagram:flow` + `{core_concept}` + `CitationChip` + `mc.outcomes`; Bài 2+ trình diễn đủ `TableFigure`, `MultiBlankWordBank`, `Scenario`, `Spot/Steps`, `SpeedRound`, `Explain Short`, `RecapView`).
+  - **`frontend/` Phase 4:**
+    - Tự host 20 font KaTeX `.woff2` tại `frontend/public/fonts/katex/` + `frontend/src/app/katex-selfhosted.css` (0 CDN bên ngoài).
+    - Tạo bộ component giàu tương tác trong `frontend/src/components/lesson/`: `MathText.tsx` (KaTeX inline/display + inline `{termKey}` mở `VocabSheet` lọc sẵn), `FigureRenderer.tsx` (đủ 4 loại & 7 layout SVG), `CitationChip.tsx`, `MultiBlankWordBank.tsx` (khóa `correctIndices` khi thử lại), `ScenarioAndSteps.tsx`, `SpeedRound.tsx` (kéo/nút + bàn phím `←`/`→` chuẩn WCAG 2.1 AA), `RecapView.tsx`.
+    - Tích hợp trọn vẹn vào `frontend/src/app/lesson/[lessonId]/page.tsx`, `VocabSheet.tsx`, `api.ts` (`X-Client-Blocks`, `disputeShortGrade`), và nâng độ tương phản `--ember` (`#6746d9`, `6.03:1`) trong `globals.css`.
+- **TESTED (100% offline/mock + live 8-container Docker polyglot stack, 0đ chi phí):**
+  - `cd ai-engine && PGVECTOR_TEST_URL=...@127.0.0.1:5439/sopiskill REDIS_TEST_URL=redis://127.0.0.1:6380/0 AI_API_LIVE_URL=http://127.0.0.1:8010 ../backend/.venv/bin/python -m pytest -v` → **exit `0` (`33 passed, 0 failed, 0 skipped` trong `1.61s`)** (thêm 13 test Phase 4 trong `test_phase4_rich_lesson.py` phủ 4 loại figure / 7 layout SVG + multi-blank + 1-blank).
+  - `cd ai-engine && ../backend/.venv/bin/python -m bandit -r app -q` → **exit `0` (0 findings, 0 `#nosec`)**.
+  - `cd core-api && ./mvnw -B test` → **exit `0` (`Tests run: 6, Failures: 0, Errors: 0`, `8.96s`)** trên live PostgreSQL 16 (Flyway `V3`) + Redis 7 + MinIO + `ai-api`, gồm `Phase4IntegrationTest` (mutual exclusion, `X-Client-Blocks`, 0 answer key leak trên wire, multi-blank `correctIndices` không lộ đáp án còn lại, 1-blank backward compat, scenario single-outcome, speed server grading, short 3-level `almost` + `/grades/{gradeId}/dispute`, recap non-gradable).
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8080 npm run build` → **exit `0`** (0 warnings, `14/14` routes).
+  - `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8080 E2E_FRONTEND_PORT=3010 npm run test:e2e` → **exit `0` (`7 passed in 22.8s`, `axe-core` 0 violations)** — kịch bản #7 xác minh trực tiếp KaTeX `.woff2`, SVG `FigureRenderer`, `{termKey}` → `VocabSheet`, `TableFigure` (`moss`/`clay`), `MultiBlankWordBank` khóa slot 0, `Scenario` outcome, `Steps`, `SpeedRound` bàn phím `←`/`→`, `Short`, `RecapView` và **0 byte đáp án** trong tất cả response `GET /v1/lessons/*`.
+- **NOT TESTED:**
+  - Sinh ảnh bài học qua nhà cung cấp ảnh trả phí (`LESSON_IMAGES_ENABLED=false` mặc định, 0đ chi phí).
+  - Chấm dispute câu trả lời ngắn bằng LLM trả phí (đã kiểm đầy đủ hợp đồng `POST /v1/lessons/{id}/grades/{gradeId}/dispute` ↔ `ai-api` trên `MockProvider`).
+- **ROLLBACK:** Thuần Git + Docker tách biệt — revert nhánh `feat/polyglot-phase4`; Flyway `V3` thuần additive (`CREATE TABLE IF NOT EXISTS core.short_answer_grades`).
+
 ## 2026-11-25 — Phase 3 — Source-to-Course Pipeline (Presigned PDF · Source Brief · TopicGuard · Chips · Lesson-1-First · 2-Tier Validator QA · Course Lifecycle)
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase3` (tách từ `feat/polyglot-phase2` `01ea8d1`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc theo quyết định người dùng.

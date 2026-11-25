@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
+    "@types/katex": "^0.16.8",
+    "katex": "^0.19.1",
     "next": "15.5.28",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

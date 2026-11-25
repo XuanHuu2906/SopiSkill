@@ -31,6 +31,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -81,11 +82,14 @@ public class LessonController {
             String disputeReason
     ) {}
 
+    public record DisputeGradeRequest(String reason) {}
+
     @GetMapping("/{lessonId}")
     public Map<String, Object> getLesson(
             @AuthenticationPrincipal AuthPrincipal principal,
             @PathVariable String lessonId,
             @RequestParam(defaultValue = "0") int prefetch,
+            @RequestHeader(value = "X-Client-Blocks", required = false) String clientBlocksHeader,
             HttpServletResponse response
     ) {
         UUID lid = IdCodec.parse(lessonId, "lsn");
@@ -96,6 +100,7 @@ public class LessonController {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> privateBlocks = (List<Map<String, Object>>) lesson.get("blocks");
         int contentVersion = ((Number) lesson.get("contentVersion")).intValue();
+        var clientCaps = PublicBlockProjector.parseClientCapabilities(clientBlocksHeader);
 
         List<Map<String, Object>> citations = jdbc.sql("""
                 SELECT lc.id, lc.source_id, lc.source_version, lc.chunk_id, lc.page_number,
@@ -136,7 +141,7 @@ public class LessonController {
         out.put("estimatedMinutes", lesson.get("estimatedMinutes"));
         out.put("kind", lesson.get("kind"));
         out.put("format", lesson.get("format"));
-        out.put("blocks", projector.toPublicBlocks(lid, contentVersion, privateBlocks));
+        out.put("blocks", projector.toPublicBlocks(lid, contentVersion, privateBlocks, clientCaps));
         out.put("grounding", lesson.get("grounding"));
         out.put("citations", citations);
         out.put("evidenceNotice", lesson.get("evidenceNotice"));
@@ -288,7 +293,7 @@ public class LessonController {
         for (int i = 0; i < privateBlocks.size(); i++) {
             Map<String, Object> blk = privateBlocks.get(i);
             String btype = String.valueOf(blk.getOrDefault("type", ""));
-            if ("teach".equals(btype)) continue;
+            if (!projector.isGradable(blk)) continue;
             total++;
             boolean ok = projector.gradeBlock(lid, currentVersion, i, blk, answersByIndex.get(i));
             if (ok) correct++;
@@ -440,6 +445,7 @@ public class LessonController {
     }
 
     @PostMapping("/{lessonId}/blocks/{blockIndex}/grade")
+    @Transactional
     public Map<String, Object> gradeSingleBlock(
             @AuthenticationPrincipal AuthPrincipal principal,
             @PathVariable String lessonId,
@@ -465,25 +471,28 @@ public class LessonController {
 
         Map<String, Object> block = privateBlocks.get(blockIndex);
         String btype = String.valueOf(block.getOrDefault("type", ""));
-        if ("teach".equals(btype)) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "BLOCK_NOT_GRADABLE", "Block bài giảng không chấm điểm.");
+        if (!projector.isGradable(block)) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "BLOCK_NOT_GRADABLE", "Block bài giảng/tổng kết không chấm điểm.");
         }
 
         boolean ok;
         String grader = "deterministic";
         String feedback;
+        String verdict = null;
+        String gradeId = null;
+        List<String> keyPointsOut = null;
+        List<Integer> correctIndices = List.of();
+        String selectedOutcome = null;
 
         if ("short".equals(btype)) {
-            boolean exactOk = projector.gradeShortExact(block, body.answer());
-            if (exactOk) {
-                ok = true;
-                feedback = "Chính xác!";
-            } else if (projector.gradeShortSemantic(block, body.answer())) {
-                ok = true;
-                grader = "semantic_rubric";
-                feedback = "Chính xác — câu trả lời khớp với ý chính theo tiêu chí chấm.";
-            } else if (Boolean.TRUE.equals(body.dispute())) {
-                // Delegate bounded LLM dispute grading to `ai-api`
+            var eval = projector.evaluateShortThreeLevel(block, body.answer());
+            ok = eval.correct();
+            verdict = eval.verdict();
+            grader = eval.grader();
+            feedback = eval.feedback();
+            keyPointsOut = eval.matchedKeyPoints();
+
+            if (!ok && Boolean.TRUE.equals(body.dispute())) {
                 try {
                     Map<String, Object> aiResp = aiEngine.postJson(
                             "/internal/lessons/grade-short",
@@ -499,20 +508,55 @@ public class LessonController {
                             null
                     );
                     ok = Boolean.TRUE.equals(aiResp.get("correct"));
+                    verdict = ok ? "got_it" : String.valueOf(aiResp.getOrDefault("verdict", verdict));
                     grader = "llm_rubric";
                     feedback = String.valueOf(aiResp.getOrDefault("feedback", "Đã chấm lại theo tiêu chí."));
                 } catch (Exception ex) {
                     ok = false;
                     feedback = "Không thể gọi chấm lại AI lúc này. Hãy đối chiếu với đáp án mẫu.";
                 }
-            } else {
-                ok = false;
-                feedback = "Chưa khớp đáp án mẫu. Bạn có thể bấm 'Yêu cầu chấm lại' nếu câu trả lời đúng ý.";
             }
+
+            UUID sagId = UUID.randomUUID();
+            jdbc.sql("""
+                    INSERT INTO core.short_answer_grades (
+                        id, lesson_id, user_id, block_index, content_version, learner_answer,
+                        verdict, correct, grader, key_points, feedback, disputed, dispute_reason
+                    ) VALUES (
+                        :id, :lid, :uid, :bidx, :ver, :ans,
+                        :verdict, :correct, :grader, CAST(:kps AS jsonb), :fb, :disputed, :reason
+                    )
+                    """)
+                    .param("id", sagId)
+                    .param("lid", lid)
+                    .param("uid", principal.userId())
+                    .param("bidx", blockIndex)
+                    .param("ver", currentVersion)
+                    .param("ans", body.answer() == null ? "" : String.valueOf(body.answer()))
+                    .param("verdict", verdict)
+                    .param("correct", ok)
+                    .param("grader", grader)
+                    .param("kps", json.toJson(keyPointsOut))
+                    .param("fb", feedback)
+                    .param("disputed", Boolean.TRUE.equals(body.dispute()))
+                    .param("reason", body.disputeReason())
+                    .update();
+            gradeId = IdCodec.format("sag", sagId);
         } else {
             ok = projector.gradeBlock(lid, currentVersion, blockIndex, block, body.answer());
-            feedback = ok ? "Chính xác!" : "Chưa chính xác. Hãy xem lại đáp án mẫu và giải thích trong bài.";
+            correctIndices = projector.computeCorrectIndices(lid, currentVersion, blockIndex, block, body.answer());
+            selectedOutcome = projector.selectedOutcomeFor(block, body.answer());
+            feedback = ok
+                    ? "Chính xác!"
+                    : (selectedOutcome != null
+                            ? selectedOutcome
+                            : (!correctIndices.isEmpty()
+                                    ? "Bạn đã đúng một phần! Các vị trí đúng đã được giữ lại — hãy thử lại phần còn lại."
+                                    : "Chưa chính xác. Hãy xem lại gợi ý và thử lại."));
         }
+
+        // For multi-blank wrong answers, lock `correctIndices` and DO NOT leak remaining answers in `solution`!
+        boolean hideSolutionForRetry = !ok && (projector.isMultiBlank(block) || "speed".equals(btype));
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("blockIndex", blockIndex);
@@ -520,8 +564,112 @@ public class LessonController {
         out.put("correct", ok);
         out.put("grader", grader);
         out.put("feedback", feedback);
-        out.put("solution", projector.solutionFor(block));
+        out.put("solution", hideSolutionForRetry ? null : projector.solutionFor(block));
         out.put("disputeAllowed", "short".equals(btype) && !ok);
+        if (!correctIndices.isEmpty()) out.put("correctIndices", correctIndices);
+        if (selectedOutcome != null) out.put("outcome", selectedOutcome);
+        if (verdict != null) out.put("verdict", verdict);
+        if (gradeId != null) out.put("gradeId", gradeId);
+        if (keyPointsOut != null) out.put("keyPoints", keyPointsOut);
+        return out;
+    }
+
+    @PostMapping("/{lessonId}/grades/{gradeId}/dispute")
+    @Transactional
+    public Map<String, Object> disputeShortAnswerGrade(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String lessonId,
+            @PathVariable String gradeId,
+            @RequestBody(required = false) DisputeGradeRequest body,
+            HttpServletRequest request
+    ) {
+        csrf.verify(request);
+        rateLimiter.check(request, "grade_dispute", 30, 60);
+
+        UUID lid = IdCodec.parse(lessonId, "lsn");
+        UUID gid = IdCodec.parse(gradeId, "sag");
+        var lesson = loadOwnedLesson(principal.userId(), lid);
+
+        var gradeRow = jdbc.sql("""
+                SELECT id, block_index, learner_answer, verdict, correct, key_points, feedback, disputed
+                FROM core.short_answer_grades
+                WHERE id = :gid AND lesson_id = :lid AND user_id = :uid
+                FOR UPDATE
+                """)
+                .param("gid", gid)
+                .param("lid", lid)
+                .param("uid", principal.userId())
+                .query((rs, rowNum) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("blockIndex", rs.getInt("block_index"));
+                    m.put("learnerAnswer", rs.getString("learner_answer"));
+                    m.put("verdict", rs.getString("verdict"));
+                    m.put("correct", rs.getBoolean("correct"));
+                    m.put("keyPoints", json.fromJson(rs.getString("key_points"), new TypeReference<List<String>>() {}));
+                    m.put("feedback", rs.getString("feedback"));
+                    m.put("disputed", rs.getBoolean("disputed"));
+                    return m;
+                })
+                .optional()
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "GRADE_NOT_FOUND", "Không tìm thấy kết quả chấm."));
+
+        int blockIndex = ((Number) gradeRow.get("blockIndex")).intValue();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> privateBlocks = (List<Map<String, Object>>) lesson.get("blocks");
+        if (blockIndex < 0 || blockIndex >= privateBlocks.size()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "BLOCK_INDEX_INVALID", "Chỉ số block không hợp lệ.");
+        }
+        Map<String, Object> block = privateBlocks.get(blockIndex);
+
+        boolean ok = Boolean.TRUE.equals(gradeRow.get("correct"));
+        String verdict = String.valueOf(gradeRow.get("verdict"));
+        String feedback = String.valueOf(gradeRow.get("feedback"));
+        String grader = "llm_rubric";
+        try {
+            Map<String, Object> aiResp = aiEngine.postJson(
+                    "/internal/lessons/grade-short",
+                    Map.of(
+                            "lessonId", IdCodec.format("lsn", lid),
+                            "blockIndex", blockIndex,
+                            "language", lesson.getOrDefault("language", "vi"),
+                            "prompt", String.valueOf(block.getOrDefault("question", "")),
+                            "learnerAnswer", String.valueOf(gradeRow.get("learnerAnswer")),
+                            "acceptedAnswers", block.getOrDefault("acceptedAnswers", List.of()),
+                            "dispute", true
+                    ),
+                    null
+            );
+            ok = Boolean.TRUE.equals(aiResp.get("correct"));
+            verdict = ok ? "got_it" : String.valueOf(aiResp.getOrDefault("verdict", verdict));
+            feedback = String.valueOf(aiResp.getOrDefault("feedback", "Đã chấm lại theo tiêu chí."));
+        } catch (Exception ex) {
+            feedback = "Không thể gọi chấm lại AI lúc này. Hãy đối chiếu với đáp án mẫu.";
+        }
+
+        jdbc.sql("""
+                UPDATE core.short_answer_grades
+                SET verdict = :verdict, correct = :correct, grader = :grader,
+                    feedback = :fb, disputed = TRUE, dispute_reason = :reason, updated_at = now()
+                WHERE id = :gid
+                """)
+                .param("verdict", verdict)
+                .param("correct", ok)
+                .param("grader", grader)
+                .param("fb", feedback)
+                .param("reason", body == null ? null : body.reason())
+                .param("gid", gid)
+                .update();
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("gradeId", IdCodec.format("sag", gid));
+        out.put("blockIndex", blockIndex);
+        out.put("verdict", verdict);
+        out.put("correct", ok);
+        out.put("grader", grader);
+        out.put("feedback", feedback);
+        out.put("keyPoints", gradeRow.get("keyPoints"));
+        out.put("disputed", true);
+        out.put("solution", projector.solutionFor(block));
         return out;
     }
 

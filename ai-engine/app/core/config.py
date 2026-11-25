@@ -91,6 +91,7 @@ class Settings(BaseSettings):
 
     # Phase 3: 2-Tier Validator QA & progressive generation
     validator_llm_enabled: bool = False
+    lesson_images_enabled: bool = False
 
     readiness_timeout_seconds: float = 2.0
 
