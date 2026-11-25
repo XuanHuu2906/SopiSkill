@@ -89,9 +89,11 @@ class Settings(BaseSettings):
     ocr_enabled: bool = False
     ocr_engine: str = "vietocr"
 
-    # Phase 3: 2-Tier Validator QA & progressive generation
+    # Phase 3+: 2-Tier Validator QA, bounded Lesson Generator tool loop & Refiner
     validator_llm_enabled: bool = False
     lesson_images_enabled: bool = False
+    lesson_gen_max_turns: int = 6
+    lesson_refine_max_rounds: int = 2
 
     readiness_timeout_seconds: float = 2.0
 

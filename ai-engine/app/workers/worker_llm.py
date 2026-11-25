@@ -9,8 +9,11 @@ from typing import Any
 
 from redis.asyncio import Redis
 
+from app.agents.lesson_generator import (
+    MaxTurnsExceededError,
+    generate_lesson_with_qa_loop,
+)
 from app.agents.providers import LLMProvider, get_llm_provider
-from app.agents.validator_qa import run_two_tier_validator
 from app.core.callback_client import CoreApiCallbackClient
 from app.core.config import Settings, get_settings
 from app.workers.streams import RedisStreamWorker, default_consumer_name
@@ -65,18 +68,27 @@ async def handle_llm_job(
             last_usage = None
             lesson_order = 0
 
+            source_brief = payload.get("sourceBrief") if isinstance(payload.get("sourceBrief"), dict) else None
+
             for unit in unit_specs:
                 u_title = str(unit.get("title") or "Unit")
                 for l_title in unit.get("lessonTitles") or []:
                     lesson_profile = {**learner_profile, "_lessonOrder": lesson_order}
-                    lesson, usage = await llm.generate_lesson(
-                        topic, u_title, str(l_title), language, lesson_profile
-                    )
-                    qa = await run_two_tier_validator(
-                        lesson,
+                    gen_res = await generate_lesson_with_qa_loop(
+                        topic=topic,
+                        unit_title=u_title,
+                        lesson_title=str(l_title),
+                        language=language,
+                        learner_profile=lesson_profile,
                         provider=llm,
+                        source_brief=source_brief,
+                        max_turns=cfg.lesson_gen_max_turns,
+                        max_refine_rounds=cfg.lesson_refine_max_rounds,
                         llm_qa_enabled=cfg.validator_llm_enabled,
                     )
+                    lesson = gen_res.lesson
+                    qa = gen_res.qa
+                    usage = gen_res.usage
                     if qa.blocking_errors:
                         raise ValueError("; ".join(qa.blocking_errors))
 
@@ -115,6 +127,16 @@ async def handle_llm_job(
             }
         else:
             raise ValueError(f"Unsupported jobType: {job_type!r}")
+    except MaxTurnsExceededError as exc:
+        callback_payload = {
+            "jobId": job_id,
+            "idempotencyKey": idempotency_key,
+            "status": "failed",
+            "result": None,
+            "contentFlags": [],
+            "errorCode": "max_turns",
+            "errorMessage": str(exc)[:240],
+        }
     except Exception as exc:  # noqa: BLE001 — terminal validation/provider failure callback
         callback_payload = {
             "jobId": job_id,

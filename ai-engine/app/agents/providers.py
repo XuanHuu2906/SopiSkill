@@ -10,6 +10,10 @@ from typing import Any, Protocol
 
 import httpx
 
+from app.agents.tool_schemas import (
+    LESSON_GENERATOR_TOOL_SCHEMAS,
+    get_tutor_tool_schemas,
+)
 from app.core.config import Settings, get_settings
 from app.schemas.internal import InterviewQuestionItem, LlmUsageOut
 
@@ -669,20 +673,82 @@ class MockProvider:
 
 
 class OpenAICompatibleProvider:
-    """Real OpenAI-compatible provider (fail-fast if misconfigured; prompt-injection delimited)."""
+    """Official `openai` SDK (`AsyncOpenAI`) adapter supporting DeepSeek & OpenAI-compatible APIs.
 
-    name = "openai_compatible"
+    Presets:
+      - `LLM_PROVIDER=deepseek`: defaults `base_url="https://api.deepseek.com/v1"`, `model="deepseek-chat"`.
+      - `LLM_PROVIDER=openai_compatible`: requires explicit `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
+    """
 
-    def __init__(self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        self._base_url = (settings.llm_base_url or "").rstrip("/")
-        self._api_key = (settings.llm_api_key or "").strip()
-        self.model = (settings.llm_model or "").strip()
-        self._timeout = float(settings.llm_timeout_seconds)
+    DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+    DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        cfg = settings or get_settings()
+        kind = (cfg.llm_provider or "openai_compatible").strip().lower()
+        is_deepseek = kind == "deepseek"
+        self.name = "deepseek" if is_deepseek else "openai_compatible"
+        self._base_url = (
+            (cfg.llm_base_url or (self.DEFAULT_DEEPSEEK_BASE_URL if is_deepseek else ""))
+            .strip()
+            .rstrip("/")
+        )
+        self._api_key = (cfg.llm_api_key or "").strip()
+        self.model = (
+            cfg.llm_model or (self.DEFAULT_DEEPSEEK_MODEL if is_deepseek else "")
+        ).strip()
+        self._timeout = float(cfg.llm_timeout_seconds)
+        self._max_retries = max(0, int(cfg.llm_max_retries))
         self._transport = transport
         if not self._base_url or not self._api_key or not self.model:
             raise ProviderConfigError(
-                "LLM_PROVIDER=openai_compatible requires LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL."
+                f"LLM_PROVIDER={self.name} requires LLM_API_KEY (and LLM_BASE_URL / LLM_MODEL)."
             )
+
+    def _make_client(self) -> Any:
+        from openai import AsyncOpenAI
+
+        http_client = httpx.AsyncClient(
+            timeout=self._timeout,
+            trust_env=False,
+            transport=self._transport,
+        )
+        return AsyncOpenAI(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            timeout=self._timeout,
+            max_retries=self._max_retries,
+            http_client=http_client,
+        )
+
+    def _extract_usage(self, response: Any, started: float) -> LlmUsageOut:
+        usage_obj = getattr(response, "usage", None)
+        p_tok = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
+        c_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+        t_tok = int(getattr(usage_obj, "total_tokens", 0) or (p_tok + c_tok))
+        return LlmUsageOut(
+            provider=self.name,
+            model=self.model,
+            promptTokens=p_tok,
+            completionTokens=c_tok,
+            totalTokens=t_tok,
+            latencyMs=int((time.perf_counter() - started) * 1000),
+        )
+
+    @staticmethod
+    def _parse_tool_arguments(raw_args: str | None) -> dict[str, Any]:
+        if not raw_args:
+            return {}
+        try:
+            parsed = json.loads(raw_args)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
 
     async def _chat_json(
         self,
@@ -692,41 +758,227 @@ class OpenAICompatibleProvider:
         max_tokens: int,
     ) -> tuple[dict[str, Any], LlmUsageOut]:
         started = time.perf_counter()
-        url = f"{self._base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
-        payload = {
-            "model": self.model,
-            "temperature": 0.2,
-            "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        }
-        async with httpx.AsyncClient(
-            timeout=self._timeout, trust_env=False, transport=self._transport
-        ) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code >= 400:
-                raise ProviderTransientError(f"LLM upstream returned HTTP {resp.status_code}")
-            data = resp.json()
+        async with self._make_client() as client:
+            try:
+                resp = await client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.2,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+            except Exception as exc:
+                raise ProviderTransientError(f"LLM upstream error ({type(exc).__name__}): {exc}") from exc
 
-        choice = (data.get("choices") or [{}])[0]
-        if choice.get("finish_reason") == "length":
+        choice = (resp.choices or [None])[0]
+        if choice is None:
+            raise ProviderTransientError("LLM returned empty choices.")
+        if choice.finish_reason == "length":
             raise ProviderTransientError("LLM output truncated (finish_reason=length).")
-        raw_content = choice.get("message", {}).get("content") or "{}"
+        raw_content = choice.message.content or "{}"
         parsed = json.loads(raw_content)
-        usage_raw = data.get("usage") or {}
-        usage = LlmUsageOut(
-            provider=self.name,
-            model=self.model,
-            promptTokens=int(usage_raw.get("prompt_tokens") or 0),
-            completionTokens=int(usage_raw.get("completion_tokens") or 0),
-            totalTokens=int(usage_raw.get("total_tokens") or 0),
-            latencyMs=int((time.perf_counter() - started) * 1000),
+        return parsed, self._extract_usage(resp, started)
+
+    async def _chat_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str | dict[str, Any] = "auto",
+        max_tokens: int = 1200,
+        temperature: float = 0.2,
+    ) -> tuple[list[dict[str, Any]], str, LlmUsageOut]:
+        started = time.perf_counter()
+        async with self._make_client() as client:
+            try:
+                resp = await client.chat.completions.create(
+                    model=self.model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                )
+            except Exception as exc:
+                raise ProviderTransientError(f"LLM tool call error ({type(exc).__name__}): {exc}") from exc
+
+        choice = (resp.choices or [None])[0]
+        if choice is None:
+            raise ProviderTransientError("LLM tool call returned empty choices.")
+        msg = choice.message
+        tool_calls_out: list[dict[str, Any]] = []
+        for tc in msg.tool_calls or []:
+            fn = getattr(tc, "function", None)
+            if fn is None:
+                continue
+            tool_calls_out.append(
+                {
+                    "id": str(getattr(tc, "id", "") or "call_1"),
+                    "name": str(getattr(fn, "name", "") or ""),
+                    "arguments": self._parse_tool_arguments(getattr(fn, "arguments", None)),
+                }
+            )
+        return tool_calls_out, str(msg.content or ""), self._extract_usage(resp, started)
+
+    async def plan_tutor_tool_call(
+        self,
+        *,
+        user_message: str,
+        entry_point: str,
+        language: str,
+        allowed_tools: list[str],
+        lesson_summary: str,
+        source_brief: dict[str, Any] | None,
+        history: list[dict[str, str]],
+    ) -> dict[str, Any] | None:
+        """Uses native OpenAI/DeepSeek Function Calling to select 1 of Sopi's allowed tools."""
+        schemas = get_tutor_tool_schemas(allowed_tools)
+        if not schemas:
+            return None
+
+        brief_hint = ""
+        if isinstance(source_brief, dict) and source_brief.get("sections"):
+            sec_list = [
+                f"- {s.get('anchor')}: {s.get('heading')}"
+                for s in (source_brief.get("sections") or [])[:12]
+                if isinstance(s, dict)
+            ]
+            brief_hint = "\nAvailable source_brief sections:\n" + "\n".join(sec_list)
+
+        sys_p = (
+            f"You are Sopi's tool router (language={language}, entryPoint={entry_point}). "
+            "Choose the single best tool to call for the learner's latest message. "
+            "Never invent answer keys or directly edit lessons; use `regenerate_unit` ONLY to prepare a confirmation preview.\n\n"
+            f"{lesson_summary}{brief_hint}"
         )
-        return parsed, usage
+        msgs: list[dict[str, Any]] = [{"role": "system", "content": sys_p}]
+        for h in history[-6:]:
+            msgs.append({"role": h["role"], "content": h["content"]})
+        msgs.append({"role": "user", "content": user_message})
+
+        tool_calls, _content, usage = await self._chat_with_tools(
+            messages=msgs,
+            tools=schemas,
+            tool_choice="auto",
+            max_tokens=400,
+            temperature=0.1,
+        )
+        if not tool_calls:
+            return None
+        first = tool_calls[0]
+        return {
+            "id": first["id"],
+            "name": first["name"],
+            "arguments": first["arguments"],
+            "usage": usage,
+        }
+
+    async def next_lesson_generator_turn(
+        self,
+        *,
+        turn: int,
+        topic: str,
+        unit_title: str,
+        lesson_title: str,
+        language: str,
+        learner_profile: dict[str, Any],
+        source_brief: dict[str, Any] | None,
+        source_excerpts: list[dict[str, Any]],
+        tool_history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Executes 1 turn of DeepSeek/OpenAI native Function Calling (`read_source` / `save_lesson`)."""
+        sys_p = (
+            f"You are SopiSkill's Lesson Writer. Write a rich structured lesson in {language}. "
+            "If a course source_brief is provided and you need grounded details, call `read_source` first. "
+            "Once ready, call `save_lesson` with a valid lesson object containing `title` and `blocks` "
+            "(teach, mc, blank, order, match, short, speed, recap). Never put both `figure` and `image` on the same teach block."
+        )
+        user_ctx: dict[str, Any] = {
+            "topic": topic,
+            "unitTitle": unit_title,
+            "lessonTitle": lesson_title,
+            "language": language,
+            "learnerProfile": learner_profile,
+        }
+        if isinstance(source_brief, dict):
+            user_ctx["sourceBrief"] = source_brief
+
+        msgs: list[dict[str, Any]] = [
+            {"role": "system", "content": sys_p},
+            {"role": "user", "content": json.dumps(user_ctx, ensure_ascii=False)},
+        ]
+        for hist in tool_history or []:
+            call_id = str(hist.get("id") or f"call_{turn}")
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": str(hist.get("tool") or ""),
+                                "arguments": json.dumps(hist.get("arguments") or {}, ensure_ascii=False),
+                            },
+                        }
+                    ],
+                }
+            )
+            msgs.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(hist.get("result") or {}, ensure_ascii=False),
+                }
+            )
+
+        tool_calls, _content, usage = await self._chat_with_tools(
+            messages=msgs,
+            tools=LESSON_GENERATOR_TOOL_SCHEMAS,
+            tool_choice="required",
+            max_tokens=4000,
+            temperature=0.2,
+        )
+        if not tool_calls:
+            return {"id": f"call_{turn}", "tool": "", "arguments": {}, "usage": usage}
+        first = tool_calls[0]
+        return {
+            "id": first["id"],
+            "tool": first["name"],
+            "arguments": first["arguments"],
+            "usage": usage,
+        }
+
+    async def refine_lesson(
+        self,
+        *,
+        lesson: dict[str, Any],
+        flags: list[dict[str, Any]],
+        blocking_errors: list[str],
+        language: str,
+        source_excerpts: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], LlmUsageOut]:
+        """Refines a drafted lesson specifically to fix Validator QA's 6 canonical `content_flags`."""
+        sys_p = (
+            f"You are SopiSkill's Lesson QA Refiner (language={language}). "
+            "Fix every reported issue across the 6 canonical content_flags "
+            "(figure_mismatch, unanswerable, ambiguous, weak_distractors, wrong_answer, other) "
+            "and blocking_errors. Return ONLY the complete fixed lesson JSON object with keys `title` and `blocks`."
+        )
+        user_p = json.dumps(
+            {
+                "lesson": lesson,
+                "contentFlags": flags,
+                "blockingErrors": blocking_errors,
+                "sourceExcerpts": source_excerpts,
+            },
+            ensure_ascii=False,
+        )
+        return await self._chat_json(sys_p, user_p, max_tokens=4000)
 
     async def generate_interview_questions(
         self, topic: str, language: str
@@ -792,30 +1044,23 @@ class OpenAICompatibleProvider:
         system_prompt: str,
         messages: list[dict[str, str]],
     ) -> AsyncIterator[str]:
-        url = f"{self._base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
-        payload = {
-            "model": self.model,
-            "stream": True,
-            "temperature": 0.4,
-            "messages": [{"role": "system", "content": system_prompt}, *messages],
-        }
-        async with httpx.AsyncClient(
-            timeout=self._timeout, trust_env=False, transport=self._transport
-        ) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as resp:
-                if resp.status_code >= 400:
-                    raise ProviderTransientError(f"Tutor stream upstream HTTP {resp.status_code}")
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
+        async with self._make_client() as client:
+            try:
+                stream = await client.chat.completions.create(
+                    model=self.model,
+                    stream=True,
+                    temperature=0.4,
+                    messages=[{"role": "system", "content": system_prompt}, *messages],
+                )
+                async for chunk in stream:
+                    choices = chunk.choices or []
+                    if not choices:
                         continue
-                    chunk_str = line[6:].strip()
-                    if chunk_str == "[DONE]":
-                        break
-                    chunk = json.loads(chunk_str)
-                    delta = ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content")
+                    delta = getattr(choices[0].delta, "content", None)
                     if delta:
                         yield delta
+            except Exception as exc:
+                raise ProviderTransientError(f"Tutor stream upstream error ({type(exc).__name__}): {exc}") from exc
 
 
 def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
@@ -823,6 +1068,6 @@ def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
     kind = (cfg.llm_provider or "mock").strip().lower()
     if kind == "mock":
         return MockProvider()
-    if kind == "openai_compatible":
+    if kind in {"openai_compatible", "deepseek"}:
         return OpenAICompatibleProvider(cfg)
     raise ProviderConfigError(f"Unsupported LLM_PROVIDER: {kind!r}")

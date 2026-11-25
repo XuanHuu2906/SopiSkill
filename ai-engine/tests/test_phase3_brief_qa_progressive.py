@@ -119,8 +119,11 @@ async def test_two_tier_validator_flags_warnings_and_passes_clean_lesson():
     }
     res_noisy = await run_two_tier_validator(noisy_lesson, provider=provider, llm_qa_enabled=False)
     codes = {f["code"] for f in res_noisy.content_flags}
-    assert "TEACH_TOO_BRIEF" in codes
-    assert "MC_DUPLICATE_OPTIONS" in codes
+    rules = {f["rule"] for f in res_noisy.content_flags}
+    assert "unanswerable" in codes
+    assert "ambiguous" in codes
+    assert "TEACH_TOO_BRIEF" in rules
+    assert "MC_DUPLICATE_OPTIONS" in rules
 
 
 async def test_mock_provider_structured_interview_chips_vi_and_en():

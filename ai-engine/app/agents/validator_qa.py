@@ -1,13 +1,16 @@
-"""2-Tier Lesson Validator QA (Phase 3 / DEC-023).
+"""2-Tier Lesson Validator QA (DEC-023) with canonical 6-code `content_flags` taxonomy.
 
-Tier 1 (mandatory deterministic):
-  - Blocking errors: completeness lint, single-blank count, invalid MC answerIndex bounds.
-  - Non-blocking warnings recorded to `core.content_flags`: duplicate MC options,
-    answer leakage in blank/MC stem, overly brief teach block.
+Canonical 6 `content_flags` codes:
+  - `figure_mismatch`  : invalid/mismatched figure layout or figure+image mutual exclusion conflict.
+  - `unanswerable`     : missing premise (overly brief teach block) or empty prompt/answers.
+  - `ambiguous`        : duplicate MC options or under-specified short-answer criteria.
+  - `weak_distractors` : answer leaked inside blank stem or word bank lacking distractors.
+  - `wrong_answer`     : out-of-bounds answer index or invalid answer structure.
+  - `other`            : general Tier-2 LLM QA warning or structural issue.
 
-Tier 2 (opt-in LLM QA pass):
-  - Runs when `VALIDATOR_LLM_ENABLED=true` OR Tier 1 raised warnings (only for real LLM providers,
-    never incurring cost in Mock/CI mode).
+Tier 1 (mandatory deterministic): runs always at 0 cost.
+Tier 2 (opt-in LLM QA pass): runs when `VALIDATOR_LLM_ENABLED=true` OR Tier 1 raised warnings
+(only for non-mock providers, never incurring cost in Mock/CI mode).
 """
 
 from __future__ import annotations
@@ -16,10 +19,22 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.agents.figure_validator import validate_teach_media_and_figure
 from app.agents.providers import LLMProvider
 from app.agents.validation import validate_lesson_payload
 
 logger = logging.getLogger(__name__)
+
+CONTENT_FLAG_CODES: frozenset[str] = frozenset(
+    {
+        "figure_mismatch",
+        "unanswerable",
+        "ambiguous",
+        "weak_distractors",
+        "wrong_answer",
+        "other",
+    }
+)
 
 
 @dataclass
@@ -27,6 +42,25 @@ class QaReport:
     blocking_errors: list[str] = field(default_factory=list)
     content_flags: list[dict[str, Any]] = field(default_factory=list)
     estimated_minutes: int = 5
+
+
+def _flag(
+    *,
+    block_index: int | None,
+    code: str,
+    details: str,
+    rule: str,
+    severity: str = "warning",
+) -> dict[str, Any]:
+    safe_code = code if code in CONTENT_FLAG_CODES else "other"
+    return {
+        "blockIndex": block_index,
+        "source": "validator",
+        "code": safe_code,
+        "severity": severity,
+        "rule": rule,
+        "details": details[:300],
+    }
 
 
 def run_static_qa(lesson: dict[str, Any]) -> QaReport:
@@ -37,7 +71,17 @@ def run_static_qa(lesson: dict[str, Any]) -> QaReport:
     total_words = 0
     for idx, block in enumerate(blocks):
         if not isinstance(block, dict):
+            flags.append(
+                _flag(
+                    block_index=idx,
+                    code="other",
+                    rule="BLOCK_NOT_OBJECT",
+                    severity="error",
+                    details=f"Block {idx} is not an object.",
+                )
+            )
             continue
+
         btype = block.get("type")
         if btype == "teach":
             paras = block.get("paragraphs") or []
@@ -45,45 +89,161 @@ def run_static_qa(lesson: dict[str, Any]) -> QaReport:
             total_words += word_cnt
             if word_cnt < 10:
                 flags.append(
-                    {
-                        "blockIndex": idx,
-                        "source": "validator",
-                        "code": "TEACH_TOO_BRIEF",
-                        "severity": "warning",
-                        "details": f"Teach block {idx} has only {word_cnt} words.",
-                    }
+                    _flag(
+                        block_index=idx,
+                        code="unanswerable",
+                        rule="TEACH_TOO_BRIEF",
+                        details=f"Teach block {idx} has only {word_cnt} words; premise too brief.",
+                    )
                 )
-        elif btype == "mc":
-            opts = [str(o).strip().casefold() for o in (block.get("options") or [])]
-            if len(set(opts)) != len(opts):
+            has_fig = isinstance(block.get("figure"), dict)
+            has_img = isinstance(block.get("image"), dict)
+            if has_fig and has_img:
                 flags.append(
-                    {
-                        "blockIndex": idx,
-                        "source": "validator",
-                        "code": "MC_DUPLICATE_OPTIONS",
-                        "severity": "warning",
-                        "details": f"MC block {idx} contains duplicate option text.",
-                    }
+                    _flag(
+                        block_index=idx,
+                        code="figure_mismatch",
+                        rule="FIGURE_IMAGE_CONFLICT",
+                        severity="error",
+                        details=f"Teach block {idx} has both figure and image.",
+                    )
+                )
+            elif has_fig:
+                fig_errs = validate_teach_media_and_figure(block, idx)
+                if fig_errs:
+                    flags.append(
+                        _flag(
+                            block_index=idx,
+                            code="figure_mismatch",
+                            rule="FIGURE_SCHEMA_INVALID",
+                            severity="error",
+                            details="; ".join(fig_errs),
+                        )
+                    )
+        elif btype == "mc":
+            opts_raw = block.get("options") or []
+            opts = [str(o).strip().casefold() for o in opts_raw]
+            if len(opts) < 2:
+                flags.append(
+                    _flag(
+                        block_index=idx,
+                        code="weak_distractors",
+                        rule="MC_TOO_FEW_OPTIONS",
+                        severity="error",
+                        details=f"MC block {idx} has fewer than 2 options.",
+                    )
+                )
+            elif len(set(opts)) != len(opts):
+                flags.append(
+                    _flag(
+                        block_index=idx,
+                        code="ambiguous",
+                        rule="MC_DUPLICATE_OPTIONS",
+                        details=f"MC block {idx} contains duplicate option text.",
+                    )
+                )
+            ans_idx = block.get("answerIndex")
+            if not isinstance(ans_idx, int) or isinstance(ans_idx, bool) or ans_idx < 0 or ans_idx >= len(opts):
+                flags.append(
+                    _flag(
+                        block_index=idx,
+                        code="wrong_answer",
+                        rule="MC_ANSWER_INDEX_OUT_OF_BOUNDS",
+                        severity="error",
+                        details=f"MC block {idx} has invalid answerIndex={ans_idx}.",
+                    )
                 )
             total_words += 20
         elif btype == "blank":
             sentence = str(block.get("sentence") or "").casefold()
-            answer = str(block.get("answer") or "").strip().casefold()
-            if answer and len(answer) >= 4 and answer in sentence:
-                flags.append(
-                    {
-                        "blockIndex": idx,
-                        "source": "validator",
-                        "code": "BLANK_ANSWER_LEAKED_IN_STEM",
-                        "severity": "warning",
-                        "details": f"Blank block {idx} contains answer text inside sentence.",
-                    }
-                )
+            if isinstance(block.get("answers"), list):
+                answers = [str(a).strip() for a in block.get("answers") or []]
+                bank = [str(w).strip() for w in block.get("bank") or []]
+                if not answers or any(not a for a in answers):
+                    flags.append(
+                        _flag(
+                            block_index=idx,
+                            code="unanswerable",
+                            rule="MULTI_BLANK_EMPTY_ANSWER",
+                            severity="error",
+                            details=f"Multi-blank block {idx} has empty answers.",
+                        )
+                    )
+                if len(bank) <= len(answers):
+                    flags.append(
+                        _flag(
+                            block_index=idx,
+                            code="weak_distractors",
+                            rule="MULTI_BLANK_NO_DISTRACTOR",
+                            details=f"Multi-blank block {idx} word bank needs at least 1 distractor.",
+                        )
+                    )
+                missing_in_bank = [a for a in answers if a not in bank]
+                if missing_in_bank:
+                    flags.append(
+                        _flag(
+                            block_index=idx,
+                            code="wrong_answer",
+                            rule="MULTI_BLANK_ANSWER_NOT_IN_BANK",
+                            severity="error",
+                            details=f"Multi-blank block {idx} answers missing from bank: {missing_in_bank}.",
+                        )
+                    )
+            else:
+                answer = str(block.get("answer") or "").strip().casefold()
+                if not answer:
+                    flags.append(
+                        _flag(
+                            block_index=idx,
+                            code="unanswerable",
+                            rule="BLANK_EMPTY_ANSWER",
+                            severity="error",
+                            details=f"Blank block {idx} has empty answer.",
+                        )
+                    )
+                elif len(answer) >= 4 and answer in sentence:
+                    flags.append(
+                        _flag(
+                            block_index=idx,
+                            code="weak_distractors",
+                            rule="BLANK_ANSWER_LEAKED_IN_STEM",
+                            details=f"Blank block {idx} contains answer text inside sentence.",
+                        )
+                    )
             total_words += 15
+        elif btype == "short":
+            accepted = block.get("acceptedAnswers") or []
+            if not accepted:
+                flags.append(
+                    _flag(
+                        block_index=idx,
+                        code="ambiguous",
+                        rule="SHORT_NO_ACCEPTED_ANSWERS",
+                        severity="error",
+                        details=f"Short block {idx} has no acceptedAnswers.",
+                    )
+                )
+            total_words += 20
+        elif btype == "speed":
+            items = block.get("items") or []
+            for item_i, item in enumerate(items):
+                choices = item.get("choices") if isinstance(item, dict) else None
+                aidx = item.get("answerIndex") if isinstance(item, dict) else None
+                if not isinstance(choices, list) or not isinstance(aidx, int) or aidx < 0 or aidx >= len(choices):
+                    flags.append(
+                        _flag(
+                            block_index=idx,
+                            code="wrong_answer",
+                            rule="SPEED_ANSWER_OUT_OF_BOUNDS",
+                            severity="error",
+                            details=f"Speed block {idx} item {item_i} has invalid answerIndex.",
+                        )
+                    )
+            total_words += 20
         else:
             total_words += 20
 
-    # Estimate 4-12 minutes based on block count & reading volume
+    # Estimate 3-15 minutes based on block count & reading volume
     est = max(3, min(15, round(len(blocks) * 0.7 + total_words / 160)))
     return QaReport(blocking_errors=blocking, content_flags=flags, estimated_minutes=est)
 
@@ -103,20 +263,21 @@ async def run_two_tier_validator(
         try:
             verdict, _usage = await provider.grade_short_dispute(
                 language="en",
-                prompt="Audit this lesson JSON for factual contradictions or ambiguous quiz questions.",
+                prompt="Audit this lesson JSON for factual contradictions, wrong answers, or ambiguous quiz questions.",
                 learner_answer=str(lesson.get("title") or ""),
                 accepted_answers=["clear and accurate"],
                 rubric="Return got_it if no critical quality issues, else not_yet with concise feedback.",
             )
             if not verdict.get("correct", True):
+                fb = str(verdict.get("feedback") or "Flagged by Tier-2 LLM QA pass.")
+                inferred_code = "wrong_answer" if "wrong" in fb.lower() else "other"
                 report.content_flags.append(
-                    {
-                        "blockIndex": None,
-                        "source": "validator",
-                        "code": "LLM_QA_REVIEW_FLAG",
-                        "severity": "warning",
-                        "details": str(verdict.get("feedback") or "Flagged by Tier-2 LLM QA pass.")[:300],
-                    }
+                    _flag(
+                        block_index=None,
+                        code=inferred_code,
+                        rule="LLM_QA_REVIEW_FLAG",
+                        details=fb,
+                    )
                 )
         except Exception as exc:  # noqa: BLE001 — Tier 2 QA is advisory, never blocks valid lesson
             logger.warning("tier2_llm_qa_skipped error_type=%s", type(exc).__name__)

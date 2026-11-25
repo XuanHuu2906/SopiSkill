@@ -2,6 +2,37 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Nâng cấp Lesson Generator (`max_turns`), Refiner (6 mã `content_flags`) & Official `openai` SDK (`AsyncOpenAI`) Native Tool Calling cho DeepSeek
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase9` (chưa commit, vẫn giữ nguyên kiến trúc **Specialized Pipeline + Single Tool-Using Agent**, không thêm Router/Supervisor cho Sopi Tutor).
+- **IMPLEMENTED:**
+  - **Chuẩn hóa 6 mã lỗi `content_flags` (`ai-engine/app/agents/validator_qa.py`):** chuẩn hóa toàn bộ cảnh báo/lỗi kiểm định về đúng 6 mã chuẩn (`figure_mismatch`, `unanswerable`, `ambiguous`, `weak_distractors`, `wrong_answer`, `other`) kèm `rule` chi tiết (tích hợp `validate_teach_media_and_figure` cho `figure_mismatch`, kiểm tra `teach` quá ngắn/`blank` rỗng cho `unanswerable`, trùng đáp án MC/`short` thiếu tiêu chí cho `ambiguous`, lộ đáp án trong câu `blank`/thiếu distractor cho `weak_distractors`, lệch `answerIndex` cho `wrong_answer`).
+  - **Bounded Lesson Generator Tool Loop & Refiner (`ai-engine/app/agents/lesson_generator.py`, `ai-engine/app/core/config.py`):**
+    - Thêm cấu hình `LESSON_GEN_MAX_TURNS=6` và `LESSON_REFINE_MAX_ROUNDS=2`.
+    - `generate_lesson_with_qa_loop`: chạy vòng gọi tool có trần `max_turns` với 2 tool **`read_source`** (đọc đoạn trích từ `sourceBrief.sections` theo `anchor`/`query`) và **`save_lesson`** (chốt bản nháp bài học; truyền lịch sử `tool_history` gồm `id`, `tool`, `arguments`, `result` giữa các lượt; nếu chạm trần `max_turns` mà chưa gọi `save_lesson` sẽ ném `MaxTurnsExceededError` → `errorCode="max_turns"`).
+    - Vòng **`Writer → Validator QA → Refiner`** tối đa **2 lượt** (`apply_targeted_refinement` xử lý đích danh cả 6 mã `content_flags` + gọi `provider.refine_lesson` cho provider LLM thật).
+  - **Official `openai` SDK (`AsyncOpenAI`) & Bộ JSON Schema Tools chuẩn cho DeepSeek (`ai-engine/app/agents/tool_schemas.py`, `ai-engine/app/agents/providers.py`, `ai-engine/app/agents/tutor_agent.py`, `ai-engine/requirements.txt`):**
+    - Thêm dependency `openai>=1.55` (đã cài `openai==3.59.0` vào `backend/.venv`).
+    - Định nghĩa đầy đủ OpenAI/DeepSeek Function Calling JSON Schemas trong `tool_schemas.py`:
+      - **`TUTOR_TOOL_SCHEMAS` (đủ 6 tool Sopi Tutor):** `read_lesson`, `explain_deeper`, `read_source`, `flag_question` (enum đúng 6 mã `content_flags`), `revise_proposal`, `regenerate_unit`.
+      - **`LESSON_GENERATOR_TOOL_SCHEMAS` (2 tool sinh bài):** `read_source`, `save_lesson`.
+    - Nâng cấp `OpenAICompatibleProvider` chạy trên **`AsyncOpenAI`** chính thức với preset **`LLM_PROVIDER=deepseek`** (tự mặc định `base_url="https://api.deepseek.com/v1"`, `model="deepseek-chat"`, fail-fast nếu thiếu `LLM_API_KEY`):
+      - `next_lesson_generator_turn(...)`: gọi native `tools=LESSON_GENERATOR_TOOL_SCHEMAS`, tự phát lại hội thoại `assistant.tool_calls` + `role="tool"` đúng `tool_call_id`.
+      - `refine_lesson(...)`: gọi Refiner với `response_format={"type": "json_object"}` kèm 6 mã `content_flags` & `source_excerpts`.
+      - `plan_tutor_tool_call(...)`: chọn tool native từ tập `req.allowedTools`, kiểm tra chặt trên server (`chosen in req.allowedTools` và `chosen in REGISTERED_TOOLS`), truyền `tool_args` vào handler và fallback an toàn khi model gọi tool ngoài quyền.
+      - `stream_tutor_reply(...)`: dùng SDK streaming `client.chat.completions.create(..., stream=True)`.
+  - **Tích hợp `ai-worker-llm` (`ai-engine/app/workers/worker_llm.py`):** nối trực tiếp `generate_lesson_with_qa_loop` vào `handle_llm_job` (giữ nguyên callback cuốn chiếu Lesson-1-First `/internal/jobs/{jobId}/lesson-ready` và trả `errorCode="max_turns"` khi vượt trần vòng gọi tool).
+  - Cập nhật `DEC-023` trong `plans/sopiskill_master_parity_plan.md`.
+- **TESTED (100% offline/mock qua `httpx.MockTransport`, 0đ chi phí):**
+  - `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_"` → **exit `0` (`43 passed, 3 deselected in 0.66s`)**:
+    - `tests/test_lesson_generator_loop.py` (`4/4`): kiểm chứng `read_source → save_lesson`, chạm trần `max_turns` → `errorCode="max_turns"`, sửa sạch 6 mã `content_flags` trong `<= 2` lượt Refiner, dừng cứng ở lượt `2`.
+    - `tests/test_deepseek_tool_calling.py` (`4/4`): kiểm chứng `AsyncOpenAI` SDK thật qua `httpx.MockTransport` tới `https://api.deepseek.com/v1/chat/completions` (`model="deepseek-chat"`): preset mặc định & fail-fast thiếu key; Lesson Generator multi-turn `read_source → save_lesson` (đúng `assistant.tool_calls` + `role=tool` `tool_call_id`) → Tier-2 LLM QA → `refine_lesson`; Sopi Tutor native `regenerate_unit` + SSE streaming; từ chối tool trái phép ngoài `allowedTools` và fallback an toàn.
+  - `cd ai-engine && ../backend/.venv/bin/python -m bandit -r app -q` → **exit `0` (0 findings)**.
+- **NOT TESTED:**
+  - Gọi trực tiếp tới `https://api.deepseek.com/v1` bằng API key thật (chưa chạy theo nguyên tắc 0đ chi phí khi chưa có yêu cầu smoke test thật).
+  - 3 bài test live container (`test_live_pgvector_redis.py`) & rebuild container `ai-api` / `ai-worker-llm` (các container Docker SopiSkill đang được tạm dừng theo yêu cầu trước đó).
+- **ROLLBACK:** Thuần `ai-engine/` (không thay đổi schema DB hay API public của `core-api`/`frontend`).
+
 ## 2026-11-25 — Phase 8 — Offline-First IndexedDB Cache (6 Stores), Raw-Answer Outbox & Smart Prefetch
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase8` (tách từ `feat/polyglot-phase7` `72c7340`, đã push `origin/feat/polyglot-phase7`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
