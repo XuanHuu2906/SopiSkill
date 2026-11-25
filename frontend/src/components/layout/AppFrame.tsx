@@ -4,8 +4,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchCourses, fetchMeStats, type CourseListItem } from "@/lib/api";
+import {
+  fetchCourses,
+  fetchMeStats,
+  fetchNotificationInbox,
+  type CourseListItem,
+} from "@/lib/api";
 import { useAuth, useLogout, useSessionQueryKey } from "@/app/providers";
+import { useI18n } from "@/components/i18n/I18nProvider";
+import type { I18nKey } from "@/components/i18n/dictionaries";
+import { AvatarBadge } from "@/components/auth/AvatarSheet";
+import NotificationCenter from "@/components/notifications/NotificationCenter";
 import Icon, { type IconName } from "../ui/Icon";
 import { ProgressRing } from "../ui/Progress";
 import { useTheme } from "./ThemeProvider";
@@ -13,12 +22,12 @@ import { SopiContext } from "./SopiContext";
 import GlobalSopiSheet from "../tutor/GlobalSopiSheet";
 import TabBar from "./TabBar";
 
-const NAV: { href: string; label: string; icon: IconName; match: (p: string) => boolean }[] = [
-  { href: "/", label: "Trang chủ", icon: "home", match: (p) => p === "/" },
-  { href: "/new", label: "Khóa học mới", icon: "plus", match: (p) => p.startsWith("/new") },
-  { href: "/sources", label: "Tài liệu", icon: "book", match: (p) => p.startsWith("/sources") },
-  { href: "/review", label: "Ôn tập", icon: "sparkle", match: (p) => p.startsWith("/review") },
-  { href: "/profile", label: "Hồ sơ", icon: "person", match: (p) => p.startsWith("/profile") },
+const NAV: { href: string; labelKey: I18nKey; icon: IconName; match: (p: string) => boolean }[] = [
+  { href: "/", labelKey: "nav.home", icon: "home", match: (p) => p === "/" },
+  { href: "/new", labelKey: "nav.new", icon: "plus", match: (p) => p.startsWith("/new") },
+  { href: "/sources", labelKey: "nav.sources", icon: "book", match: (p) => p.startsWith("/sources") },
+  { href: "/review", labelKey: "nav.review", icon: "sparkle", match: (p) => p.startsWith("/review") },
+  { href: "/profile", labelKey: "nav.profile", icon: "person", match: (p) => p.startsWith("/profile") },
 ];
 
 function courseIsActive(pathname: string, courseId: string) {
@@ -54,10 +63,14 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading } = useAuth();
   const logout = useLogout();
   const { preference, toggle } = useTheme();
+  const { t } = useI18n();
   const [sopiOpen, setSopiOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const [sopiCourseId, setSopiCourseId] = useState<string | null>(null);
   const coursesKey = useSessionQueryKey("courses", { limit: 10 });
   const statsKey = useSessionQueryKey("me-stats");
+  const inboxKey = useSessionQueryKey("notifications-inbox");
+
   const courses = useQuery({
     queryKey: coursesKey,
     queryFn: () => fetchCourses(10, 0),
@@ -70,6 +83,13 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
     enabled: !!user,
     retry: false,
     staleTime: 15_000,
+  });
+  const inbox = useQuery({
+    queryKey: inboxKey,
+    queryFn: () => fetchNotificationInbox(10),
+    enabled: !!user,
+    retry: false,
+    staleTime: 30_000,
   });
 
   const openSopi = useCallback((courseId?: string | null) => {
@@ -84,6 +104,7 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (pathname.startsWith("/lesson/")) {
       setSopiOpen(false);
+      setNotifOpen(false);
     }
   }, [pathname]);
 
@@ -109,6 +130,7 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
   const initial = (user?.displayName?.trim()[0] ?? "S").toUpperCase();
   const streakDays = stats.data?.streakDays ?? 0;
   const xpTotal = stats.data?.xp ?? user?.xp ?? 0;
+  const unreadNotifs = inbox.data?.unreadCount ?? 0;
 
   return (
     <SopiContext.Provider value={{ open: sopiOpen, openSopi, closeSopi }}>
@@ -123,7 +145,7 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
 
           <div className="side-nav-group">
             {NAV.map((item) => {
-              const active = !sopiOpen && item.match(pathname);
+              const active = !sopiOpen && !notifOpen && item.match(pathname);
               return (
                 <Link
                   key={item.href}
@@ -134,28 +156,46 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
                   <span className="nav-glyph" aria-hidden="true">
                     <Icon name={item.icon} size={22} />
                   </span>
-                  <span>{item.label}</span>
+                  <span>{t(item.labelKey)}</span>
                 </Link>
               );
             })}
             {user && (
-              <button
-                type="button"
-                className={`nav-row${sopiOpen ? " is-active" : ""}`}
-                aria-expanded={sopiOpen}
-                onClick={() => openSopi(activeCourseId)}
-              >
-                <span className="nav-glyph" aria-hidden="true">
-                  <Icon name="chat" size={22} />
-                </span>
-                <span>Hỏi Sopi</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  className={`nav-row${sopiOpen ? " is-active" : ""}`}
+                  aria-expanded={sopiOpen}
+                  onClick={() => openSopi(activeCourseId)}
+                >
+                  <span className="nav-glyph" aria-hidden="true">
+                    <Icon name="chat" size={22} />
+                  </span>
+                  <span>{t("nav.askSopi")}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`nav-row${notifOpen ? " is-active" : ""}`}
+                  aria-expanded={notifOpen}
+                  onClick={() => setNotifOpen(true)}
+                >
+                  <span className="nav-glyph" aria-hidden="true">
+                    <Icon name="bell" size={22} />
+                  </span>
+                  <span style={{ flex: 1, textAlign: "left" }}>{t("nav.notifications")}</span>
+                  {unreadNotifs > 0 && (
+                    <span className="notif-badge" aria-label={`${unreadNotifs} thông báo mới`}>
+                      {unreadNotifs}
+                    </span>
+                  )}
+                </button>
+              </>
             )}
           </div>
 
           {user && courses.data && courses.data.items.length > 0 && (
             <div className="side-nav-group">
-              <span className="side-nav-label">Khóa học của bạn</span>
+              <span className="side-nav-label">{t("nav.yourCourses")}</span>
               {courses.data.items.slice(0, 5).map((course) => (
                 <CourseRow key={course.id} course={course} active={course.id === activeCourseId} />
               ))}
@@ -167,9 +207,7 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
           {user && (
             <div className="side-stats-card" aria-label="Thống kê hằng ngày">
               <Link href="/profile" className="side-stats-user">
-                <span className="side-stats-avatar" aria-hidden="true">
-                  {initial}
-                </span>
+                <AvatarBadge avatar={user.avatar} initial={initial} size={30} />
                 <span className="side-stats-name">{user.displayName}</span>
               </Link>
               <div className="side-stats-pills">
@@ -190,15 +228,11 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
           )}
 
           <div className="side-nav-footer">
-            <button
-              type="button"
-              className="nav-row"
-              onClick={toggle}
-            >
+            <button type="button" className="nav-row" onClick={toggle}>
               <span className="nav-glyph" aria-hidden="true">
                 <Icon name={isDark ? "sun" : "moon"} size={22} />
               </span>
-              <span>{isDark ? "Chế độ sáng" : "Chế độ tối"}</span>
+              <span>{isDark ? t("nav.lightMode") : t("nav.darkMode")}</span>
             </button>
             <Link
               href="/settings"
@@ -208,14 +242,14 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
               <span className="nav-glyph" aria-hidden="true">
                 <Icon name="settings" size={22} />
               </span>
-              <span>Cài đặt</span>
+              <span>{t("nav.settings")}</span>
             </Link>
             {user && (
-              <button type="button" className="nav-row" onClick={() => void logout()}>
+              <button type="button" className="nav-row" onClick={() => void logout(false)}>
                 <span className="nav-glyph" aria-hidden="true">
                   <Icon name="logout" size={22} />
                 </span>
-                <span>Đăng xuất</span>
+                <span>{t("nav.logout")}</span>
               </button>
             )}
           </div>
@@ -226,12 +260,15 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
         {!focusMode && <TabBar />}
 
         {user && !focusMode && (
-          <GlobalSopiSheet
-            open={sopiOpen}
-            onClose={closeSopi}
-            courses={courses.data?.items ?? []}
-            initialCourseId={sopiCourseId ?? activeCourseId}
-          />
+          <>
+            <GlobalSopiSheet
+              open={sopiOpen}
+              onClose={closeSopi}
+              courses={courses.data?.items ?? []}
+              initialCourseId={sopiCourseId ?? activeCourseId}
+            />
+            <NotificationCenter open={notifOpen} onClose={() => setNotifOpen(false)} />
+          </>
         )}
       </div>
     </SopiContext.Provider>

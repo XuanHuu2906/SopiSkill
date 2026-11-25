@@ -1,27 +1,26 @@
 package com.sopiskill.core.auth;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.sopiskill.core.common.ApiException;
 import com.sopiskill.core.common.IdCodec;
-import com.sopiskill.core.config.SopiProperties;
+import com.sopiskill.core.common.JsonHelper;
 import com.sopiskill.core.gamification.GamificationService;
 import com.sopiskill.core.internal.AiEngineClient;
 import com.sopiskill.core.security.AuthPrincipal;
 import com.sopiskill.core.security.CsrfValidator;
-import com.sopiskill.core.security.JwtService;
 import com.sopiskill.core.security.RateLimiterService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
-import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -32,36 +31,40 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public class AuthAndMeController {
 
+    public static final Set<String> ALLOWED_AVATARS = Set.of("happy", "graduate", "curious", "wink", "excited");
+    public static final Set<String> ALLOWED_LANGUAGES = Set.of("vi", "en", "ja", "ko", "zh", "es", "fr", "de", "pt", "id", "th", "hi");
+
     private final JdbcClient jdbc;
+    private final JsonHelper json;
     private final PasswordEncoder passwordEncoder;
-    private final JwtService jwtService;
+    private final SessionService sessionService;
     private final CsrfValidator csrfValidator;
     private final RateLimiterService rateLimiter;
-    private final SopiProperties props;
     private final AiEngineClient aiEngineClient;
     private final GamificationService gamification;
 
     public AuthAndMeController(
             JdbcClient jdbc,
+            JsonHelper json,
             PasswordEncoder passwordEncoder,
-            JwtService jwtService,
+            SessionService sessionService,
             CsrfValidator csrfValidator,
             RateLimiterService rateLimiter,
-            SopiProperties props,
             AiEngineClient aiEngineClient,
             GamificationService gamification
     ) {
         this.jdbc = jdbc;
+        this.json = json;
         this.passwordEncoder = passwordEncoder;
-        this.jwtService = jwtService;
+        this.sessionService = sessionService;
         this.csrfValidator = csrfValidator;
         this.rateLimiter = rateLimiter;
-        this.props = props;
         this.aiEngineClient = aiEngineClient;
         this.gamification = gamification;
     }
@@ -76,7 +79,13 @@ public class AuthAndMeController {
             @NotBlank @Size(min = 1, max = 128) String password
     ) {}
 
-    public record UpdateMeRequest(@NotBlank @Size(min = 1, max = 80) String displayName) {}
+    public record UpdateMeRequest(
+            @Size(max = 80) String displayName,
+            String avatar,
+            String appLanguage,
+            String lessonLanguage,
+            String locale
+    ) {}
 
     public record DeleteMeRequest(@NotBlank String confirmText, String password) {}
 
@@ -115,11 +124,12 @@ public class AuthAndMeController {
                 .param("name", defaultName.substring(0, Math.min(defaultName.length(), 80)))
                 .update();
 
-        setSessionCookies(request, response, userId, email);
-        return ResponseEntity.status(HttpStatus.CREATED).body(userOut(userId, email, defaultName, 0));
+        sessionService.issueNewSession(request, response, userId, email);
+        return ResponseEntity.status(HttpStatus.CREATED).body(loadUserOut(userId));
     }
 
     @PostMapping("/v1/auth/login")
+    @Transactional
     public ResponseEntity<Map<String, Object>> login(
             @Valid @RequestBody LoginRequest body,
             HttpServletRequest request,
@@ -128,7 +138,7 @@ public class AuthAndMeController {
         rateLimiter.check(request, "auth_login", 20, 60);
         String email = body.email().trim().toLowerCase(Locale.ROOT);
         var rowOpt = jdbc.sql("""
-                SELECT id, email, password_hash, display_name, xp
+                SELECT id, email, password_hash
                 FROM core.users
                 WHERE lower(email) = :email
                 """)
@@ -136,9 +146,7 @@ public class AuthAndMeController {
                 .query((rs, rowNum) -> Map.<String, Object>of(
                         "id", rs.getObject("id", UUID.class),
                         "email", rs.getString("email"),
-                        "password_hash", rs.getString("password_hash") == null ? "" : rs.getString("password_hash"),
-                        "display_name", rs.getString("display_name"),
-                        "xp", rs.getInt("xp")
+                        "password_hash", rs.getString("password_hash") == null ? "" : rs.getString("password_hash")
                 ))
                 .optional();
 
@@ -152,30 +160,26 @@ public class AuthAndMeController {
         }
 
         UUID userId = (UUID) row.get("id");
-        setSessionCookies(request, response, userId, (String) row.get("email"));
-        return ResponseEntity.ok(userOut(userId, (String) row.get("email"), (String) row.get("display_name"), (Integer) row.get("xp")));
+        sessionService.issueNewSession(request, response, userId, (String) row.get("email"));
+        return ResponseEntity.ok(loadUserOut(userId));
     }
 
     @PostMapping("/v1/auth/logout")
-    public ResponseEntity<Void> logout(HttpServletRequest request, HttpServletResponse response) {
+    public ResponseEntity<Void> logout(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @RequestParam(name = "all", defaultValue = "false") boolean revokeAll,
+            HttpServletRequest request,
+            HttpServletResponse response
+    ) {
         csrfValidator.verify(request);
         rateLimiter.check(request, "auth_logout", 60, 60);
-        clearSessionCookies(response);
+        sessionService.revokeOnLogout(request, response, principal == null ? null : principal.userId(), revokeAll);
         return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/v1/auth/me")
     public Map<String, Object> me(@AuthenticationPrincipal AuthPrincipal principal) {
-        return jdbc.sql("SELECT id, email, display_name, xp FROM core.users WHERE id = :id")
-                .param("id", principal.userId())
-                .query((rs, rowNum) -> userOut(
-                        rs.getObject("id", UUID.class),
-                        rs.getString("email"),
-                        rs.getString("display_name"),
-                        rs.getInt("xp")
-                ))
-                .optional()
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND", "Tài khoản không tồn tại."));
+        return loadUserOut(principal.userId());
     }
 
     @GetMapping("/v1/me/stats")
@@ -184,6 +188,7 @@ public class AuthAndMeController {
         var user = jdbc.sql("""
                 SELECT id, email, display_name, xp, streak_days, best_streak_days,
                        streak_freezes, hearts, hearts_refill_at, timezone, goal_lessons,
+                       avatar, app_language, lesson_language, onboarded_at,
                        last_active_date, created_at
                 FROM core.users WHERE id = :id
                 """)
@@ -193,12 +198,17 @@ public class AuthAndMeController {
                     var effectiveHearts = gamification.computeEffectiveHearts(
                             rs.getInt("hearts"),
                             ra == null ? null : ra.toInstant(),
-                            java.time.Instant.now()
+                            Instant.now()
                     );
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("userId", IdCodec.format("usr", rs.getObject("id", UUID.class)));
                     m.put("email", rs.getString("email"));
                     m.put("displayName", rs.getString("display_name"));
+                    m.put("avatar", rs.getString("avatar"));
+                    m.put("appLanguage", rs.getString("app_language"));
+                    m.put("lessonLanguage", rs.getString("lesson_language"));
+                    var oa = rs.getTimestamp("onboarded_at");
+                    m.put("onboardedAt", oa == null ? null : oa.toInstant().toString());
                     m.put("xp", rs.getInt("xp"));
                     m.put("streakDays", rs.getInt("streak_days"));
                     m.put("bestStreakDays", rs.getInt("best_streak_days"));
@@ -253,15 +263,59 @@ public class AuthAndMeController {
     ) {
         csrfValidator.verify(request);
         rateLimiter.check(request, "me_update", 30, 60);
-        String name = body.displayName().trim();
-        if (name.isEmpty()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_DISPLAY_NAME", "Tên hiển thị không được trống.");
+
+        UUID uid = principal.userId();
+        boolean updatedAny = false;
+
+        if (body.displayName() != null) {
+            String name = body.displayName().trim();
+            if (name.isEmpty()) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_DISPLAY_NAME", "Tên hiển thị không được trống.");
+            }
+            jdbc.sql("UPDATE core.users SET display_name = :name, updated_at = now() WHERE id = :id")
+                    .param("name", name).param("id", uid).update();
+            updatedAny = true;
         }
-        jdbc.sql("UPDATE core.users SET display_name = :name, updated_at = now() WHERE id = :id")
-                .param("name", name)
-                .param("id", principal.userId())
-                .update();
-        return me(principal);
+        if (body.avatar() != null && !body.avatar().isBlank()) {
+            String av = body.avatar().trim().toLowerCase(Locale.ROOT);
+            if (!ALLOWED_AVATARS.contains(av)) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_AVATAR", "Avatar không hợp lệ.");
+            }
+            jdbc.sql("UPDATE core.users SET avatar = :av, updated_at = now() WHERE id = :id")
+                    .param("av", av).param("id", uid).update();
+            updatedAny = true;
+        }
+        if (body.appLanguage() != null && !body.appLanguage().isBlank()) {
+            String lang = body.appLanguage().trim().toLowerCase(Locale.ROOT);
+            if (!ALLOWED_LANGUAGES.contains(lang)) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_LANGUAGE", "Ngôn ngữ giao diện không hợp lệ.");
+            }
+            jdbc.sql("UPDATE core.users SET app_language = :lang, updated_at = now() WHERE id = :id")
+                    .param("lang", lang).param("id", uid).update();
+            updatedAny = true;
+        }
+        if (body.lessonLanguage() != null && !body.lessonLanguage().isBlank()) {
+            String lang = body.lessonLanguage().trim().toLowerCase(Locale.ROOT);
+            if (!ALLOWED_LANGUAGES.contains(lang)) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_LANGUAGE", "Ngôn ngữ bài học không hợp lệ.");
+            }
+            jdbc.sql("UPDATE core.users SET lesson_language = :lang, updated_at = now() WHERE id = :id")
+                    .param("lang", lang).param("id", uid).update();
+            updatedAny = true;
+        }
+        if (body.locale() != null && !body.locale().isBlank()) {
+            String loc = body.locale().trim();
+            if (loc.length() > 16) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_LOCALE", "Locale không hợp lệ.");
+            }
+            jdbc.sql("UPDATE core.users SET locale = :loc, updated_at = now() WHERE id = :id")
+                    .param("loc", loc).param("id", uid).update();
+            updatedAny = true;
+        }
+        if (!updatedAny) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "EMPTY_UPDATE", "Không có trường hợp lệ để cập nhật.");
+        }
+        return loadUserOut(uid);
     }
 
     @DeleteMapping("/v1/me")
@@ -297,60 +351,35 @@ public class AuthAndMeController {
 
         // Cascade delete `rag.document_chunks` on ai-engine (best effort, signed HMAC)
         aiEngineClient.deleteRagResourceBestEffort("/internal/rag/users/" + IdCodec.format("usr", uid), null);
-        clearSessionCookies(response);
+        sessionService.clearSessionCookies(response);
         return ResponseEntity.noContent().build();
     }
 
-    private void setSessionCookies(HttpServletRequest request, HttpServletResponse response, UUID userId, String email) {
-        long maxAgeSec = Math.max(60L, props.accessTokenTtlMinutes() * 60L);
-        String token = jwtService.createAccessToken(userId, email);
-        ResponseCookie accessCookie = ResponseCookie.from(JwtService.ACCESS_COOKIE, token)
-                .httpOnly(true)
-                .secure(props.cookieSecure())
-                .sameSite("Lax")
-                .path("/")
-                .maxAge(Duration.ofSeconds(maxAgeSec))
-                .build();
-
-        String existingCsrf = csrfValidator.extractCookie(request, CsrfValidator.CSRF_COOKIE);
-        String csrfVal = (existingCsrf != null && !existingCsrf.isBlank()) ? existingCsrf : csrfValidator.newToken();
-        ResponseCookie csrfCookie = ResponseCookie.from(CsrfValidator.CSRF_COOKIE, csrfVal)
-                .httpOnly(false)
-                .secure(props.cookieSecure())
-                .sameSite("Lax")
-                .path("/")
-                .maxAge(Duration.ofSeconds(maxAgeSec))
-                .build();
-
-        response.addHeader(HttpHeaders.SET_COOKIE, accessCookie.toString());
-        response.addHeader(HttpHeaders.SET_COOKIE, csrfCookie.toString());
-    }
-
-    private void clearSessionCookies(HttpServletResponse response) {
-        ResponseCookie clearAccess = ResponseCookie.from(JwtService.ACCESS_COOKIE, "")
-                .httpOnly(true)
-                .secure(props.cookieSecure())
-                .sameSite("Lax")
-                .path("/")
-                .maxAge(0)
-                .build();
-        ResponseCookie clearCsrf = ResponseCookie.from(CsrfValidator.CSRF_COOKIE, "")
-                .httpOnly(false)
-                .secure(props.cookieSecure())
-                .sameSite("Lax")
-                .path("/")
-                .maxAge(0)
-                .build();
-        response.addHeader(HttpHeaders.SET_COOKIE, clearAccess.toString());
-        response.addHeader(HttpHeaders.SET_COOKIE, clearCsrf.toString());
-    }
-
-    private Map<String, Object> userOut(UUID id, String email, String displayName, int xp) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("id", IdCodec.format("usr", id));
-        out.put("email", email);
-        out.put("displayName", displayName);
-        out.put("xp", xp);
-        return out;
+    private Map<String, Object> loadUserOut(UUID uid) {
+        return jdbc.sql("""
+                SELECT id, email, display_name, xp, avatar, locale, app_language, lesson_language,
+                       onboarded_at, onboarding_profile::text AS onboarding_profile_json
+                FROM core.users
+                WHERE id = :id
+                """)
+                .param("id", uid)
+                .query((rs, rowNum) -> {
+                    Map<String, Object> out = new LinkedHashMap<>();
+                    out.put("id", IdCodec.format("usr", rs.getObject("id", UUID.class)));
+                    out.put("email", rs.getString("email"));
+                    out.put("displayName", rs.getString("display_name"));
+                    out.put("xp", rs.getInt("xp"));
+                    out.put("avatar", rs.getString("avatar"));
+                    out.put("locale", rs.getString("locale"));
+                    out.put("appLanguage", rs.getString("app_language"));
+                    out.put("lessonLanguage", rs.getString("lesson_language"));
+                    var oa = rs.getTimestamp("onboarded_at");
+                    out.put("onboardedAt", oa == null ? null : oa.toInstant().toString());
+                    String opJson = rs.getString("onboarding_profile_json");
+                    out.put("onboardingProfile", opJson == null ? null : json.fromJson(opJson, new TypeReference<Map<String, Object>>() {}));
+                    return out;
+                })
+                .optional()
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND", "Tài khoản không tồn tại."));
     }
 }

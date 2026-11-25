@@ -676,6 +676,21 @@ public class CourseController {
                 .map(id -> IdCodec.format("lsn", id))
                 .toList();
 
+        // Attach user's Phase 7 onboardingProfile as default pedagogy context when available
+        var onboardingStrOpt = jdbc.sql("SELECT onboarding_profile::text FROM core.users WHERE id = :uid")
+                .param("uid", principal.userId())
+                .query(String.class)
+                .optional();
+        Map<String, Object> jobPayload = new LinkedHashMap<>();
+        jobPayload.put("topic", courseRow.get("topic"));
+        jobPayload.put("language", courseRow.get("language"));
+        jobPayload.put("learnerProfile", payload.getOrDefault("learnerProfile", Map.of("currentLevel", "beginner")));
+        jobPayload.put("units", units);
+        jobPayload.put("lessonIds", orderedLessonIds);
+        if (onboardingStrOpt.isPresent() && onboardingStrOpt.get() != null) {
+            jobPayload.put("onboardingProfile", json.fromJson(onboardingStrOpt.get(), new TypeReference<Map<String, Object>>() {}));
+        }
+
         // Dispatch async generation job to Redis Stream `queue:ai:llm` for `ai-worker-llm`
         Map<String, Object> streamMsg = new LinkedHashMap<>();
         streamMsg.put("jobId", IdCodec.format("job", jobId));
@@ -685,13 +700,7 @@ public class CourseController {
         streamMsg.put("courseId", IdCodec.format("crs", cid));
         streamMsg.put("correlationId", "cor_" + jobId.toString().replace("-", "").substring(0, 16));
         streamMsg.put("attempt", 1);
-        streamMsg.put("payload", Map.of(
-                "topic", courseRow.get("topic"),
-                "language", courseRow.get("language"),
-                "learnerProfile", payload.getOrDefault("learnerProfile", Map.of("currentLevel", "beginner")),
-                "units", units,
-                "lessonIds", orderedLessonIds
-        ));
+        streamMsg.put("payload", jobPayload);
         aiEngine.enqueueLlmJob(streamMsg);
 
         return Map.of(

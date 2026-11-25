@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, newClientId, type CourseLanguage } from "@/lib/api";
 import { useRequireAuth } from "../providers";
+import { useI18n } from "@/components/i18n/I18nProvider";
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/Field";
 import Icon from "@/components/ui/Icon";
@@ -33,10 +34,15 @@ const YOUTUBE_URL_RE = /(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com|youtu\.be)
 export default function NewCoursePage() {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
+  const { lessonLanguage } = useI18n();
   const [topic, setTopic] = useState("");
-  const [language, setLanguage] = useState<CourseLanguage>("vi");
+  const [language, setLanguage] = useState<CourseLanguage>(lessonLanguage === "en" ? "en" : "vi");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLanguage(lessonLanguage === "en" ? "en" : "vi");
+  }, [lessonLanguage]);
 
   async function start(value?: string) {
     const finalTopic = (value ?? topic).trim();

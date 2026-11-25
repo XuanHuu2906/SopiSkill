@@ -85,3 +85,7 @@ sopiskill:
   hearts-refill-minutes: ${HEARTS_REFILL_MINUTES:30}
   hearts-enforcement-enabled: ${HEARTS_ENFORCEMENT_ENABLED:false}
   leagues-enabled: ${LEAGUES_ENABLED:false}
+  refresh-token-ttl-days: ${REFRESH_TOKEN_TTL_DAYS:30}
+  google-client-id: ${GOOGLE_CLIENT_ID:sopiskill-google-client}
+  apple-client-id: ${APPLE_CLIENT_ID:com.sopiskill.web}
+  vapid-public-key: ${VAPID_PUBLIC_KEY:}

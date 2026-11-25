@@ -2,6 +2,30 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 7 — OAuth2 (Google/Apple), Rotating Refresh Sessions, Onboarding 4 Bước, i18n (`vi`/`en`) & Web Push
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase7` (tách từ `feat/polyglot-phase6` `264b7a4`, đã push `origin/feat/polyglot-phase6`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
+- **IMPLEMENTED:**
+  - **Flyway `core` V6 (`core-api/src/main/resources/db/migration/V6__oauth_sessions_onboarding_and_push.sql`):** mở rộng `core.users` (`avatar` `happy|graduate|curious|wink|excited`, `locale`, `app_language`, `lesson_language`, `onboarded_at`, `onboarding_profile JSONB`) và tạo 5 bảng mới: `core.user_sessions` (`ses_`), `core.auth_identities` (`aid_`), `core.notification_preferences`, `core.push_subscriptions` (`psh_`), `core.in_app_notifications` (`ntf_`).
+  - **`core-api` Security, OAuth2 & Rotating Sessions (`SessionService`, `OAuthIdentityService`, `OAuthAndSessionController`, `AuthAndMeController`, `SecurityConfig`):**
+    - Xác thực chữ ký mật mã RS256/ES256 của OIDC ID Token **Google & Apple** (`POST /v1/auth/exchange`, kiểm tra `iss`, `aud`, `exp`, `sub`, `email`, chặn `alg=none`/HS downgrade); khi trùng email tài khoản hiện hữu tuyệt đối không tự liên kết mà trả **`409 ACCOUNT_LINK_REQUIRED`** kèm `linkTicket` ký HMAC-SHA256 TTL 5 phút, yêu cầu xác minh quyền sở hữu (mật khẩu Argon2id hoặc phiên đã đăng nhập đúng chủ tài khoản) qua `POST /v1/auth/link/confirm`; thêm `GET/POST /v1/me/identities`.
+    - Nâng cấp phiên sang **HttpOnly Access Cookie + Rotating HttpOnly Refresh Cookie (`Path=/v1/auth`, chỉ lưu SHA-256 hash)**: `POST /v1/auth/refresh` xoay vòng trong cùng `family_id` và **phát hiện reuse token đã xoay/đã thu hồi** để thu hồi tức thì toàn bộ `family_id` (`401 REFRESH_TOKEN_REUSE_DETECTED`); `POST /v1/auth/logout?all=true` thu hồi mọi thiết bị.
+  - **`core-api` Onboarding, i18n & Notifications/Web Push (`NotificationService`, `OnboardingAndNotificationsController`, `CourseController`):**
+    - `PUT /v1/me/onboarding` lưu đủ 4 nhóm (`roles, topics, learningStyles, goals`) và tự động đính kèm `onboardingProfile` vào payload sinh khóa học gửi sang `ai-engine`.
+    - Mở rộng `GET /v1/auth/me` & `PATCH /v1/me` tách độc lập `appLanguage` (khung 12 ngôn ngữ) với `lessonLanguage` cùng `avatar` và `locale`.
+    - `GET/PATCH /v1/me/notifications` (bắt buộc bước `15` phút `0..1425`, khung giờ yên lặng mặc định `22:00–08:00` xử lý qua đêm), `POST/DELETE /v1/push/register` (Web Push VAPID, xác thực endpoint HTTPS), trung tâm thông báo In-App (`/v1/me/notifications/inbox`), và bộ quét đủ **7 loại thông báo** (`course.ready`, `course.failed`, `league.settled`, `daily.reminder`, `streak.guard`, `weekly.recap`, `comeback.nudge` ngày `2, 4, 8, 15`).
+  - **`frontend/` Phase 7:**
+    - `I18nProvider.tsx` & `dictionaries.ts` (khung 12 ngôn ngữ, hoàn thiện 100% từ điển `vi` & `en`), đồng bộ tách biệt `appLanguage` và `lessonLanguage` qua `providers.tsx`, `AppFrame.tsx`, `/settings`, và `/new`.
+    - Luồng 4 bước mới `frontend/src/app/onboarding/page.tsx` + banner trên `/`, nút Google/Apple + `LinkAccountSheet.tsx` trên `/login`, `AvatarSheet.tsx` trên `/settings`, Service Worker `frontend/public/sw.js` cho Web Push, và `NotificationCenter.tsx` trên thanh điều hướng.
+- **TESTED (100% offline/mock + live 8-container Docker polyglot stack, 0đ chi phí):**
+  - `cd core-api && ./mvnw -B test` → **exit `0` (`Tests run: 13, Failures: 0, Errors: 0`, `15.95s`)** trên live PostgreSQL 16 (Flyway `V6`) + Redis 7 + MinIO + `ai-api`:
+    - `Phase7SecurityAndOnboardingTest` (`3/3`): chống chiếm tài khoản OAuth Google/Apple (token giả bị chặn `401`, trùng email trả `409 ACCOUNT_LINK_REQUIRED`, ticket giả/sai mật khẩu bị chặn `401`, đúng mật khẩu liên kết `200`); xoay vòng Refresh Token (`R1 → R2`, phát lại `R1` trả `401 REFRESH_TOKEN_REUSE_DETECTED` và vô hiệu hóa luôn `R2`, `logout?all=true` thu hồi mọi thiết bị); Onboarding 4 bước + tách độc lập `appLanguage`/`lessonLanguage` + kiểm tra bước 15 phút + Web Push HTTPS + chặn hoàn toàn thông báo trong quiet hours `22:00–08:00` và phát đúng ngoài quiet hours.
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8080 npm run build` → **exit `0`** (`0` warnings, `16/16` routes gồm `/onboarding`).
+  - `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8080 E2E_FRONTEND_PORT=3010 npm run test:e2e` → **exit `0` (`10 passed in 35.6s`, `axe-core` 0 violations)** — kịch bản #10 kiểm chứng luồng `/onboarding` 4 bước, đổi ngôn ngữ giao diện `vi ↔ en` độc lập với `lessonLanguage` trên `/new`, `AvatarSheet`, lưu lịch nhắc thông báo và mở `NotificationCenter`.
+- **NOT TESTED:**
+  - Luồng đăng nhập Google/Apple OAuth qua trang consent thực tế của Google/Apple và đẩy Web Push tới máy chủ FCM/APNs thật (yêu cầu OIDC Client ID & VAPID keys production; xác thực chữ ký RS256 OIDC, anti-takeover linking và đăng ký Push subscription đã được kiểm thử đầy đủ bằng JUnit).
+- **ROLLBACK:** Thuần Git + Docker tách biệt — revert nhánh `feat/polyglot-phase7`; Flyway `V6` thuần additive (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`).
+
 ## 2026-11-25 — Phase 6 — Gamification, Hearts (Timed + FSRS Refill), Milestones, `/complete` & Leagues
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase6` (tách từ `feat/polyglot-phase5` `6b1ac68`, đã push `origin/feat/polyglot-phase5`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.

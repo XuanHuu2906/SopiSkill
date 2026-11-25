@@ -87,6 +87,9 @@ public class SecurityConfig {
                                 "/v1/auth/register",
                                 "/v1/auth/login",
                                 "/v1/auth/logout",
+                                "/v1/auth/refresh",
+                                "/v1/auth/exchange",
+                                "/v1/auth/link/confirm",
                                 "/internal/**"
                         ).permitAll()
                         .anyRequest().authenticated()
