@@ -2,6 +2,34 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 5 — Agentic AI Tutor "Sopi" Đa Pod (6 Tools · 3 Thread Kinds · `PlanChat` · `ChangeCard` · `Last-Event-ID` · Redis Pub/Sub `/stop`)
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase5` (tách từ `feat/polyglot-phase4` `386f76c`, đã push `origin/feat/polyglot-phase4`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
+- **IMPLEMENTED:**
+  - **Flyway `core` V4 (`core-api/src/main/resources/db/migration/V4__tutor_threads_actions_and_entrypoints.sql`):** mở rộng `core.tutor_threads` (`kind` `'course'|'anchor'|'task'`, `anchor_key`, `sealed`, `lesson_id` nullable cho `PlanChat`), `core.tutor_messages` (`entry_point`, `context_label`), và tạo bảng `core.tutor_actions` (`act_`, vòng đời `pending | confirmed | declined | preparing | ready | failed | unavailable`).
+  - **`core-api/` Multi-Pod SSE Gateway & Actions:**
+    - `TutorRedisStreamService.java`: lưu tuần tự mọi SSE frame vào Redis Stream `tutor:stream:{messageId}` (TTL 10 phút) để nối lại bằng `Last-Event-ID` trên **bất kỳ pod nào**; phát & lắng nghe hủy tức thì xuyên pod qua Redis Pub/Sub `tutor:cancel:{messageId}` + cờ ngắn hạn `tutor:cancelled:{messageId}`.
+    - `TutorController.java` & `GlobalTutorSessionsController.java`: thêm `GET /v1/tutor/sessions` (liên khóa học gom nhóm `thisWeek` / `earlier`), `POST /v1/courses/{id}/tutor/sessions`, `GET /v1/courses/{id}/tutor` (lọc `entryPoint`, `anchor`, cursor `before`), `GET /v1/courses/{id}/tutor/messages/{msgId}/stream` (resume `Last-Event-ID` hoặc phát `restarted` khi stream hết hạn), `POST /v1/courses/{id}/tutor/actions/{actionId}/{confirm|decline}` (khi `confirm`, tăng `content_version + 1` trên toàn unit và đẩy job `regenerate_unit` lên `queue:ai:llm`), và xử lý server-side cho `tool_effect` (`flag_question` → `core.content_flags`, `revise_proposal` → `core.course_proposals` v+1 + SSE `proposal_revised`, `regenerate_unit` → `core.tutor_actions` `pending` + SSE `confirm`).
+    - `InternalCallbackController.java`: đồng bộ trạng thái `core.tutor_actions` sang `ready`/`failed` khi job `regenerate_unit` hoàn tất.
+  - **`ai-engine/` 6/6 Sopi Tools (`tutor_agent.py`, `schemas/internal.py`):** kích hoạt đủ 6/6 tool: `read_lesson`, `explain_deeper`, `read_source` (tra `sourceBrief.sections` theo `section_anchor` + Hybrid RAG), `flag_question`, `revise_proposal`, và `regenerate_unit` (chỉ xuất `preview` chờ xác nhận, không bao giờ tự sửa bài).
+  - **`frontend/` Phase 5:**
+    - `ChangeCard.tsx`: hiển thị preview viết lại chương, xác nhận/từ chối và poll 5s khi `preparing` cho tới `ready`.
+    - `PlanChat.tsx` + tích hợp trên `/new/proposal`: chat chỉnh đề cương trực tiếp, cập nhật `ProposalCard` sang `v+1` và thu gọn bản cũ vào `"Bản nháp trước"`.
+    - `TutorPanel.tsx` & `GlobalSopiSheet.tsx` & `api.ts`: 6 bộ prompt chips theo `entryPoint`, badge tên tool tiếng Việt cho 6/6 tools, danh sách phiên liên khóa `Tuần này` / `Trước đó`, và tự động nối lại bằng `Last-Event-ID` (`resumeTutorStream`).
+- **TESTED (100% offline/mock + live 8-container Docker polyglot stack + 2-replica `core-api`, 0đ chi phí):**
+  - `cd ai-engine && PGVECTOR_TEST_URL=...@127.0.0.1:5439/sopiskill REDIS_TEST_URL=redis://127.0.0.1:6380/0 AI_API_LIVE_URL=http://127.0.0.1:8010 ../backend/.venv/bin/python -m pytest -v` → **exit `0` (`38 passed, 0 failed, 0 skipped` trong `1.53s`)** (thêm 5 test Phase 5 trong `test_phase5_tutor_six_tools.py`).
+  - `cd ai-engine && ../backend/.venv/bin/python -m bandit -r app -q` → **exit `0` (0 findings, 0 `#nosec`)**.
+  - `cd core-api && ./mvnw -B test` → **exit `0` (`Tests run: 7, Failures: 0, Errors: 0`, `12.68s`)** — gồm **`Phase5MultiPodTutorTest`** chạy **2 instance `core-api` độc lập song song** sau Redis 7:
+    - Mở SSE trên Pod 1 → cắt TCP sau frame 1 → nối lại `Last-Event-ID` vào Pod 2 nhận trọn `delta` + `done` không rớt chữ.
+    - Mở SSE chậm trên Pod 1 → bắn `POST /stop` vào Pod 2 → Redis Pub/Sub dừng Pod 1 tức thì (`cancelled` + DB `status='cancelled'`).
+    - Xác minh `PlanChat` (`v1 → v2`), `flag_question` (`core.content_flags`), `ChangeCard` (`pending → declined` và `pending → confirm → preparing → ready` + `content_version` tăng 2), và `GET /v1/tutor/sessions`.
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8080 npm run build` → **exit `0`** (0 warnings, `14/14` routes).
+  - `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8080 E2E_FRONTEND_PORT=3010 npm run test:e2e` → **exit `0` (`8 passed in 29.6s`, `axe-core` 0 violations)** — kịch bản #8 kiểm chứng trọn vẹn `PlanChat` (`v1 → v2` + `"Bản nháp trước"`), `ChangeCard` confirm → `ai-worker-llm` chạy thật → `"Đã cập nhật"`, và phiên liên khóa `Tuần này` trên `GlobalSopiSheet`.
+- **NOT TESTED:**
+  - Chạy Sopi trên LLM provider trả phí (`MockProvider` mặc định 0đ chi phí).
+  - Chaos xóa Pod thật trên cụm Kubernetes `kind` (theo kế hoạch sẽ chạy ở Phase 10B).
+- **ROLLBACK:** Thuần Git + Docker tách biệt — revert nhánh `feat/polyglot-phase5`; Flyway `V4` thuần additive (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS core.tutor_actions`).
+
 ## 2026-11-25 — Phase 4 — Rich Lesson Content: KaTeX `.woff2`, 4 Loại Figure (7 SVG Layouts), Multi-Blank Word Bank & 5 Practice Formats
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase4` (tách từ `feat/polyglot-phase3` `4e309f4`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.

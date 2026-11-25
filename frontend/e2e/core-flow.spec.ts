@@ -628,3 +628,64 @@ test("Phase 4: Rich Lesson — KaTeX, SVG FigureRenderer, {termKey} VocabSheet, 
     }
   }
 });
+
+test("Phase 5: PlanChat proposal revision, Sopi ChangeCard rewrite, 6 tools, cross-course sessions & axe-core", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("phase5-sopi");
+  await registerUser(page, email);
+
+  // 1. Create course and reach /new/proposal
+  await page.goto("/new");
+  await page.getByRole("button", { name: "English" }).click();
+  await page.locator("#topic-input").fill("Distributed Streaming");
+  await page.getByRole("button", { name: "Bắt đầu" }).click();
+  await page.waitForURL("**/new/interview?courseId=*");
+
+  for (let i = 0; i < 5; i += 1) {
+    await expect(page.locator(".flow-header-meta")).toHaveText(`Câu ${i + 1}/5`);
+    await page.locator(".quick-chip").first().click();
+    const label = i === 4 ? "Gửi câu trả lời cuối" : "Câu tiếp theo";
+    await page.getByRole("button", { name: label }).click();
+  }
+  await page.waitForURL("**/new/proposal?courseId=*");
+
+  // 2. Use PlanChat on /new/proposal to revise outline -> version 2 + collapsible "Bản nháp trước"
+  await page.getByRole("button", { name: "Thêm bài dự án thực hành" }).click();
+  await expect(page.getByText("Sopi đã cập nhật đề xuất lên phiên bản 2.")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('[data-previous-drafts="true"]')).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // 3. Approve course -> enter Lesson 1 -> open Sopi -> trigger ChangeCard (`regenerate_unit`)
+  await page.getByRole("button", { name: "Tạo khóa học" }).click();
+  await page.waitForURL("**/course/crs_*", { timeout: 20_000 });
+  await page.locator('a[href^="/lesson/"]').first().click();
+  await page.waitForURL("**/lesson/lsn_*");
+
+  await page.getByRole("button", { name: "Hỏi Sopi" }).click();
+  const dialog = page.locator('[role="dialog"]');
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Phần này quá khó, viết lại chương giúp mình" }).click();
+  const changeCard = dialog.locator(".change-card").first();
+  await expect(changeCard).toBeVisible({ timeout: 15_000 });
+  await expect(dialog.getByText("Đề xuất viết lại chương").first()).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // Confirm ChangeCard -> preparing -> live ai-worker-llm completes -> ready ("Đã cập nhật")
+  await changeCard.getByRole("button", { name: "Xác nhận viết lại" }).click();
+  await expect(changeCard).toContainText(/Đang viết lại|Đã cập nhật/, { timeout: 15_000 });
+  await expect(changeCard).toContainText("Đã cập nhật", { timeout: 25_000 });
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  // 4. Open GlobalSopiSheet from sidebar on home -> verify cross-course sessions ("Phiên hỏi Sopi gần đây")
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "Hỏi Sopi" }).click();
+  const globalDialog = page.locator('[role="dialog"]');
+  await expect(globalDialog).toBeVisible();
+  await expect(globalDialog.getByText(/Phiên hỏi Sopi gần đây/)).toBeVisible({ timeout: 10_000 });
+  await expectNoAxeViolations(page);
+});

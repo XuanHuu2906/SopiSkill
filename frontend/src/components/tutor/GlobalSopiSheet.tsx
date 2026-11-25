@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type CourseListItem } from "@/lib/api";
+import { api, fetchGlobalTutorSessions, type CourseListItem } from "@/lib/api";
 import { useSessionQueryKey } from "@/app/providers";
 import TutorPanel from "@/app/lesson/[lessonId]/TutorPanel";
 import { ButtonLink, IconButton } from "@/components/ui/Button";
@@ -63,6 +63,14 @@ export default function GlobalSopiSheet({
     });
   }, [open, initialCourseId, defaultCourseId, readyCourses]);
 
+  const globalSessionsKey = useSessionQueryKey("global-tutor-sessions");
+  const globalSessions = useQuery({
+    queryKey: globalSessionsKey,
+    enabled: open,
+    queryFn: () => fetchGlobalTutorSessions(30),
+    retry: false,
+  });
+
   const activeCourse = readyCourses.find((c) => c.id === selectedCourseId) ?? null;
   const needsFallbackLesson = Boolean(open && activeCourse && !activeCourse.resumeLessonId);
   const courseLookupKey = useSessionQueryKey("sopi-course-lookup", activeCourse?.id ?? "none");
@@ -111,6 +119,8 @@ export default function GlobalSopiSheet({
         docked={false}
         courseOptions={readyCourses.map((c) => ({ id: c.id, topic: c.topic }))}
         onSelectCourse={(nextId) => setSelectedCourseId(nextId)}
+        globalSessions={globalSessions.data}
+        onSelectSession={(nextCourseId) => setSelectedCourseId(nextCourseId)}
       />
     );
   }

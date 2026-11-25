@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import Icon from "@/components/ui/Icon";
+import PlanChat from "@/components/tutor/PlanChat";
 
 interface ProposalUnit {
   title: string;
@@ -108,6 +109,7 @@ function ProposalInner() {
   const [draftOutcomesText, setDraftOutcomesText] = useState("");
   const [draftUnits, setDraftUnits] = useState<ProposalUnit[]>([]);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [previousDrafts, setPreviousDrafts] = useState<ProposalOut[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const proposal = useQuery({
@@ -511,6 +513,61 @@ function ProposalInner() {
               </ol>
             </Card>
           ))}
+
+          {previousDrafts.length > 0 && (
+            <details
+              className="course-disclosure"
+              style={{ marginTop: 14 }}
+              data-previous-drafts="true"
+            >
+              <summary>
+                <span>Bản nháp trước ({previousDrafts.length})</span>
+                <Icon name="chevronDown" size={18} />
+              </summary>
+              <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                {previousDrafts.map((draft) => (
+                  <div
+                    key={draft.version}
+                    style={{
+                      padding: 12,
+                      borderRadius: "var(--radius-sm)",
+                      border: "1px solid var(--linen)",
+                      background: "var(--surface)",
+                    }}
+                  >
+                    <div className="caption" style={{ fontWeight: 700 }}>
+                      Phiên bản {draft.version} — {draft.payload.name}
+                    </div>
+                    <p className="caption" style={{ marginTop: 4 }}>
+                      {draft.payload.objective}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {!proposal.data.approved && (
+            <PlanChat
+              courseId={courseId}
+              disabled={approving}
+              onProposalRevised={(revised) => {
+                if (proposal.data) {
+                  setPreviousDrafts((prev) => [proposal.data!, ...prev]);
+                }
+                const nextOut: ProposalOut = {
+                  version: revised.version,
+                  approved: revised.approved,
+                  payload: {
+                    ...(proposal.data?.payload ?? {}),
+                    ...revised.payload,
+                  },
+                };
+                queryClient.setQueryData(proposalKey, nextOut);
+                setSaveMessage(`Sopi đã cập nhật đề xuất lên phiên bản ${revised.version}.`);
+              }}
+            />
+          )}
         </>
       )}
 

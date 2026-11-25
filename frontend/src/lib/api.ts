@@ -267,12 +267,15 @@ export interface TutorMessage {
 export interface TutorThread {
   id: string;
   courseId: string;
-  lessonId: string;
+  lessonId: string | null;
+  kind?: "course" | "anchor" | "task";
+  anchorKey?: string | null;
   title: string;
   messageCount: number;
   createdAt: string | null;
   updatedAt: string | null;
   messages: TutorMessage[];
+  actions?: TutorAction[];
   replaySupported: boolean;
   notice: string | null;
 }
@@ -305,7 +308,68 @@ export function fetchTutorThread(
   );
 }
 
+export type TutorEntryPoint =
+  | "tab"
+  | "wrong_answer"
+  | "teach_block"
+  | "term"
+  | "path_harder"
+  | "proposal";
+
+export interface TutorAction {
+  actionId: string;
+  id?: string;
+  messageId?: string;
+  toolName: string;
+  status: "pending" | "confirmed" | "declined" | "preparing" | "ready" | "failed" | "unavailable";
+  payload?: { unitId?: string; unitTitle?: string };
+  preview?: { unitTitle?: string; direction?: string; summary?: string; changes?: string[] };
+  jobId?: string | null;
+}
+
+export interface GlobalTutorSession {
+  id: string;
+  courseId: string;
+  lessonId: string | null;
+  courseTopic: string;
+  kind: "course" | "anchor" | "task";
+  anchorKey: string | null;
+  title: string;
+  sealed: boolean;
+  messageCount: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface GlobalTutorSessionList {
+  items: GlobalTutorSession[];
+  thisWeek: GlobalTutorSession[];
+  earlier: GlobalTutorSession[];
+  total: number;
+}
+
+export function fetchGlobalTutorSessions(limit = 30): Promise<GlobalTutorSessionList> {
+  return api<GlobalTutorSessionList>(`/v1/tutor/sessions?limit=${limit}`);
+}
+
+export function fetchTutorAction(courseId: string, actionId: string): Promise<TutorAction> {
+  return api<TutorAction>(`/v1/courses/${courseId}/tutor/actions/${actionId}`);
+}
+
+export function confirmTutorAction(courseId: string, actionId: string): Promise<TutorAction> {
+  return api<TutorAction>(`/v1/courses/${courseId}/tutor/actions/${actionId}/confirm`, {
+    method: "POST",
+  });
+}
+
+export function declineTutorAction(courseId: string, actionId: string): Promise<TutorAction> {
+  return api<TutorAction>(`/v1/courses/${courseId}/tutor/actions/${actionId}/decline`, {
+    method: "POST",
+  });
+}
+
 export interface TutorStreamEvent {
+  id?: string;
   event:
     | "delta"
     | "done"
@@ -313,10 +377,14 @@ export interface TutorStreamEvent {
     | "heartbeat"
     | "cancelled"
     | "tool"
-    | "citations";
+    | "citations"
+    | "confirm"
+    | "proposal_revised"
+    | "restarted";
   data: {
     streamId?: string;
     messageId?: string;
+    threadId?: string;
     seq?: number;
     text?: string;
     code?: string;
@@ -327,9 +395,17 @@ export interface TutorStreamEvent {
     reason?: string;
     partial?: boolean;
     name?: string;
-    status?: "ok" | "failed";
+    status?: string;
     summary?: string;
     durationMs?: number;
+    // Phase 5 confirm / proposal_revised / restarted payloads
+    actionId?: string;
+    toolName?: string;
+    payload?: Record<string, unknown>;
+    preview?: { unitTitle?: string; direction?: string; summary?: string; changes?: string[] };
+    version?: number;
+    approved?: boolean;
+    content?: string;
     // Frame `citations` (P4.1): chỉ chứa id đã verify server-side.
     citations?: TutorCitation[];
     unverified?: Array<{
@@ -427,18 +503,70 @@ export class TutorStreamError extends Error {
  * - `onThreadId` nhận thread id từ response header trước delta đầu tiên.
  * - Parse đúng chuẩn frame (`id:`, `event:`, `data:`) và xử lý data nhiều dòng.
  */
+async function consumeSseBody(
+  body: ReadableStream<Uint8Array>,
+  handlers: {
+    onEventId?: (eventId: string) => void;
+    onEvent: (event: TutorStreamEvent) => void;
+  }
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const rawFrame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+
+      let eventName = "message";
+      let eventId: string | undefined;
+      const dataLines: string[] = [];
+      for (const line of rawFrame.split("\n")) {
+        if (line.startsWith("id:")) eventId = line.slice(3).trim();
+        else if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      }
+      if (eventId) handlers.onEventId?.(eventId);
+      if (dataLines.length === 0) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(dataLines.join("\n"));
+      } catch {
+        continue; // frame hỏng: bỏ qua, không làm crash UI
+      }
+      handlers.onEvent({
+        id: eventId,
+        event: eventName as TutorStreamEvent["event"],
+        data: parsed as TutorStreamEvent["data"],
+      });
+    }
+  }
+}
+
 export async function streamTutorMessage(
   courseId: string,
   body: {
     clientMessageId: string;
     threadId: string | null;
     text: string;
-    contextRef: { lessonId: string; blockIndex: number };
+    contextRef?: { lessonId: string; blockIndex: number } | null;
+    entryPoint?: TutorEntryPoint;
+    contextLabel?: string;
+    threadKind?: "course" | "anchor" | "task";
+    anchorKey?: string;
   },
   handlers: {
     signal?: AbortSignal;
     onThreadId?: (threadId: string) => void;
     onMessageId?: (messageId: string) => void;
+    onEventId?: (eventId: string) => void;
     onEvent: (event: TutorStreamEvent) => void;
   }
 ): Promise<void> {
@@ -478,40 +606,36 @@ export async function streamTutorMessage(
   if (messageId) handlers.onMessageId?.(messageId);
   if (!res.body) throw new TutorStreamError(500, "NO_STREAM", "Server không trả stream.");
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
+  await consumeSseBody(res.body, handlers);
+}
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const rawFrame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      boundary = buffer.indexOf("\n\n");
-
-      let eventName = "message";
-      const dataLines: string[] = [];
-      for (const line of rawFrame.split("\n")) {
-        if (line.startsWith("event:")) eventName = line.slice(6).trim();
-        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
-      }
-      if (dataLines.length === 0) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(dataLines.join("\n"));
-      } catch {
-        continue; // frame hỏng: bỏ qua, không làm crash UI
-      }
-      handlers.onEvent({
-        event: eventName as TutorStreamEvent["event"],
-        data: parsed as TutorStreamEvent["data"],
-      });
-    }
+export async function resumeTutorStream(
+  courseId: string,
+  messageId: string,
+  lastEventId: string,
+  handlers: {
+    signal?: AbortSignal;
+    onEventId?: (eventId: string) => void;
+    onEvent: (event: TutorStreamEvent) => void;
   }
+): Promise<void> {
+  const res = await fetch(
+    `${API_URL}/v1/courses/${courseId}/tutor/messages/${messageId}/stream?lastEventId=${encodeURIComponent(lastEventId)}`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "text/event-stream",
+        "Last-Event-ID": lastEventId,
+      },
+      credentials: "include",
+      cache: "no-store",
+      signal: handlers.signal,
+    }
+  );
+  if (!res.ok || !res.body) {
+    throw new TutorStreamError(res.status, "RESUME_FAILED", "Không thể nối lại luồng Sopi.");
+  }
+  await consumeSseBody(res.body, handlers);
 }
 
 // ---------- Source Ingestion (P4.0) ----------

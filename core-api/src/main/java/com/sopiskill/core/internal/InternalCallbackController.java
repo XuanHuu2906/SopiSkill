@@ -76,6 +76,10 @@ public class InternalCallbackController {
 
         String existingStatus = String.valueOf(jobRow.get("status"));
         if ("ready".equals(existingStatus) || "failed".equals(existingStatus)) {
+            jdbc.sql("UPDATE core.tutor_actions SET status = :st, updated_at = now() WHERE job_id = :jid AND status = 'preparing'")
+                    .param("st", existingStatus)
+                    .param("jid", jid)
+                    .update();
             return Map.of("accepted", true, "duplicate", true);
         }
 
@@ -137,6 +141,10 @@ public class InternalCallbackController {
             jdbc.sql("UPDATE core.courses SET status = 'ready', updated_at = now() WHERE id = :cid")
                     .param("cid", courseId)
                     .update();
+
+            jdbc.sql("UPDATE core.tutor_actions SET status = 'ready', updated_at = now() WHERE job_id = :jid")
+                    .param("jid", jid)
+                    .update();
         } else {
             String errCode = String.valueOf(body.getOrDefault("errorCode", "GENERATION_FAILED"));
             String errMsg = String.valueOf(body.getOrDefault("errorMessage", "Sinh khóa học thất bại."));
@@ -153,6 +161,10 @@ public class InternalCallbackController {
 
             jdbc.sql("UPDATE core.courses SET status = 'failed', updated_at = now() WHERE id = :cid")
                     .param("cid", courseId)
+                    .update();
+
+            jdbc.sql("UPDATE core.tutor_actions SET status = 'failed', updated_at = now() WHERE job_id = :jid")
+                    .param("jid", jid)
                     .update();
         }
 
@@ -231,6 +243,12 @@ public class InternalCallbackController {
                     .param("total", totalLessonsCount)
                     .param("jid", jid)
                     .update();
+
+            if (readyLessonsCount >= totalLessonsCount) {
+                jdbc.sql("UPDATE core.tutor_actions SET status = 'ready', updated_at = now() WHERE job_id = :jid")
+                        .param("jid", jid)
+                        .update();
+            }
         } else {
             jdbc.sql("UPDATE core.lessons SET status = 'failed', updated_at = now() WHERE id = :lid AND course_id = :cid")
                     .param("lid", lid)
