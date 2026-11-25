@@ -810,3 +810,207 @@ test("Phase 7: 4-step /onboarding, independent UI i18n (vi <-> en) vs lessonLang
   await expectNoAxeViolations(page);
   await page.keyboard.press("Escape");
 });
+
+test("Phase 8: Offline-First IndexedDB 6 stores, 0 answer keys, offline learn/submit -> online auto-sync XP & owner isolation A -> B", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const userA = uniqueEmail("phase8-a");
+  const userB = uniqueEmail("phase8-b");
+  const topic = "Offline Algorithms";
+
+  await registerUser(page, userA);
+  await createAndGenerateCourse(page, topic, "en");
+
+  // Wait for smart background prefetch to populate IndexedDB (`cached_courses`, `cached_lessons`, `cached_glossary`)
+  await expect
+    .poll(
+      async () => {
+        return page.evaluate(async () => {
+          return new Promise<{ stores: string[]; lessonCount: number; hasForbidden: boolean }>((resolve) => {
+            const req = window.indexedDB.open("sopiskill_offline_v1", 1);
+            req.onerror = () => resolve({ stores: [], lessonCount: 0, hasForbidden: false });
+            req.onsuccess = () => {
+              const db = req.result;
+              const stores = Array.from(db.objectStoreNames).sort();
+              if (!stores.includes("cached_lessons")) {
+                resolve({ stores, lessonCount: 0, hasForbidden: false });
+                return;
+              }
+              const tx = db.transaction("cached_lessons", "readonly");
+              const getAllReq = tx.objectStore("cached_lessons").getAll();
+              getAllReq.onsuccess = () => {
+                const lessons = getAllReq.result ?? [];
+                const raw = JSON.stringify(lessons);
+                const forbidden = ['"answerIndex"', '"acceptedAnswers"', '"answer_key"', '"solution"', '"outcomes"'];
+                const hasForbidden = forbidden.some((k) => raw.includes(k));
+                resolve({ stores, lessonCount: lessons.length, hasForbidden });
+              };
+            };
+          });
+        });
+      },
+      { timeout: 15_000 },
+    )
+    .toMatchObject({
+      stores: [
+        "cached_courses",
+        "cached_glossary",
+        "cached_lessons",
+        "cached_reel_clips",
+        "local_prefs",
+        "outbox_attempts",
+      ],
+      hasForbidden: false,
+    });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          () =>
+            new Promise<number>((resolve) => {
+              const req = window.indexedDB.open("sopiskill_offline_v1", 1);
+              req.onsuccess = () => {
+                const tx = req.result.transaction("cached_lessons", "readonly");
+                const r = tx.objectStore("cached_lessons").count();
+                r.onsuccess = () => resolve(r.result);
+              };
+            }),
+        ),
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThanOrEqual(1);
+
+  // Grab Lesson 1 href before going offline
+  const firstLessonLink = page.locator('a[href^="/lesson/"]').first();
+  await expect(firstLessonLink).toBeVisible();
+
+  // Go OFFLINE -> verify OfflineBar, open Lesson 1 & VocabSheet from IndexedDB, complete & submit raw answers!
+  await context.setOffline(true);
+  await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+  await expect(page.getByTestId("offline-bar")).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  await firstLessonLink.click();
+  await page.waitForURL("**/lesson/lsn_*");
+  await expect(page.locator(".lesson-counter")).toHaveText("1/6");
+
+  // Open VocabSheet completely offline (reads from `cached_glossary`)
+  await page.getByRole("button", { name: "Bảng thuật ngữ" }).click();
+  await expect(page.locator('[role="dialog"]')).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Answer all 6 steps completely offline
+  const nextBtn = page.locator(".lesson-bar-primary");
+  await nextBtn.click(); // 1 -> 2 (mc)
+  await page.locator('[role="radio"]').first().click();
+  await nextBtn.click(); // 2 -> 3 (blank)
+  await page.locator('input[id^="blank-"]').fill(topic);
+  await nextBtn.click(); // 3 -> 4 (order)
+  await nextBtn.click(); // 4 -> 5 (match)
+  const selects = page.locator('select[id^="match-"]');
+  const selectCount = await selects.count();
+  for (let i = 0; i < selectCount; i += 1) {
+    const sel = selects.nth(i);
+    const optVal = await sel.locator("option").nth(1).getAttribute("value");
+    await sel.selectOption(optVal!);
+  }
+  await nextBtn.click(); // 5 -> 6 (short)
+  await page.locator('input[id^="short-"]').fill(topic);
+  await nextBtn.click(); // submit offline -> queues in `outbox_attempts` & opens /complete pendingSync
+
+  await page.waitForURL("**/lesson/lsn_*/complete", { timeout: 15_000 });
+  await expect(page.getByTestId("complete-pending-sync")).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // Confirm 1 raw-answer item sits in IndexedDB `outbox_attempts` bound to User A
+  const outboxBefore = await page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        const req = window.indexedDB.open("sopiskill_offline_v1", 1);
+        req.onsuccess = () => {
+          const tx = req.result.transaction("outbox_attempts", "readonly");
+          const r = tx.objectStore("outbox_attempts").count();
+          r.onsuccess = () => resolve(r.result);
+        };
+      }),
+  );
+  expect(outboxBefore).toBe(1);
+
+  // Go back ONLINE -> verify automatic FIFO sync flushes outbox, upgrades /complete & awards real XP!
+  await context.setOffline(false);
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+
+  await expect(page.getByTestId("complete-pending-sync")).toBeHidden({ timeout: 15_000 });
+  await expect(page.getByTestId("unit-breakdown")).toBeVisible({ timeout: 15_000 });
+
+  // Verify outbox is empty after sync and Home reflects real server XP
+  const outboxAfter = await page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        const req = window.indexedDB.open("sopiskill_offline_v1", 1);
+        req.onsuccess = () => {
+          const tx = req.result.transaction("outbox_attempts", "readonly");
+          const r = tx.objectStore("outbox_attempts").count();
+          r.onsuccess = () => resolve(r.result);
+        };
+      }),
+  );
+  expect(outboxAfter).toBe(0);
+
+  await page.getByRole("link", { name: "Về trang chủ" }).click();
+  await page.waitForURL("**/");
+  await expect(page.locator(".side-nav")).toContainText(/[1-9]\d* XP/);
+
+  // Account switch isolation (A -> B): logout clears IndexedDB, AND a stale foreign-owner outbox entry is purged when B logs in!
+  await page.getByRole("button", { name: "Đăng xuất" }).click();
+  await page.waitForURL("**/login");
+
+  // Plant a synthetic foreign outbox entry to verify `ensureOfflineOwner(userB.id)` + `flushOutboxAttempts` strict owner check
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const req = window.indexedDB.open("sopiskill_offline_v1", 1);
+        req.onsuccess = () => {
+          const tx = req.result.transaction(["outbox_attempts", "local_prefs"], "readwrite");
+          tx.objectStore("local_prefs").put({ key: "activeOwnerId", value: "usr_user_a_foreign", updatedAt: Date.now() });
+          tx.objectStore("outbox_attempts").put({
+            clientAttemptId: "att-foreign-should-purge",
+            owner: "usr_user_a_foreign",
+            lessonId: "lsn_00000000000000000000000000000000",
+            courseId: null,
+            lessonTitle: "Foreign",
+            contentVersion: 1,
+            answers: [],
+            attempts: 0,
+            nextRetryAt: 0,
+            createdAt: Date.now(),
+            lastError: null,
+          });
+          tx.oncomplete = () => resolve();
+        };
+      }),
+  );
+
+  await registerUser(page, userB);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          () =>
+            new Promise<number>((resolve) => {
+              const req = window.indexedDB.open("sopiskill_offline_v1", 1);
+              req.onsuccess = () => {
+                const tx = req.result.transaction("outbox_attempts", "readonly");
+                const r = tx.objectStore("outbox_attempts").count();
+                r.onsuccess = () => resolve(r.result);
+              };
+            }),
+        ),
+      { timeout: 10_000 },
+    )
+    .toBe(0);
+  await expect(page.locator(".side-nav")).toContainText("0 XP");
+});

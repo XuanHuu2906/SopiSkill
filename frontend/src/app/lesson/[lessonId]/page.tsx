@@ -14,6 +14,15 @@ import {
   type Citation,
 } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
+import {
+  getCachedLesson,
+  invalidateStaleCachedLesson,
+  putCachedLesson,
+} from "@/lib/offline/db";
+import {
+  enqueueOfflineAttempt,
+  isLikelyNetworkError,
+} from "@/lib/offline/outbox";
 import { Badge } from "@/components/ui/Badge";
 import { Button, ButtonLink, IconButton } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -345,15 +354,40 @@ export default function LessonPage() {
   const { lessonId } = useParams<{ lessonId: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
+  const { user, isAuthenticated, isLoading: authLoading } = useRequireAuth();
   const lessonKey = useSessionQueryKey("lesson", lessonId);
 
   const lesson = useQuery({
     queryKey: lessonKey,
-    queryFn: () =>
-      api<LessonOut>(`/v1/lessons/${lessonId}`, {
-        headers: { "X-Client-Blocks": CLIENT_BLOCKS_CAPABILITIES },
-      }),
+    networkMode: "always",
+    queryFn: async () => {
+      if (user?.id && typeof navigator !== "undefined" && !navigator.onLine) {
+        const cached = await getCachedLesson<LessonOut>(lessonId, user.id);
+        if (cached) return cached;
+      }
+      try {
+        const fresh = await api<LessonOut>(`/v1/lessons/${lessonId}`, {
+          headers: { "X-Client-Blocks": CLIENT_BLOCKS_CAPABILITIES },
+        });
+        if (user?.id) {
+          await invalidateStaleCachedLesson(lessonId, fresh.contentVersion).catch(() => {});
+          void putCachedLesson(
+            lessonId,
+            fresh.courseId ?? null,
+            user.id,
+            fresh.contentVersion,
+            fresh,
+          ).catch(() => {});
+        }
+        return fresh;
+      } catch (err) {
+        if (user?.id && isLikelyNetworkError(err)) {
+          const cached = await getCachedLesson<LessonOut>(lessonId, user.id);
+          if (cached) return cached;
+        }
+        throw err;
+      }
+    },
     enabled: !!lessonId && isAuthenticated,
   });
 
@@ -495,6 +529,47 @@ export default function LessonPage() {
     });
   }
 
+  async function saveAttemptToOutboxAndFinish(payload: {
+    clientAttemptId: string;
+    contentVersion: number;
+    answers: { index: number; answer: AnswerValue }[];
+  }) {
+    if (!lesson.data || !user?.id) return;
+    await enqueueOfflineAttempt({
+      owner: user.id,
+      clientAttemptId: payload.clientAttemptId,
+      lessonId,
+      courseId: lesson.data.courseId ?? null,
+      lessonTitle: lesson.data.title,
+      contentVersion: payload.contentVersion,
+      answers: payload.answers,
+    });
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage.setItem(
+          `sopiskill:complete:${lessonId}`,
+          JSON.stringify({
+            attemptId: payload.clientAttemptId,
+            duplicate: false,
+            pendingSync: true,
+            lessonTitle: lesson.data.title,
+            courseId: lesson.data.courseId ?? null,
+            score: { correct: 0, total: gradableCount },
+            rewards: { xp: user.xp ?? 0, xpEarned: 0 },
+            unitBreakdown: [],
+            newlyEarnedMilestones: [],
+            reviewCardCreated: false,
+            results: [],
+          }),
+        );
+      } catch {
+        // ignore storage errors
+      }
+    }
+    attemptKeyRef.current = null;
+    router.push(`/lesson/${lessonId}/complete`);
+  }
+
   function submit() {
     if (!lesson.data) return;
     const answers = buildAnswers(
@@ -518,12 +593,31 @@ export default function LessonPage() {
     if (!attemptKeyRef.current || attemptKeyRef.current.fingerprint !== fingerprint) {
       attemptKeyRef.current = { fingerprint, id: newClientId("att") };
     }
-    submitMutation.mutate({
+    const payload = {
       clientAttemptId: attemptKeyRef.current.id,
       contentVersion: lesson.data.contentVersion,
       answers,
+    };
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      void saveAttemptToOutboxAndFinish(payload);
+      return;
+    }
+
+    submitMutation.mutate(payload, {
+      onError: (err) => {
+        if (isLikelyNetworkError(err)) {
+          void saveAttemptToOutboxAndFinish(payload);
+        }
+      },
     });
   }
+
+  useEffect(() => {
+    if (lessonId) {
+      router.prefetch(`/lesson/${lessonId}/complete`);
+    }
+  }, [lessonId, router]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "auto" });

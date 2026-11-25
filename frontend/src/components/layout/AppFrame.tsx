@@ -15,6 +15,7 @@ import { useI18n } from "@/components/i18n/I18nProvider";
 import type { I18nKey } from "@/components/i18n/dictionaries";
 import { AvatarBadge } from "@/components/auth/AvatarSheet";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
+import OfflineBar from "@/components/offline/OfflineBar";
 import Icon, { type IconName } from "../ui/Icon";
 import { ProgressRing } from "../ui/Progress";
 import { useTheme } from "./ThemeProvider";
@@ -119,7 +120,10 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
   if (pathname === "/" && (isLoading || !user)) {
     return (
       <div className="app-shell is-marketing">
-        <main className="app-content">{children}</main>
+        <main className="app-content">
+          <OfflineBar />
+          {children}
+        </main>
       </div>
     );
   }
@@ -255,7 +259,10 @@ export default function AppFrame({ children }: { children: React.ReactNode }) {
           </div>
         </nav>
 
-        <main className="app-content">{children}</main>
+        <main className="app-content">
+          <OfflineBar />
+          {children}
+        </main>
 
         {!focusMode && <TabBar />}
 

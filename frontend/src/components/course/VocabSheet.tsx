@@ -2,8 +2,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { fetchCourseGlossary } from "@/lib/api";
-import { useSessionQueryKey } from "@/app/providers";
+import { fetchCourseGlossary, type CourseGlossary } from "@/lib/api";
+import { useAuth, useSessionQueryKey } from "@/app/providers";
+import { getCachedGlossary, putCachedGlossary } from "@/lib/offline/db";
+import { isLikelyNetworkError } from "@/lib/offline/outbox";
 import { Badge } from "@/components/ui/Badge";
 import { IconButton } from "@/components/ui/Button";
 import Icon from "@/components/ui/Icon";
@@ -23,6 +25,7 @@ export default function VocabSheet({
   onClose: () => void;
 }) {
   const sheetRef = useRef<HTMLDivElement | null>(null);
+  const { data: user } = useAuth();
   const [search, setSearch] = useState(initialQuery ?? "");
   const [scopeLessonOnly, setScopeLessonOnly] = useState(Boolean(lessonId));
 
@@ -43,8 +46,35 @@ export default function VocabSheet({
 
   const glossary = useQuery({
     queryKey: glossaryKey,
+    networkMode: "always",
     enabled: open && Boolean(courseId),
-    queryFn: () => fetchCourseGlossary(courseId, activeLessonId),
+    queryFn: async () => {
+      if (user?.id && typeof navigator !== "undefined" && !navigator.onLine) {
+        const cached = await getCachedGlossary<CourseGlossary>(
+          courseId,
+          activeLessonId,
+          user.id,
+        );
+        if (cached) return cached;
+      }
+      try {
+        const fresh = await fetchCourseGlossary(courseId, activeLessonId);
+        if (user?.id) {
+          void putCachedGlossary(courseId, activeLessonId, user.id, fresh).catch(() => {});
+        }
+        return fresh;
+      } catch (err) {
+        if (user?.id && isLikelyNetworkError(err)) {
+          const cached = await getCachedGlossary<CourseGlossary>(
+            courseId,
+            activeLessonId,
+            user.id,
+          );
+          if (cached) return cached;
+        }
+        throw err;
+      }
+    },
   });
 
   if (!open) return null;

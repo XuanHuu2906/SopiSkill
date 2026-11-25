@@ -21,6 +21,9 @@ import {
   type CoursePathOut,
 } from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
+import { getCachedCourse, putCachedCourse } from "@/lib/offline/db";
+import { isLikelyNetworkError } from "@/lib/offline/outbox";
+import { prefetchCourseOffline } from "@/lib/offline/prefetch";
 import { Badge } from "@/components/ui/Badge";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { ProgressBar, ProgressRing } from "@/components/ui/Progress";
@@ -96,7 +99,7 @@ export default function CoursePage() {
   const { courseId } = useParams<{ courseId: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
+  const { user, isAuthenticated, isLoading: authLoading } = useRequireAuth();
   const { openSopi } = useSopi();
   const [vocabOpen, setVocabOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -140,15 +143,51 @@ export default function CoursePage() {
 
   const course = useQuery<CoursePathOut>({
     queryKey: courseKey,
+    networkMode: "always",
     enabled: !!courseId && isAuthenticated,
-    queryFn: () => fetchCoursePath(courseId),
+    queryFn: async () => {
+      if (user?.id && typeof navigator !== "undefined" && !navigator.onLine) {
+        const cached = await getCachedCourse<CoursePathOut>(courseId, user.id);
+        if (cached) return cached;
+      }
+      try {
+        const fresh = await fetchCoursePath(courseId);
+        if (user?.id) {
+          void putCachedCourse(courseId, user.id, fresh).catch(() => {});
+          void prefetchCourseOffline(fresh, user.id).catch(() => {});
+        }
+        return fresh;
+      } catch (err) {
+        if (user?.id && isLikelyNetworkError(err)) {
+          const cached = await getCachedCourse<CoursePathOut>(courseId, user.id);
+          if (cached) return cached;
+        }
+        throw err;
+      }
+    },
     refetchInterval: (q) => {
+      if (typeof navigator !== "undefined" && !navigator.onLine) return false;
       const data = q.state.data;
       if (!data) return false;
       if (data.hasPreparingLessons) return 5000;
       return ["ready", "failed"].includes(data.status) ? false : 2000;
     },
   });
+
+  // Warm Next.js App Router JS chunks + SW cache for up to 3 ready lessons & /complete
+  useEffect(() => {
+    if (!course.data || (typeof navigator !== "undefined" && !navigator.onLine)) return;
+    const readyIds: string[] = [];
+    for (const u of course.data.units ?? []) {
+      for (const l of u.lessons ?? []) {
+        if (l.status === "ready") readyIds.push(l.id);
+      }
+    }
+    for (const id of readyIds.slice(0, 3)) {
+      router.prefetch(`/lesson/${id}`);
+      router.prefetch(`/lesson/${id}/complete`);
+    }
+  }, [course.data, router]);
 
   const deleteCourseMut = useMutation({
     mutationFn: () => deleteCourse(courseId),

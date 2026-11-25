@@ -12,6 +12,9 @@ import { fetchMe, logoutRequest, type AuthUser } from "@/lib/api";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { I18nProvider, useI18n } from "@/components/i18n/I18nProvider";
 import type { SupportedLanguage } from "@/components/i18n/dictionaries";
+import { OfflineProvider } from "@/components/offline/OfflineProvider";
+import { clearOfflineDatabase, idbGet, idbPut, type LocalPrefRecord } from "@/lib/offline/db";
+import { isLikelyNetworkError } from "@/lib/offline/outbox";
 
 /**
  * Session-aware query cache.
@@ -39,10 +42,39 @@ export function useSession() {
   return useContext(SessionContext);
 }
 
+async function fetchMeOfflineAware(): Promise<AuthUser | null> {
+  try {
+    const me = await fetchMe();
+    if (me) {
+      await idbPut<LocalPrefRecord>("local_prefs", {
+        key: "cachedUser",
+        value: me,
+        updatedAt: Date.now(),
+      }).catch(() => {});
+    } else {
+      await idbPut<LocalPrefRecord>("local_prefs", {
+        key: "cachedUser",
+        value: null,
+        updatedAt: Date.now(),
+      }).catch(() => {});
+    }
+    return me;
+  } catch (err) {
+    if (isLikelyNetworkError(err)) {
+      const cached = await idbGet<LocalPrefRecord>("local_prefs", "cachedUser").catch(() => null);
+      if (cached?.value && typeof cached.value === "object") {
+        return cached.value as AuthUser;
+      }
+    }
+    throw err;
+  }
+}
+
 export function useAuth() {
   return useQuery<AuthUser | null>({
     queryKey: ["me"],
-    queryFn: fetchMe,
+    queryFn: fetchMeOfflineAware,
+    networkMode: "always",
     staleTime: 30_000,
     retry: false,
   });
@@ -68,6 +100,7 @@ export function useLogout() {
     try {
       await logoutRequest(all);
     } finally {
+      await clearOfflineDatabase().catch(() => {});
       setAppLanguage("vi");
       setLessonLanguage("vi");
       resetSession();
@@ -173,7 +206,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       <ThemeProvider>
         <I18nProvider>
           <UserLanguageSync />
-          <SessionProvider>{children}</SessionProvider>
+          <OfflineProvider>
+            <SessionProvider>{children}</SessionProvider>
+          </OfflineProvider>
         </I18nProvider>
       </ThemeProvider>
     </QueryClientProvider>
