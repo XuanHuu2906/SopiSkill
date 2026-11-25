@@ -1,0 +1,75 @@
+server:
+  port: ${CORE_API_PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: sopiskill-core-api
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 45s
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:5439/sopiskill?currentSchema=core}
+    username: ${SPRING_DATASOURCE_USERNAME:sopiskill}
+    password: ${SPRING_DATASOURCE_PASSWORD:sopiskill_password}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 4
+  flyway:
+    enabled: true
+    schemas: core
+    default-schema: core
+    create-schemas: true
+    locations: classpath:db/migration
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6380}
+      timeout: 3s
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 26MB
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+sopiskill:
+  env: ${ENV:development}
+  cors-origins: ${CORS_ORIGINS:http://localhost:3000,http://127.0.0.1:3000,http://localhost:3010,http://127.0.0.1:3010}
+  jwt-secret: ${JWT_SECRET:dev-sopiskill-jwt-secret-must-be-at-least-32-bytes-long-change-in-prod}
+  jwt-issuer: ${JWT_ISSUER:sopiskill-core-api}
+  jwt-audience: ${JWT_AUDIENCE:sopiskill-web}
+  access-token-ttl-minutes: ${ACCESS_TOKEN_TTL_MINUTES:1440}
+  cookie-secure: ${COOKIE_SECURE:false}
+  lesson-shuffle-secret: ${LESSON_SHUFFLE_SECRET:dev-lesson-shuffle-hmac-secret-change-in-prod}
+  ai-engine-url: ${AI_ENGINE_URL:http://127.0.0.1:8010}
+  internal-service-token: ${INTERNAL_SERVICE_TOKEN:dev-internal-service-token-change-me}
+  internal-hmac-secret: ${INTERNAL_HMAC_SECRET:dev-internal-hmac-secret-change-me}
+  internal-max-clock-skew-seconds: ${INTERNAL_MAX_CLOCK_SKEW_SECONDS:300}
+  stream-llm-key: ${STREAM_LLM_KEY:queue:ai:llm}
+  stream-ingest-key: ${STREAM_INGEST_KEY:queue:ai:ingest}
+  tutor-enabled: ${TUTOR_ENABLED:true}
+  tutor-messages-per-day: ${TUTOR_MESSAGES_PER_DAY:30}
+  tutor-tokens-per-day: ${TUTOR_TOKENS_PER_DAY:100000}
+  tutor-max-concurrent-streams: ${TUTOR_MAX_CONCURRENT_STREAMS:2}
+  rag-enabled: ${RAG_ENABLED:false}
+  p50-enabled: ${P50_ENABLED:true}
+  rate-limit-enabled: ${RATE_LIMIT_ENABLED:true}
+  rate-limit-fail-closed: ${RATE_LIMIT_FAIL_CLOSED:false}
