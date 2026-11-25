@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.agents.figure_validator import validate_teach_media_and_figure
+
 BLANK_SLOT_COUNT = 1
 _TRAILING_DANGLING_CHARS = (",", "=", "(", "[", "{", "\\", "+", "-")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
@@ -100,6 +102,7 @@ def validate_lesson_payload(lesson: dict[str, Any]) -> list[str]:
                 err = check_text_completeness(str(para), f"block[{idx}].paragraphs[{p_idx}]")
                 if err:
                     errors.append(err)
+            errors.extend(validate_teach_media_and_figure(block, idx))
         elif btype == "mc":
             options = block.get("options") or []
             ans_idx = block.get("answerIndex")
@@ -107,20 +110,45 @@ def validate_lesson_payload(lesson: dict[str, Any]) -> list[str]:
                 errors.append(f"block[{idx}] (mc): requires at least 2 options.")
             if not isinstance(ans_idx, int) or isinstance(ans_idx, bool) or not (0 <= ans_idx < len(options)):
                 errors.append(f"block[{idx}] (mc): answerIndex out of bounds.")
+            outcomes = block.get("outcomes")
+            if outcomes is not None and (not isinstance(outcomes, list) or len(outcomes) != len(options)):
+                errors.append(f"block[{idx}] (mc): outcomes length must match options length.")
+            if block.get("display") == "steps":
+                steps = block.get("steps") or []
+                if not isinstance(steps, list) or len(steps) < 2:
+                    errors.append(f"block[{idx}] (mc/steps): requires at least 2 steps.")
             err = check_text_completeness(str(block.get("question") or ""), f"block[{idx}].question")
             if err:
                 errors.append(err)
         elif btype == "blank":
-            sentence = str(block.get("sentence") or "")
-            answer = str(block.get("answer") or "").strip()
-            slots = count_blank_slots(sentence)
-            if slots != BLANK_SLOT_COUNT:
-                errors.append(f"block[{idx}] (blank): expected exactly {BLANK_SLOT_COUNT} blank slot, got {slots}.")
-            if not answer:
-                errors.append(f"block[{idx}] (blank): empty answer.")
-            err = check_text_completeness(sentence, f"block[{idx}].sentence")
-            if err:
-                errors.append(err)
+            parts = block.get("parts")
+            answers = block.get("answers")
+            if isinstance(parts, list) and isinstance(answers, list):
+                if not (1 <= len(answers) <= 4):
+                    errors.append(f"block[{idx}] (multi-blank): answers must have 1..4 items, got {len(answers)}.")
+                if len(parts) != len(answers) + 1:
+                    errors.append(
+                        f"block[{idx}] (multi-blank): parts length ({len(parts)}) must equal len(answers)+1 ({len(answers)+1})."
+                    )
+                bank = block.get("bank") or []
+                if not isinstance(bank, list) or not (2 <= len(bank) <= 10):
+                    errors.append(f"block[{idx}] (multi-blank): bank must have 2..10 items.")
+                else:
+                    bank_norm = {str(b).strip().casefold() for b in bank}
+                    for a in answers:
+                        if not str(a).strip() or str(a).strip().casefold() not in bank_norm:
+                            errors.append(f"block[{idx}] (multi-blank): answer {a!r} missing from bank.")
+            else:
+                sentence = str(block.get("sentence") or "")
+                answer = str(block.get("answer") or "").strip()
+                slots = count_blank_slots(sentence)
+                if slots != BLANK_SLOT_COUNT:
+                    errors.append(f"block[{idx}] (blank): expected exactly {BLANK_SLOT_COUNT} blank slot, got {slots}.")
+                if not answer:
+                    errors.append(f"block[{idx}] (blank): empty answer.")
+                err = check_text_completeness(sentence, f"block[{idx}].sentence")
+                if err:
+                    errors.append(err)
         elif btype == "order":
             items = block.get("items") or []
             if not isinstance(items, list) or len(items) < 2:
@@ -136,6 +164,24 @@ def validate_lesson_payload(lesson: dict[str, Any]) -> list[str]:
             err = check_text_completeness(str(block.get("question") or ""), f"block[{idx}].question")
             if err:
                 errors.append(err)
+        elif btype == "speed":
+            items = block.get("items") or []
+            if not isinstance(items, list) or len(items) < 2:
+                errors.append(f"block[{idx}] (speed): requires at least 2 timed items.")
+            for s_idx, item in enumerate(items if isinstance(items, list) else []):
+                if not isinstance(item, dict):
+                    errors.append(f"block[{idx}] (speed): item[{s_idx}] must be an object.")
+                    continue
+                choices = item.get("choices") or []
+                a_idx = item.get("answerIndex")
+                if not isinstance(choices, list) or len(choices) < 2:
+                    errors.append(f"block[{idx}] (speed): item[{s_idx}] requires at least 2 choices.")
+                if not isinstance(a_idx, int) or isinstance(a_idx, bool) or not (0 <= a_idx < len(choices)):
+                    errors.append(f"block[{idx}] (speed): item[{s_idx}] answerIndex out of bounds.")
+        elif btype == "recap":
+            points = block.get("points") or []
+            if not isinstance(points, list) or not points:
+                errors.append(f"block[{idx}] (recap): requires non-empty points list.")
         else:
             errors.append(f"block[{idx}]: unknown block type {btype!r}.")
 

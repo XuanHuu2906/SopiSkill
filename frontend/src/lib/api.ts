@@ -19,10 +19,10 @@ function getCsrfToken(): string {
 
 export async function api<T>(
   path: string,
-  options: { method?: string; body?: unknown } = {}
+  options: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
 ): Promise<T> {
   const method = options.method ?? "GET";
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(options.headers ?? {}) };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET" && method !== "HEAD") {
     headers["X-CSRF-Token"] = getCsrfToken();
@@ -912,6 +912,12 @@ export interface BlockGradeResult {
   feedback: string;
   solution: Record<string, unknown> | null;
   disputeAllowed: boolean;
+  verdict?: "got_it" | "almost" | "not_yet";
+  gradeId?: string;
+  keyPoints?: string[];
+  correctIndices?: number[];
+  outcome?: string;
+  disputed?: boolean;
 }
 
 export function gradeLessonBlock(
@@ -927,6 +933,17 @@ export function gradeLessonBlock(
   return api<BlockGradeResult>(`/v1/lessons/${lessonId}/blocks/${blockIndex}/grade`, {
     method: "POST",
     body,
+  });
+}
+
+export function disputeShortGrade(
+  lessonId: string,
+  gradeId: string,
+  reason?: string
+): Promise<BlockGradeResult> {
+  return api<BlockGradeResult>(`/v1/lessons/${lessonId}/grades/${gradeId}/dispute`, {
+    method: "POST",
+    body: reason ? { reason } : {},
   });
 }
 
