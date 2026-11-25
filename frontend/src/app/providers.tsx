@@ -10,6 +10,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { fetchMe, logoutRequest, type AuthUser } from "@/lib/api";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
+import { I18nProvider, useI18n } from "@/components/i18n/I18nProvider";
+import type { SupportedLanguage } from "@/components/i18n/dictionaries";
 
 /**
  * Session-aware query cache.
@@ -61,10 +63,13 @@ export function useLogout() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { resetSession } = useSession();
-  return async () => {
+  const { setAppLanguage, setLessonLanguage } = useI18n();
+  return async (all = false) => {
     try {
-      await logoutRequest();
+      await logoutRequest(all);
     } finally {
+      setAppLanguage("vi");
+      setLessonLanguage("vi");
       resetSession();
       queryClient.removeQueries();
       router.push("/login");
@@ -130,6 +135,20 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+function UserLanguageSync() {
+  const { data: user } = useAuth();
+  const { setAppLanguage, setLessonLanguage } = useI18n();
+  useEffect(() => {
+    if (user?.appLanguage) {
+      setAppLanguage(user.appLanguage as SupportedLanguage);
+    }
+    if (user?.lessonLanguage) {
+      setLessonLanguage(user.lessonLanguage as SupportedLanguage);
+    }
+  }, [user?.id, user?.appLanguage, user?.lessonLanguage, setAppLanguage, setLessonLanguage]);
+  return null;
+}
+
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
     () =>
@@ -152,7 +171,10 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <SessionProvider>{children}</SessionProvider>
+        <I18nProvider>
+          <UserLanguageSync />
+          <SessionProvider>{children}</SessionProvider>
+        </I18nProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );

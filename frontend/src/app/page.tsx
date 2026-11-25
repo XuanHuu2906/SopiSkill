@@ -11,6 +11,7 @@ import { ProgressRing } from "@/components/ui/Progress";
 import { Skeleton, SkeletonStack } from "@/components/ui/Skeleton";
 import LandingPage from "@/components/landing/LandingPage";
 import WeekRecapCard from "@/components/gamification/WeekRecapCard";
+import { useI18n } from "@/components/i18n/I18nProvider";
 
 const WEEKDAY = ["Chủ nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
 
@@ -64,6 +65,7 @@ function CourseCard({ course }: { course: CourseListItem }) {
 
 export default function HomePage() {
   const { data: user, isLoading } = useAuth();
+  const { t } = useI18n();
   const listKey = useSessionQueryKey("courses", { limit: 20 });
   const statsKey = useSessionQueryKey("me-stats");
   const homeKey = useSessionQueryKey("home");
@@ -155,6 +157,24 @@ export default function HomePage() {
       )}
 
       {home.data && <WeekRecapCard home={home.data} />}
+
+      {!user.onboardedAt && (
+        <Card variant="tint" style={{ marginBottom: 24 }}>
+          <div className="complete-review-prompt">
+            <div>
+              <strong style={{ display: "block", marginBottom: 4 }}>
+                {t("onboarding.bannerTitle")}
+              </strong>
+              <p className="muted" style={{ margin: 0, fontSize: 14 }}>
+                {t("onboarding.bannerDesc")}
+              </p>
+            </div>
+            <ButtonLink href="/onboarding" variant="secondary" size="sm">
+              {t("onboarding.bannerCta")}
+            </ButtonLink>
+          </div>
+        </Card>
+      )}
 
       <section aria-labelledby="my-courses">
         <div className="section-head">

@@ -3,11 +3,13 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 export class ApiError extends Error {
   code: string;
   status: number;
+  details?: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: Record<string, unknown>) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -41,6 +43,7 @@ export async function api<T>(
     // điều hướng sang /login; không cache/giữ dữ liệu cũ của user trước đó.
     let code = "HTTP_ERROR";
     let message = res.statusText;
+    let details: Record<string, unknown> | undefined;
     try {
       const data = await res.json();
       if (typeof data.detail === "string") {
@@ -48,11 +51,14 @@ export async function api<T>(
       } else if (data.detail?.code) {
         code = data.detail.code;
         message = data.detail.message ?? message;
+        if (typeof data.detail === "object") {
+          details = data.detail as Record<string, unknown>;
+        }
       }
     } catch {
       // ignore json parse errors
     }
-    throw new ApiError(res.status, code, message);
+    throw new ApiError(res.status, code, message, details);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -69,6 +75,17 @@ export interface AuthUser {
   email: string | null;
   displayName: string;
   xp: number;
+  avatar?: "happy" | "graduate" | "curious" | "wink" | "excited";
+  locale?: string;
+  appLanguage?: string;
+  lessonLanguage?: string;
+  onboardedAt?: string | null;
+  onboardingProfile?: {
+    roles: string[];
+    topics: string[];
+    learningStyles: string[];
+    goals: string[];
+  } | null;
 }
 
 export async function fetchMe(): Promise<AuthUser | null> {
@@ -229,8 +246,9 @@ export function isVerifiedStatus(status: string): boolean {
   );
 }
 
-export async function logoutRequest(): Promise<void> {
-  await api<void>("/v1/auth/logout", { method: "POST" });
+export async function logoutRequest(all = false): Promise<void> {
+  const qs = all ? "?all=true" : "";
+  await api<void>(`/v1/auth/logout${qs}`, { method: "POST" });
 }
 
 // ---------- AI Tutor (P3.0) ----------
@@ -1102,10 +1120,21 @@ export function fetchMeStats(): Promise<MeStats> {
   return api<MeStats>("/v1/me/stats");
 }
 
-export function updateMe(displayName: string): Promise<AuthUser> {
+export function updateMe(
+  input:
+    | string
+    | {
+        displayName?: string;
+        avatar?: string;
+        appLanguage?: string;
+        lessonLanguage?: string;
+        locale?: string;
+      }
+): Promise<AuthUser> {
+  const body = typeof input === "string" ? { displayName: input } : input;
   return api<AuthUser>("/v1/me", {
     method: "PATCH",
-    body: { displayName },
+    body,
   });
 }
 
@@ -1361,4 +1390,131 @@ export function fetchLeague(): Promise<LeagueCohortOut> {
 
 export function fetchLastLeague(): Promise<LastLeagueOut> {
   return api<LastLeagueOut>("/v1/league/last");
+}
+
+// ---------- Phase 7: OAuth2, Refresh Sessions, Onboarding, i18n, Notifications & Web Push ----------
+
+export interface AuthIdentityItem {
+  id: string;
+  provider: "google" | "apple";
+  email: string | null;
+  emailVerified: boolean;
+  createdAt: string | null;
+}
+
+export interface NotificationPreferencesOut {
+  dailyReminderEnabled: boolean;
+  dailyReminderMinutes: number;
+  streakGuardEnabled: boolean;
+  weeklyRecapEnabled: boolean;
+  comebackNudgeEnabled: boolean;
+  courseReadyEnabled: boolean;
+  leagueSettledEnabled: boolean;
+  quietStartMinutes: number;
+  quietEndMinutes: number;
+  webPushEnabled: boolean;
+  pushSubscriptionCount: number;
+  vapidPublicKey: string;
+}
+
+export interface InAppNotificationItem {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  actionUrl: string | null;
+  readAt: string | null;
+  read: boolean;
+  createdAt: string | null;
+}
+
+export interface NotificationInboxOut {
+  items: InAppNotificationItem[];
+  unreadCount: number;
+}
+
+export function refreshSessionRequest(): Promise<{ sessionId: string; userId: string }> {
+  return api<{ sessionId: string; userId: string }>("/v1/auth/refresh", { method: "POST" });
+}
+
+export function exchangeOAuthToken(
+  provider: "google" | "apple",
+  idToken: string
+): Promise<AuthUser> {
+  return api<AuthUser>("/v1/auth/exchange", {
+    method: "POST",
+    body: { provider, idToken },
+  });
+}
+
+export function confirmAccountLink(
+  linkTicket: string,
+  password?: string
+): Promise<AuthUser & { linkedProvider: string }> {
+  return api<AuthUser & { linkedProvider: string }>("/v1/auth/link/confirm", {
+    method: "POST",
+    body: { linkTicket, password },
+  });
+}
+
+export function fetchMyIdentities(): Promise<{ items: AuthIdentityItem[]; total: number }> {
+  return api<{ items: AuthIdentityItem[]; total: number }>("/v1/me/identities");
+}
+
+export function saveOnboarding(body: {
+  roles: string[];
+  topics: string[];
+  learningStyles: string[];
+  goals: string[];
+  avatar?: string;
+  appLanguage?: string;
+  lessonLanguage?: string;
+}): Promise<{ onboarded: boolean }> {
+  return api<{ onboarded: boolean }>("/v1/me/onboarding", {
+    method: "PUT",
+    body,
+  });
+}
+
+export function fetchNotificationPreferences(): Promise<NotificationPreferencesOut> {
+  return api<NotificationPreferencesOut>("/v1/me/notifications");
+}
+
+export function updateNotificationPreferences(
+  patch: Partial<NotificationPreferencesOut>
+): Promise<NotificationPreferencesOut> {
+  return api<NotificationPreferencesOut>("/v1/me/notifications", {
+    method: "PATCH",
+    body: patch,
+  });
+}
+
+export function fetchNotificationInbox(limit = 20): Promise<NotificationInboxOut> {
+  return api<NotificationInboxOut>(`/v1/me/notifications/inbox?limit=${limit}`);
+}
+
+export function markNotificationRead(id: string): Promise<{ read: boolean }> {
+  return api<{ read: boolean }>(`/v1/me/notifications/inbox/${id}/read`, { method: "POST" });
+}
+
+export function markAllNotificationsRead(): Promise<{ readAll: boolean }> {
+  return api<{ readAll: boolean }>("/v1/me/notifications/inbox/read-all", { method: "POST" });
+}
+
+export function registerWebPush(body: {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}): Promise<{ subscriptionId: string; registered: boolean }> {
+  return api<{ subscriptionId: string; registered: boolean }>("/v1/push/register", {
+    method: "POST",
+    body,
+  });
+}
+
+export function unregisterWebPush(endpoint?: string): Promise<{ removed: number }> {
+  return api<{ removed: number }>("/v1/push/register", {
+    method: "DELETE",
+    body: endpoint ? { endpoint } : {},
+  });
 }

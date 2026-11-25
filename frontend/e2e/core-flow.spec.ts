@@ -752,3 +752,61 @@ test("Phase 6: /lesson/[id]/complete, WeekRecapCard, Profile WeekChart & Milesto
   await expect(page.getByTestId("leagues-disabled-notice")).toBeVisible();
   await expectNoAxeViolations(page);
 });
+
+test("Phase 7: 4-step /onboarding, independent UI i18n (vi <-> en) vs lessonLanguage, AvatarSheet & Notifications", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("phase7-i18n");
+  await registerUser(page, email);
+
+  // 1. Complete 4-step Onboarding wizard from Home banner
+  await page.getByRole("link", { name: "Thiết lập ngay" }).click();
+  await page.waitForURL("**/onboarding");
+  await expect(page.getByTestId("onboarding-page")).toBeVisible();
+
+  await page.locator(".onboarding-chip").first().click();
+  await page.getByRole("button", { name: "Tiếp tục" }).click();
+  await page.locator(".onboarding-chip").first().click();
+  await page.getByRole("button", { name: "Tiếp tục" }).click();
+  await page.locator(".onboarding-chip").first().click();
+  await page.getByRole("button", { name: "Tiếp tục" }).click();
+  await page.locator(".onboarding-chip").first().click();
+  await expectNoAxeViolations(page);
+  await page.getByRole("button", { name: "Hoàn tất thiết lập" }).click();
+  await page.waitForURL("**/");
+
+  // 2. Visit /settings -> switch UI appLanguage to "en" while keeping lessonLanguage = "vi"
+  await page.goto("/settings");
+  await expect(page.getByTestId("settings-heading")).toHaveText("Hồ sơ & Cài đặt");
+  await page.getByTestId("lesson-language-select").selectOption("vi");
+  await page.getByTestId("app-language-select").selectOption("en");
+
+  // Verify UI switched to English immediately!
+  await expect(page.getByTestId("settings-heading")).toHaveText("Profile & Settings");
+  await expect(page.locator(".side-nav")).toContainText("New Course");
+  await expect(page.getByTestId("lesson-language-select")).toHaveValue("vi");
+  await expectNoAxeViolations(page);
+
+  // Navigate to /new -> verify default lesson language stays Vietnamese ("Tiếng Việt") independent of English UI!
+  await page.goto("/new");
+  await expect(page.getByRole("button", { name: "Tiếng Việt" })).toHaveAttribute("aria-pressed", "true");
+
+  // 3. Switch UI language back to Vietnamese, test AvatarSheet & NotificationCenter
+  await page.goto("/settings");
+  await page.getByTestId("app-language-select").selectOption("vi");
+  await expect(page.getByTestId("settings-heading")).toHaveText("Hồ sơ & Cài đặt");
+
+  await page.getByRole("button", { name: "Đổi ảnh đại diện" }).click();
+  await expect(page.locator('[role="dialog"]')).toBeVisible();
+  await page.getByRole("button", { name: /Học giả/ }).click();
+  await expect(page.locator('[role="dialog"]')).toBeHidden();
+
+  await page.getByRole("button", { name: "Lưu lịch thông báo" }).click();
+  await expect(page.getByText("Đã lưu tùy chọn thông báo.")).toBeVisible();
+
+  await page.locator(".side-nav").getByRole("button", { name: "Thông báo" }).click();
+  await expect(page.locator('[role="dialog"]')).toBeVisible();
+  await expectNoAxeViolations(page);
+  await page.keyboard.press("Escape");
+});

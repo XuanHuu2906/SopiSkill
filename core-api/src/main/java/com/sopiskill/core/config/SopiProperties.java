@@ -39,7 +39,11 @@ public record SopiProperties(
         int heartsMax,
         int heartsRefillMinutes,
         boolean heartsEnforcementEnabled,
-        boolean leaguesEnabled
+        boolean leaguesEnabled,
+        long refreshTokenTtlDays,
+        String googleClientId,
+        String appleClientId,
+        String vapidPublicKey
 ) {
     public List<String> corsOriginList() {
         if (corsOrigins == null || corsOrigins.isBlank()) {
