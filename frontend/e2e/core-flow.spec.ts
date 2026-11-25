@@ -329,3 +329,88 @@ test("Wave 4: proposal edit, glossary VocabSheet, per-block check, and settings/
   await page.getByRole("button", { name: "Xóa vĩnh viễn tài khoản" }).click();
   await page.waitForURL("**/login*", { timeout: 10_000 });
 });
+
+test("Phase 0 UI baseline: /profile, GlobalSopiSheet modal/switching, Course Switcher & axe-core", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("phase0-ui");
+  await registerUser(page, email);
+
+  // 1. GlobalSopiSheet empty state before any course exists: modal trap + Escape + 0 axe violations
+  await page.locator(".side-nav").getByRole("button", { name: "Hỏi Sopi" }).click();
+  const sopiDialog = page.locator('[role="dialog"]');
+  await expect(sopiDialog).toBeVisible();
+  await expect(sopiDialog).toHaveAttribute("aria-modal", "true");
+  await expect(sopiDialog).toContainText("Chưa có bài học sẵn sàng để hỏi Sopi");
+  await expectNoAxeViolations(page);
+
+  for (let i = 0; i < 4; i += 1) {
+    await page.keyboard.press("Tab");
+    const inside = await page.evaluate(() => {
+      const el = document.activeElement;
+      return Boolean(el && el.closest('[role="dialog"]'));
+    });
+    expect(inside).toBe(true);
+  }
+  await page.keyboard.press("Escape");
+  await expect(sopiDialog).toBeHidden();
+
+  // 2. Create two courses so Course Switcher & GlobalSopiSheet course selector are active
+  const courseOneUrl = await createAndGenerateCourse(page, "Algorithms Basics", "en");
+  const courseTwoUrl = await createAndGenerateCourse(page, "Database Indexing", "en");
+  expect(courseOneUrl).not.toBe(courseTwoUrl);
+
+  // 3. Course Switcher on /course/[courseId]: Escape returns focus, switching navigates cleanly
+  const switcherTrigger = page.locator("button.course-switcher-trigger");
+  await expect(switcherTrigger).toBeVisible();
+  await switcherTrigger.click();
+  const switcherMenu = page.getByRole("menu", { name: "Chuyển khóa học" });
+  await expect(switcherMenu).toBeVisible();
+  await expect(switcherMenu.getByRole("menuitem", { name: /Algorithms Basics/ })).toBeVisible();
+  await expect(switcherMenu.getByRole("menuitem", { name: /Database Indexing/ })).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  await page.keyboard.press("Escape");
+  await expect(switcherMenu).toBeHidden();
+  await expect(switcherTrigger).toBeFocused();
+
+  await switcherTrigger.click();
+  await switcherMenu.getByRole("menuitem", { name: /Algorithms Basics/ }).click();
+  await page.waitForURL(courseOneUrl);
+  await expect(page.locator(".course-topic")).toHaveText("Algorithms Basics");
+
+  // 4. Open GlobalSopiSheet from course adjust card, switch course inside sheet, verify a11y + focus trap
+  await page.getByRole("button", { name: /Quá dễ\? Quá khó\? Hỏi Sopi/ }).click();
+  await expect(sopiDialog).toBeVisible();
+  await expect(sopiDialog).toHaveAttribute("aria-modal", "true");
+  const courseSelect = sopiDialog.locator("#tutor-course-select");
+  await expect(courseSelect).toBeVisible();
+  const initialCourseVal = await courseSelect.inputValue();
+  const allOptionValues = await courseSelect.locator("option").evaluateAll((opts) =>
+    opts.map((o) => (o as HTMLOptionElement).value),
+  );
+  const otherCourseVal = allOptionValues.find((v) => v !== initialCourseVal);
+  expect(otherCourseVal).toBeTruthy();
+  await courseSelect.selectOption(otherCourseVal!);
+  // Ensure user selection is NOT overwritten back by effect
+  await expect(courseSelect).toHaveValue(otherCourseVal!);
+  await expectNoAxeViolations(page);
+  await page.keyboard.press("Escape");
+  await expect(sopiDialog).toBeHidden();
+
+  // 5. Visit /profile (desktop 1440 + mobile 390): stats, courses, quick links, 0 axe violations
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.getByText("Tổng XP tích lũy")).toBeVisible();
+  await expect(page.getByText("Algorithms Basics").first()).toBeVisible();
+  await expect(page.getByText("Database Indexing").first()).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const overflow390 = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  );
+  expect(overflow390).toBe(true);
+  await expectNoAxeViolations(page);
+});

@@ -2,6 +2,35 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-25 — Phase 0 — UI Baseline Lock (`/profile`, `GlobalSopiSheet`, Course Switcher), Frozen Contracts (`contracts/*.yaml`) & `DEC-019..DEC-029`
+
+- Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` đã được commit cụm UI baseline (`169b6a3`), merge không ghi đè lịch sử (`a091ea7`) và push lên `origin/feat/p6.0-ci-pipeline`; toàn bộ công việc Phase 0 được tách nhánh sạch sang `feat/polyglot-phase0`.
+- **IMPLEMENTED:**
+  - **UI Baseline & A11y Hardening:**
+    - Chuẩn hóa CRLF → LF cho `frontend/src/app/globals.css`, `frontend/src/app/lesson/[lessonId]/TutorPanel.tsx`, `frontend/src/app/new/interview/page.tsx`.
+    - `frontend/src/app/course/[courseId]/page.tsx`: sửa `<h1>` lồng trong `<button>` sang `<h1><button><span>...</span></button></h1>` hợp lệ HTML5; bổ sung đóng menu bằng `Escape` (trả focus về trigger) và click-outside cho Course Switcher; gỡ `aria-label` dư thừa trên `.course-lesson-row` để khắc phục WCAG 2.5.3 `label-content-name-mismatch`.
+    - `frontend/src/components/tutor/GlobalSopiSheet.tsx` & `frontend/src/components/layout/AppFrame.tsx`: sửa lỗi `useEffect` ghi đè lựa chọn chuyển khóa trong `GlobalSopiSheet`, reset `sopiCourseId` khi mở từ `TabBar`, chuẩn hóa `courseIsActive`.
+    - `frontend/src/app/settings/page.tsx`: đổi `aria-label` của section sang `"Thông tin hiển thị"` tránh trùng nhãn với `<input id="settings-display-name">`.
+    - `frontend/src/app/globals.css`: loại bỏ opacity fade trên `.course-switcher-menu` và dùng `var(--ink-2)` cho `.course-switcher-item .caption` đạt tương phản WCAG 2.1 AA (`>7:1`).
+  - **Playwright + `axe-core` E2E (`frontend/e2e/core-flow.spec.ts`):** bổ sung kịch bản Phase 0 phủ `GlobalSopiSheet` (empty state + modal Tab focus trap + chuyển khóa giữa 2 khóa sẵn sàng), Course Switcher (`Escape` trả focus + điều hướng), `/profile` (desktop `1440×900` + mobile `390×844`, 0 horizontal overflow) kèm `axe-core` WCAG 2.1 AA.
+  - **Frozen Contracts (`contracts/`):**
+    - `backend/scripts/export_public_openapi.py` → xuất `contracts/public-api.yaml` từ FastAPI OpenAPI 3.1 sống (**44 paths, 84 schemas** phủ đủ 7 router kể cả `/research-runs`), bổ sung `AccessCookieAuth`, `BearerAuth`, `CsrfHeaderAuth`, `ErrorEnvelope`, `TutorSseEvent` và headers SSE (`X-Tutor-Thread-Id`, `X-Tutor-Message-Id`, `X-Accel-Buffering`).
+    - `contracts/internal-ai.yaml`: đóng băng hợp đồng nội bộ `core-api (Spring Boot) ↔ ai-engine (Python)` (OpenAPI 3.1 + `x-redis-streams` cho `queue:ai:llm` & `queue:ai:ingest`, xác thực `X-Internal-Service-Token` constant-time + HMAC-SHA256 replay protection `X-Internal-Timestamp` / `X-Internal-Signature` ±300s + `X-Correlation-Id`, và bất biến `0` answer key trên `TutorStreamInternalRequest`).
+    - `backend/tests/test_contracts_openapi.py`: test chống drift tự động cho cả `public-api.yaml` và `internal-ai.yaml`.
+  - **Decision Log & Architecture Docs:** ghi nhận `DEC-019`..`DEC-029` vào `docs/specs/17-DECISION-LOG.md` kèm tài liệu `docs/spring-boot-python-k8s-architecture.md` và `plans/sopiskill_master_parity_plan.md`.
+- **TESTED (100% offline/mock + live Docker Compose 7/7 containers, 0đ chi phí LLM/Cloud):**
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build && npm run test:e2e` → exit `0` (`eslint` 0 warnings, `tsc --noEmit` 0 errors, `next build` 13/13 pages, **5 passed (16.4s)** trên Chromium thật + `axe-core` **0 violations**).
+  - `cd backend && .venv/bin/python scripts/export_public_openapi.py` → exit `0` (`44 paths, 84 schemas`).
+  - `cd backend && .venv/bin/python -m pytest -q` → exit `0` (**843 passed, 31 skipped, 0 failed** trong `34.69s`, bao gồm `test_contracts_openapi.py` và `test_p61_ci_contract.py`).
+  - `cd backend && .venv/bin/python -m bandit -r app scripts/export_public_openapi.py -q` → exit `0` (0 findings).
+  - **Live Docker Compose (`docker compose up -d --build`):** 7/7 containers UP & HEALTHY (`db`, `redis`, `minio` healthy; `backend`, `worker`, `beat`, `frontend` up); `GET http://127.0.0.1:8001/ready` → `200 OK` (`database=ok, redis=ok, config=ok`); `GET http://127.0.0.1:3000/profile` → `200 OK` + baseline security headers; `alembic current` = `0018_wave4_glossary (head)`.
+  - **Live PostgreSQL 16 (`:5433`, scratch DB `ailp_phase0_race_test`):** `alembic upgrade head` → `downgrade -1` → `upgrade head` exit `0`; `pytest tests/*postgres_concurrency*.py -q` → exit `0` (**29 passed, 0 failed** trong `24.32s`); đã dọn sạch scratch DB `ailp_phase0_race_test` (volume chính nguyên vẹn).
+  - **Legacy cleanup (`f74f745`):** dọn 255 file tracked cũ/không còn dùng + rác local/backup cũ theo xác nhận owner; `test_contracts_openapi.py` + `test_p61_ci_contract.py` tái kiểm **19 passed**.
+  - `git diff --check` → exit `0`.
+- **NOT TESTED:**
+  - 2 optional OCR engine tests (`rapidocr`/`vietocr` không cài trong `.venv` mặc định — ngoài phạm vi Phase 0); screen reader thật (NVDA/VoiceOver).
+- **ROLLBACK:** Thuần Git — giữ nguyên nhánh `feat/p6.0-ci-pipeline` (`a091ea7`); xóa/revert nhánh `feat/polyglot-phase0` để quay lại baseline trước Phase 0. Không có thay đổi DB hay volume.
+
 ## 2026-11-23 — Wave 4 — Product Gaps Ưu tiên (`P1-PROPOSAL-EDIT`, `P1-GLOSSARY`, Per-Block Grading + Short Dispute Rubric, `M1-ME-SURFACE`)
 
 - Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).

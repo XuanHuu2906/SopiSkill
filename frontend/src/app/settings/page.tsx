@@ -118,7 +118,7 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="list-group" aria-label="Tên hiển thị">
+      <section className="list-group" aria-label="Thông tin hiển thị">
         <span className="list-group-title">Thông tin hiển thị</span>
         <div className="list-group-card" style={{ padding: 20 }}>
           <form onSubmit={(e) => void onSaveProfile(e)} style={{ display: "grid", gap: 14 }}>

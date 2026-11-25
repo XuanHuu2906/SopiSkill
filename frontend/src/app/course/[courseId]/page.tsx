@@ -397,7 +397,6 @@ export default function CoursePage() {
                         <Link
                           href={`/lesson/${lesson.id}`}
                           className="course-lesson-row"
-                          aria-label={`${lesson.title} — ${lessonMeta(lesson)}`}
                         >
                           <span className="course-lesson-title">{lesson.title}</span>
                           <span className="course-lesson-meta">

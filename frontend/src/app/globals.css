@@ -4262,7 +4262,6 @@ button.course-switcher-trigger:hover:not(:disabled),
   display: flex;
   flex-direction: column;
   gap: 2px;
-  animation: sopi-rise var(--motion-feedback) var(--ease-settle);
 }
 
 .course-switcher-item {
@@ -4275,6 +4274,10 @@ button.course-switcher-trigger:hover:not(:disabled),
   color: var(--ink);
   font-size: 15px;
   font-weight: 600;
+}
+
+.course-switcher-item .caption {
+  color: var(--ink-2);
 }
 
 .course-switcher-item:hover {
