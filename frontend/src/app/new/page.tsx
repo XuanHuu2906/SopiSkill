@@ -6,8 +6,8 @@ import { useState } from "react";
 import { api, newClientId, type CourseLanguage } from "@/lib/api";
 import { useRequireAuth } from "../providers";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { TextInput } from "@/components/ui/Field";
+import Icon from "@/components/ui/Icon";
 
 interface CourseOut {
   id: string;
@@ -101,8 +101,8 @@ export default function NewCoursePage() {
                     active
                       ? {
                           borderColor: "var(--ember)",
-                          background: "var(--ember-wash)",
-                          color: "var(--ink)",
+                          background: "var(--wash)",
+                          color: "var(--ember-deep)",
                           fontWeight: 600,
                         }
                       : undefined
@@ -147,20 +147,22 @@ export default function NewCoursePage() {
         </div>
       </div>
 
-      <Card variant="tint" className="card" style={{ marginTop: 28 }}>
-        <h2 className="section-title" style={{ fontSize: 19, marginBottom: 6 }}>
-          Bạn luôn có thể dừng giữa chừng
-        </h2>
-        <p className="muted">
-          Câu trả lời phỏng vấn được lưu theo từng bước, nên tải lại trang vẫn tiếp tục
-          đúng câu chưa trả lời.
-        </p>
-        <p style={{ marginTop: 10 }}>
-          <Link href="/sources" className="link" style={{ fontSize: 15 }}>
-            Hoặc tạo khóa học từ tài liệu của bạn
-          </Link>
-        </p>
-      </Card>
+      <Link href="/sources" className="home-review-banner" style={{ marginTop: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <span className="profile-stat-icon" style={{ marginBottom: 0 }} aria-hidden="true">
+            <Icon name="file" size={18} />
+          </span>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)" }}>
+              Tạo khóa học từ tài liệu của bạn
+            </div>
+            <div style={{ fontSize: 14, color: "var(--ink-2)", marginTop: 2 }}>
+              Tải lên PDF hoặc gắn nguồn bài báo / web để bài giảng bám sát tài liệu gốc.
+            </div>
+          </div>
+        </div>
+        <Icon name="arrowRight" size={18} />
+      </Link>
     </div>
   );
 }

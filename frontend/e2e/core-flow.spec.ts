@@ -178,7 +178,7 @@ test("tutor docked rail (1440) vs modal overlay (768/390), focus contract, and a
   await expect(page.locator(".lesson-counter")).toHaveText("1/6");
 
   // Desktop 1440x900: docked tutor rail (non-modal)
-  await page.getByRole("button", { name: "Hỏi trợ giảng" }).click();
+  await page.getByRole("button", { name: "Hỏi Sopi" }).click();
   const dialog = page.locator('[role="dialog"]');
   await expect(dialog).toBeVisible();
   await expect(dialog).not.toHaveAttribute("aria-modal", "true");
@@ -209,7 +209,7 @@ test("tutor docked rail (1440) vs modal overlay (768/390), focus contract, and a
   );
   expect(overflow768).toBe(true);
 
-  await page.getByRole("button", { name: "Hỏi trợ giảng" }).click();
+  await page.getByRole("button", { name: "Hỏi Sopi" }).click();
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveAttribute("aria-modal", "true");
   await expectNoAxeViolations(page);
@@ -231,7 +231,7 @@ test("tutor docked rail (1440) vs modal overlay (768/390), focus contract, and a
     () => document.documentElement.scrollWidth <= window.innerWidth,
   );
   expect(overflow390).toBe(true);
-  await page.getByRole("button", { name: "Hỏi trợ giảng" }).click();
+  await page.getByRole("button", { name: "Hỏi Sopi" }).click();
   await expect(dialog).toHaveAttribute("aria-modal", "true");
   await expectNoAxeViolations(page);
   await page.keyboard.press("Escape");

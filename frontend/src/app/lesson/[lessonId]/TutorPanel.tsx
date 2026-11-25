@@ -72,6 +72,8 @@ export default function TutorPanel({
   open,
   onClose,
   docked = false,
+  courseOptions,
+  onSelectCourse,
 }: {
   courseId: string;
   lessonId: string;
@@ -81,6 +83,9 @@ export default function TutorPanel({
   onClose: () => void;
   /** True when the viewport is wide enough to dock the rail beside the lesson. */
   docked?: boolean;
+  /** Optional course switcher when Sopi is opened globally outside a lesson. */
+  courseOptions?: { id: string; topic: string }[];
+  onSelectCourse?: (courseId: string) => void;
 }) {
   const queryClient = useQueryClient();
   const threadsKey = useSessionQueryKey("tutor-threads", courseId);
@@ -122,6 +127,16 @@ export default function TutorPanel({
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
+
+  // Reset local thread state when switching courses inside the global Sopi sheet.
+  useEffect(() => {
+    abortRef.current?.abort();
+    setThreadId(null);
+    setMessages([]);
+    setToolNotes([]);
+    setError(null);
+    setNotice(null);
+  }, [courseId]);
 
   const openThread = useCallback(
     async (id: string) => {
@@ -232,8 +247,8 @@ export default function TutorPanel({
     // heartbeat: giữ kết nối, không cần cập nhật UI
   }
 
-  async function send() {
-    const question = text.trim();
+  async function send(overrideText?: string) {
+    const question = (overrideText ?? text).trim();
     if (!question || streaming) return;
     setError(null);
     const clientMessageId = newClientId("tmsg");
@@ -366,7 +381,7 @@ export default function TutorPanel({
       <button
         type="button"
         className={`tutor-backdrop${docked ? " is-docked" : ""}`}
-        aria-label="Đóng trợ giảng"
+        aria-label="Đóng Sopi"
         tabIndex={-1}
         onClick={onClose}
       />
@@ -383,21 +398,49 @@ export default function TutorPanel({
         tabIndex={-1}
       >
         <div className="tutor-head">
-          <div>
-            <div id="tutor-heading" className="tutor-title">
-              Trợ giảng
-            </div>
-            <div className="tutor-subtitle">
-              {blockLabel ? `${blockLabel} · block ${activeBlockIndex + 1}` : "Bài đang học"}
-              {usage.data
-                ? ` · còn ${usage.data.remaining.messages ?? 0}/${usage.data.limits.messagesPerDay} lượt`
-                : ""}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="tutor-avatar" aria-hidden="true">
+              S
+            </span>
+            <div>
+              <div id="tutor-heading" className="tutor-title">
+                Sopi
+              </div>
+              <div className="tutor-subtitle">
+                {blockLabel
+                  ? courseOptions
+                    ? blockLabel
+                    : `${blockLabel} · block ${activeBlockIndex + 1}`
+                  : "Trợ giảng AI"}
+                {usage.data
+                  ? ` · còn ${usage.data.remaining.messages ?? 0}/${usage.data.limits.messagesPerDay} lượt`
+                  : ""}
+              </div>
             </div>
           </div>
           <IconButton aria-label="Đóng" onClick={onClose}>
             <Icon name="close" size={18} />
           </IconButton>
         </div>
+
+        {courseOptions && courseOptions.length > 1 && onSelectCourse && (
+          <div className="tutor-threads" style={{ marginBottom: 8 }}>
+            <label className="sr-only" htmlFor="tutor-course-select">
+              Chọn khóa học để hỏi Sopi
+            </label>
+            <select
+              id="tutor-course-select"
+              value={courseId}
+              onChange={(e) => onSelectCourse(e.target.value)}
+            >
+              {courseOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  Khóa học: {c.topic}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {threads.data && threads.data.total > 0 && (
           <div className="tutor-threads" style={{ marginBottom: 8 }}>
@@ -432,18 +475,22 @@ export default function TutorPanel({
         <div className="tutor-scroll" ref={listRef} role="log" aria-live="polite" aria-relevant="additions text">
           {messages.length === 0 && (
             <p className="muted" style={{ fontSize: 13 }}>
-              Hỏi về phần đang học — trợ giảng không đọc đáp án quiz.
+              Hỏi Sopi về phần đang học — Sopi gợi mở từng bước và không đọc đáp án quiz.
             </p>
           )}
 
           {toolNotes.length > 0 && (
             <ul className="tutor-tool-notes" aria-label="Công cụ trợ giảng đã dùng">
               {toolNotes.map((note, index) => (
-                <li key={`${note.name}-${index}`}>
-                  <span className="badge badge-muted">{note.name}</span>{" "}
-                  <span className={note.status === "ok" ? "caption" : "error-text"}>
-                    {note.status === "ok" ? "đã dùng" : "bị từ chối"}
-                    {note.summary ? ` — ${note.summary}` : ""}
+                <li key={`${note.name}-${index}`} className="tool-status-item">
+                  <span
+                    className={`tool-status-dot ${note.status === "ok" ? "is-ok" : "is-failed"}`}
+                    aria-hidden="true"
+                  >
+                    <Icon name={note.status === "ok" ? "check" : "close"} size={12} />
+                  </span>
+                  <span>
+                    {note.summary || (note.status === "ok" ? `Đã dùng ${note.name}` : `Không thể dùng ${note.name}`)}
                   </span>
                 </li>
               ))}
@@ -527,15 +574,34 @@ export default function TutorPanel({
 
         {error && <div className="error-box" role="alert">{error}</div>}
 
+        <div className="tutor-chips-row" aria-label="Gợi ý câu hỏi nhanh">
+          {[
+            "Giải thích trong 30 giây",
+            "Cho mình một ví dụ thực tế",
+            "Phần này áp dụng ở đâu?",
+            "Mình nên lưu ý gì nhất?",
+          ].map((chip) => (
+            <button
+              key={chip}
+              type="button"
+              className="tutor-chip"
+              disabled={streaming || quotaExhausted}
+              onClick={() => void send(chip)}
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
+
         <div className="tutor-composer">
           <label htmlFor="tutor-input" className="sr-only">
-            Câu hỏi cho trợ giảng
+            Câu hỏi cho Sopi
           </label>
           <textarea
             id="tutor-input"
             value={text}
             maxLength={2000}
-            placeholder="Hỏi về phần này…"
+            placeholder="Hỏi Sopi về phần này…"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {

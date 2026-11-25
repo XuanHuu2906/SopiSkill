@@ -81,7 +81,7 @@ export default function VocabSheet({
           </IconButton>
         </div>
 
-        <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--hairline)" }}>
+        <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--linen)" }}>
           <label className="sr-only" htmlFor="vocab-search-input">
             Tìm thuật ngữ
           </label>
@@ -96,14 +96,14 @@ export default function VocabSheet({
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button
                 type="button"
-                className={`btn btn-sm ${scopeLessonOnly ? "btn-primary" : "btn-secondary"}`}
+                className={`btn btn-sm ${scopeLessonOnly ? "" : "btn-secondary"}`}
                 onClick={() => setScopeLessonOnly(true)}
               >
                 Bài này
               </button>
               <button
                 type="button"
-                className={`btn btn-sm ${!scopeLessonOnly ? "btn-primary" : "btn-secondary"}`}
+                className={`btn btn-sm ${!scopeLessonOnly ? "" : "btn-secondary"}`}
                 onClick={() => setScopeLessonOnly(false)}
               >
                 Cả khóa học
@@ -131,10 +131,11 @@ export default function VocabSheet({
               <li
                 key={item.id}
                 style={{
-                  border: "1px solid var(--hairline)",
-                  borderRadius: "var(--r-md, 12px)",
-                  padding: "12px 14px",
+                  border: "1px solid var(--linen)",
+                  borderRadius: "var(--radius-md)",
+                  padding: "14px 16px",
                   background: "var(--surface)",
+                  boxShadow: "var(--shadow-card)",
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>

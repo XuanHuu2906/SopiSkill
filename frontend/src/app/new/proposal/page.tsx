@@ -274,9 +274,9 @@ function ProposalInner() {
               <div
                 key={uIdx}
                 style={{
-                  border: "1px solid var(--hairline)",
-                  borderRadius: "var(--r-md, 12px)",
-                  padding: 12,
+                  border: "1px solid var(--linen)",
+                  borderRadius: "var(--radius-md)",
+                  padding: 14,
                   display: "grid",
                   gap: 8,
                 }}
@@ -400,12 +400,14 @@ function ProposalInner() {
         </Card>
       ) : (
         <>
-          <Card>
-            <span className="eyebrow">Kế hoạch của bạn</span>
-            <h1 className="section-title" style={{ margin: "6px 0 8px" }}>
-              {payload.name}
-            </h1>
-            <p className="muted">{payload.objective}</p>
+          <div className="proposal-card">
+            <div>
+              <span className="eyebrow">Kế hoạch của bạn</span>
+              <h1 className="section-title" style={{ margin: "6px 0 8px" }}>
+                {payload.name}
+              </h1>
+              <p className="muted">{payload.objective}</p>
+            </div>
 
             <PlanStats
               units={payload.units.length}
@@ -414,7 +416,7 @@ function ProposalInner() {
             />
 
             {profile && (
-              <div className="profile-box">
+              <div className="profile-box" style={{ marginTop: 0 }}>
                 <h2>Hồ sơ học viên (suy ra từ câu trả lời)</h2>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   <Badge>{LEVEL_LABEL[profile.currentLevel] ?? profile.currentLevel}</Badge>
@@ -438,20 +440,22 @@ function ProposalInner() {
               </div>
             )}
 
-            <div style={{ marginTop: 20 }}>
+            <div>
               <span className="eyebrow" style={{ color: "var(--ink-3)" }}>
                 Học xong, bạn sẽ có thể
               </span>
               <div style={{ marginTop: 10 }}>
                 {payload.outcomes.map((outcome, i) => (
                   <div className="outcome-row" key={i}>
-                    <span className="summary-index">{i + 1}</span>
+                    <span className="outcome-check" aria-hidden="true">
+                      <Icon name="checkCircle" size={20} />
+                    </span>
                     <span>{outcome}</span>
                   </div>
                 ))}
               </div>
             </div>
-          </Card>
+          </div>
 
           {payload.skills && payload.skills.length > 0 && (
             <Card>

@@ -163,25 +163,28 @@ function InterviewInner() {
 
       {questions[current] && (
         <>
-          <label htmlFor="interview-answer" className="sr-only">
-            Câu trả lời
-          </label>
-          <textarea
-            id="interview-answer"
-            value={answers[current]}
-            onChange={(e) =>
-              setAnswers((prev) => prev.map((a, i) => (i === current ? e.target.value : a)))
-            }
-            placeholder="Câu trả lời của bạn..."
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                e.preventDefault();
-                void submitAnswer();
+          <div className="interview-composer">
+            <label htmlFor="interview-answer" className="sr-only">
+              Câu trả lời
+            </label>
+            <textarea
+              id="interview-answer"
+              rows={2}
+              value={answers[current]}
+              onChange={(e) =>
+                setAnswers((prev) => prev.map((a, i) => (i === current ? e.target.value : a)))
               }
-            }}
-          />
+              placeholder="Câu trả lời của bạn..."
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  void submitAnswer();
+                }
+              }}
+            />
+          </div>
           <p className="field-hint" style={{ margin: "8px 0 12px" }}>
-            Ctrl+Enter để gửi
+            Ctrl+Enter để gửi nhanh
           </p>
         </>
       )}
