@@ -12,6 +12,8 @@ const config = [
       "node_modules/**",
       "next-env.d.ts",
       "public/**",
+      "playwright-report/**",
+      "test-results/**",
     ],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),

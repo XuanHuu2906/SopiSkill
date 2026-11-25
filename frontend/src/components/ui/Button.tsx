@@ -8,6 +8,7 @@ export type ButtonVariant =
   | "ghost"
   | "light"
   | "success"
+  | "wrong"
   | "danger"
   | "text";
 
@@ -28,6 +29,7 @@ const VARIANT_CLASS: Record<ButtonVariant, string> = {
   ghost: "btn-ghost",
   light: "btn-light",
   success: "btn-success",
+  wrong: "btn-wrong",
   danger: "btn-danger",
   text: "btn-text",
 };

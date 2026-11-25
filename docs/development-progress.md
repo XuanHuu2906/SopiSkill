@@ -2,6 +2,104 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-23 — Wave 4 — Product Gaps Ưu tiên (`P1-PROPOSAL-EDIT`, `P1-GLOSSARY`, Per-Block Grading + Short Dispute Rubric, `M1-ME-SURFACE`)
+
+- Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).
+- **4.1 `P1-PROPOSAL-EDIT` (`GAP-08`, Decision D8):**
+  - Backend: thêm `PATCH /v1/courses/{courseId}/proposal` (`routes.py`, `course_service.update_proposal`, `ProposalUpdateRequest` với `extra="forbid"`). Khóa row course (`_lock_course_row`), yêu cầu optimistic `expectedVersion` (`409 PROPOSAL_VERSION_CONFLICT` kèm `currentVersion`), chặn sửa khi đã approve/generating/ready (`409 PROPOSAL_LOCKED`), giữ nguyên `learnerProfile` do server suy ra, tái kiểm `validate_proposal` + `pedagogy.normalize_curriculum`/`validate_curriculum`, tạo bản ghi `CourseProposal` mới (`version + 1`).
+  - Frontend: nâng cấp `frontend/src/app/new/proposal/page.tsx` thêm chế độ chỉnh sửa trực tiếp tên khóa, mục tiêu, outcomes, chương và danh sách bài học trước khi duyệt.
+- **4.2 `P1-GLOSSARY` (`GAP-06`, `GAP-14`):**
+  - Migration expand-only `backend/alembic/versions/0018_wave4_glossary.py` (nối `0017_p1_course_language`, 1 head duy nhất, `downgrade` sạch) tạo bảng `course_glossary_terms` (`UNIQUE(course_id, term_key)`).
+  - Backend: `glossary_service.py` chỉ rút trích thuật ngữ từ `teach` blocks (tuyệt đối không đọc block câu hỏi để không lộ answer key), tự động upsert trong `worker/generation.py`, và cung cấp `GET /v1/courses/{courseId}/glossary?lessonId=...` (owner-scoped).
+  - Frontend: component drawer accessible `frontend/src/components/course/VocabSheet.tsx` (tìm kiếm, lọc bài này / cả khóa học, `useModalPanel` focus trap, `tabIndex={0}` đạt WCAG 2.1 AA) gắn trên `/course/[courseId]` và `/lesson/[lessonId]`.
+- **4.3 Per-Block Server-Side Grading & AI Short-Answer Rubric Grader (`GAP-11`, Decision D8):**
+  - Backend: `POST /v1/lessons/{lessonId}/blocks/{blockIndex}/grade` (`lesson_content.grade_single_block`, `lesson_service.grade_lesson_block`, `BlockGradeRequest` từ chối `bool` + `extra="forbid"`). Chấm 100% phía server (`GET /v1/lessons/{id}` vẫn giữ 0 answer key); hỗ trợ rubric trùng khớp từ khóa chuẩn hóa dấu (`semantic_rubric`) và tùy chọn `dispute=true` gọi LLM rubric có giới hạn (bọc dữ liệu người học bằng `<<<LEARNER_START>>>...<<<LEARNER_END>>>` chống prompt injection, ghi nhận usage, fallback an toàn).
+  - Frontend: thêm nút **"Kiểm tra câu này"** và **"Yêu cầu chấm lại"** (khi `short` chưa đạt) ngay trên từng bước câu hỏi của `/lesson/[lessonId]` mà không đổi quy trình nộp bài lấy XP idempotent (`POST /attempts`).
+- **4.4 `M1-ME-SURFACE` & Account Settings (`GAP-03`, `GAP-21`):**
+  - Backend (`backend/app/api/v1/me.py`, `user_service.py`):
+    - `GET /v1/me/stats` trả thống kê học tập thực từ DB (XP, khóa học, bài hoàn thành, lượt làm bài, lịch ôn đến hạn).
+    - `PATCH /v1/me` cập nhật `displayName` (CSRF + rate-limit).
+    - `DELETE /v1/me` yêu cầu CSRF + xác nhận chữ `DELETE` + xác thực mật khẩu hiện tại, xóa sạch toàn bộ dữ liệu sở hữu theo đúng thứ tự FK trên 28 bảng trong 1 transaction và xóa cookie phiên/CSRF.
+  - Frontend: trang mới `frontend/src/app/settings/page.tsx` + mục điều hướng `Cài đặt` trên `AppFrame.tsx`.
+- **Kiểm chứng thực chạy (`2026-11-23`, 0 chi phí LLM thật):**
+  - `cd backend && .venv/bin/python -m pytest -q` → **840 passed, 31 skipped, 0 failed** (+8 test mới trong `test_wave4_product.py`; `test_p61_ci_contract.py` PASS).
+  - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
+  - **Live PostgreSQL 16.15 (`:5433`):** `alembic heads` = `0018_wave4_glossary (head)` → `upgrade head` → `downgrade -1` → `upgrade head` PASS; smoke test live cả 4 trụ cột Wave 4 + full FK-cascade `DELETE /v1/me` trên PostgreSQL 16.15 **PASS**.
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build && npm run test:e2e` → exit `0`, `12/12` pages (gồm `/settings`), **4 passed (10.3s)** trên Chromium thật + `axe-core` **0 violations** trên `VocabSheet`, `/settings`, `TutorPanel`, `OutlineSheet`.
+- **NOT TESTED:**
+  - Chạy `dispute=true` cho câu `short` với real LLM endpoint trực tiếp (đã kiểm chứng contract + delimiter + usage recording qua `httpx.MockTransport` trong `test_wave4_product.py`).
+
+## 2026-11-23 — Judge Harness Fix + Wave 3 (Redis Rate-Limiter, `/ready`, Backup-Restore CLI, Controlled Activation Guardrails)
+
+- Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).
+- **Fix nhanh `evals/judges.py` (`JUDGE_PROMPT_VERSION = "p2.2-judge-v2"`):**
+  - Không bao giờ cắt ngang giữa bài học: chuyển định dạng proposal/lesson sang JSON gọn, nâng `MAX_JUDGE_CHARS = 32_000`, chọn tập **bài học nguyên vẹn** phân bố đều (đầu/cuối/giữa) khi vượt ngân sách và ghi chú rõ cho judge không coi bài lược bỏ có chủ đích là lỗi cắt cụt.
+  - Sửa lỗi `openai_compatible_provider.py:request_json()` trước đây bị `_chat_json()` cắt lại về `llm_max_input_chars=12_000` — nay truyền đúng `max_input_chars` của caller và dùng `_COMPACT_RETRY_SUFFIX_JUDGE` riêng cho `kind="judge"`.
+  - Nâng trần mặc định `llm_max_output_tokens_judge`: `3000 → 6000` (`config.py`, `docker-compose.yml`, `.env.example`) để model reasoning (`deepseek-flash`) không chạm trần trước khi xuất JSON.
+- **Wave 3 — Hardening & Controlled Activation (Decision D7):**
+  - **`M1-SEC-LIMITER` (`backend/app/core/limits.py`):** nâng cấp sang **Redis distributed sliding-window rate-limiter** dùng 1 Lua script nguyên tử (`ZREMRANGEBYSCORE` + `ZCARD` + `ZADD` + `PEXPIRE`) trả header `Retry-After`; hỗ trợ `RATE_LIMIT_BACKEND=auto|redis|memory`, `RATE_LIMIT_FAIL_CLOSED=false|true` (`503 RATE_LIMITER_UNAVAILABLE` khi Redis sập ở production, hoặc fallback in-memory kèm warning sạch không lộ URL/mật khẩu), và `TRUST_PROXY_HEADERS=false` mặc định (chặn giả mạo `X-Forwarded-For`).
+  - **`OPS-005` Deep Readiness Probe & Baseline Security Headers (`backend/app/main.py`, `frontend/next.config.ts`):** thêm `GET /ready` kiểm tra `SELECT 1` DB + Redis `PING` (nếu cấu hình `REDIS_URL`) + `check_activation_readiness()`, trả `200 ready` / `503 not_ready` không lộ DSN/secret; thêm security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, và HSTS khi `COOKIE_SECURE=true` / `ENV=production`).
+  - **`D7` Controlled Activation Guardrails (`backend/app/core/activation.py`, `docker-compose.wave3.yml`):** giữ mặc định OFF trong `config.py` và `docker-compose.yml`; bổ sung validator `python -m app.core.activation` bắt buộc `TUTOR_MESSAGES_PER_DAY > 0`, `TUTOR_TOKENS_PER_DAY > 0`, Redis rate-limit, `JWT_SECRET`, `COOKIE_SECURE=true`, `ALLOW_DEMO_HEADER=false` ở `ENV=production`, đồng thời cảnh báo khi `RAG_ENABLED=true` trên `hashing` baseline; cung cấp `docker-compose.wave3.yml` override bật `TUTOR_ENABLED=true` (`30` lượt/ngày, `100.000` tokens/ngày) + `P50_ENABLED=true` + Redis rate-limit fail-closed.
+  - **`OPS-007` PostgreSQL Backup & Restore Drill Tooling (`backend/scripts/pg_backup_restore.py`, `docs/runbooks/p62-operations-and-activation.md`):** CLI 3 lệnh `backup` (`pg_dump --format=custom` + `.sha256` + `.meta.json` không secret), `verify` (header `PGDMP` + SHA-256), `restore-drill` (chặn ghi đè DB không chứa từ khóa `drill`/`restore`/`scratch`/`test`, verify + `pg_restore` + query `alembic_version` & đếm bảng cốt lõi).
+- **Kiểm chứng thực chạy (`2026-11-23`, 0 lời gọi API trả phí):**
+  - **Offline unit/API/CI/E2E:**
+    - `cd backend && .venv/bin/python -m pytest -q` → **832 passed, 31 skipped, 0 failed** (+19 test mới: 3 test judge trong `test_p22_eval.py`, 16 test Wave 3 trong `test_wave3_ops.py`; `test_p61_ci_contract.py` PASS).
+    - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
+    - `cd backend && .venv/bin/python -m app.core.activation` → exit `0`, `"ok": true`.
+    - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build && npm run test:e2e` → exit `0`, `11/11` pages, **3 passed (7.6s)** (`axe-core` 0 violations).
+  - **Live Docker PostgreSQL 16.15 (`:5433`) + Live Redis 7 (`:6379`):**
+    - **Alembic migration roundtrip thật:** `alembic heads` (`0017_p1_course_language (head)` duy nhất) → `upgrade head` → `downgrade -1` → `upgrade head` → `downgrade base` → `upgrade head` **PASS** trên PostgreSQL 16.15.
+    - **PostgreSQL real concurrency/race tests (`11` files):** `POSTGRES_TEST_URL=...@127.0.0.1:5433/ailp_race_test SOURCE_STORAGE_BACKEND=memory pytest *postgres_concurrency*` → **29 passed, 0 failed (22.58s)**; đã dọn DB scratch `ailp_race_test`.
+    - **Live Redis 7 distributed sliding-window Lua rate-limit:** 10 lần `POST /v1/auth/login` → `401`, lần 11 → **`429 RATE_LIMITED`** kèm `Retry-After: 60`; xác minh trực tiếp trên Redis 7: `1` key, `ZCARD=10`, `PTTL=60996ms`.
+    - **Live `/health`, `/ready` & Wave 3 activation:** `GET /ready` trả **`200 ready`** (`checks: {database: "ok", redis: "ok", config: "ok"}` + baseline security headers); `GET /v1/courses/{id}/tutor/usage` xác nhận quota `messagesPerDay=30`, `tokensPerDay=100000`, `maxConcurrentStreams=2`; các route P5.0 (`mastery`, `learning-path`, `reviews/due`) trả `200`.
+    - **Live PostgreSQL Backup → SHA-256 Verify → Isolated Restore Drill:** `pg_dump --format=custom` (`87,928` bytes, `sha256: 2b0d9a443dc8...`) → `pg_backup_restore.py verify` (`ok: true`, `PGDMP` + SHA-256 khớp) → `pg_restore` vào DB tách biệt `ailp_restore_drill` → `psql` xác nhận `alembic_head=0017_p1_course_language`, `table_count=28` (27 bảng + `alembic_version`), `users=2`, `courses=1`; đã dọn sạch `ailp_restore_drill` và `/tmp/sopiskill_live_backup`.
+- **Docker Full-Stack 7-Container Live Verification (`docker compose -f docker-compose.yml -f docker-compose.wave3.yml up -d --build`):**
+  - Đổi image `minio` trong `docker-compose.yml` từ `minio/minio:latest` (đã bị gỡ khỏi Docker Hub) sang `${MINIO_IMAGE:-pgsty/minio:latest}` (UBI9 drop-in build) kèm healthcheck `["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]`.
+  - **7/7 containers UP & HEALTHY:** `db`, `redis`, `minio` (healthy), `backend`, `worker` (`celery inspect ping`: `1 node online`), `beat`, `frontend`.
+  - `GET http://127.0.0.1:8001/ready` → `200 OK` (`database=ok`, `redis=ok`, `config=ok`, security headers); `GET http://127.0.0.1:3000/` → `200 OK` + security headers; `alembic current` = `0017_p1_course_language (head)`.
+  - **Live MinIO S3 (`:9000`) + PostgreSQL 16 concurrency tests:** `test_p40_postgres_concurrency.py` + `test_p42_postgres_concurrency.py` với `SOURCE_STORAGE_BACKEND=s3` → **4 passed (4.36s)** (dọn DB scratch `ailp_minio_test`).
+  - **Live Full-Stack E2E (`:8001` + Celery worker + Postgres + Redis + MinIO):** tạo khóa `language="en"` → 5 câu interview (`intermediate`) → `approve` → worker sinh `4/4` bài `ready` (`dispatched=True`) → `GET /v1/lessons/{id}` có `6` blocks & `0` answer key leak → Tutor SSE trả `event: done` & `tutor/usage` ghi `messages=1` trên trần `30/100000`.
+- **Còn lại NOT TESTED (ngoài phạm vi máy local):**
+  - Real-LLM re-eval lại 12 topics với `judges.py` v2 (chưa gọi vì tốn phí API — chờ owner duyệt).
+  - Staging TLS termination + reverse-proxy CSP header thật và benchmark semantic embedding (`EMBEDDING_PROVIDER=openai_compatible`) trước khi mở `RAG_ENABLED`.
+
+## 2026-11-22 — Wave 1 + Wave 2 — Repo Hygiene, Playwright E2E + Axe-core, P1-LEVEL-FIT, P1-LANG (0017), P1-CONTENT-TRUNC
+
+- Repository / branch: SopiSkill · `feat/p6.0-ci-pipeline` (không push `main`).
+- **Wave 1.1 (Repo Hygiene):** tách working tree dirty lịch sử thành 3 commit sạch (`baafe08` backend fixes, `d3d2787` frontend FR-1..5, `be5ec0c` specs & audits); giữ `.claude/` và `backend/ailp.db` ngoài commit.
+- **Wave 1.2 (Docker Container Sync):** **SKIPPED / NOT TESTED** vì Docker daemon trên máy đang tắt (`docker compose ps` không kết nối được socket).
+- **Wave 1.3 (Playwright E2E + Axe-core + CI):**
+  - Thêm `backend/scripts/run_e2e_backend.py` (local FastAPI mock + throwaway SQLite, không phụ thuộc Docker), `frontend/playwright.config.ts`, `frontend/e2e/core-flow.spec.ts` (3 kịch bản: full English spine + answer-key network privacy + 6-block quiz; Tutor docked `1440×900` vs modal overlay `768×1024`/`390×844` + focus contract + `axe-core` WCAG 2.1 AA; account switch A→B session isolation), script `test:e2e` và job `frontend-e2e` trong `.github/workflows/ci.yml`.
+- **Wave 2.1 (`P1-LEVEL-FIT`):**
+  - `backend/app/services/pedagogy.py`: bổ sung từ điển tiếng Anh cho beginner/intermediate/advanced + style/depth có kiểm biên từ `_contains_any()`.
+  - `backend/app/providers/openai_compatible_provider.py`: sửa lỗi thiếu `proposal.learnerProfile` trong `generate_lesson()` — truyền `currentLevel`, `depth`, `preferredStyles` và chỉ dẫn hiệu chỉnh theo mức độ vào prompt bài học.
+- **Wave 2.2 (`P1-LANG`):**
+  - Migration expand-only `backend/alembic/versions/0017_p1_course_language.py` (`courses.language VARCHAR(16) NOT NULL DEFAULT 'vi'`, single head, downgrade sạch).
+  - Thêm `language: Literal["vi", "en"] = "vi"` vào `Course`, `CourseCreateRequest` (locale lạ → `422`), `CourseOut`/`CourseListItemOut`/`CourseDetailOut`, `LLMProvider` (`accepts_language` giữ tương thích ngược test stub), `MockProvider`, `OpenAICompatibleProvider` (prompt tách `vi`/`en`, gỡ chuỗi hardcode tiếng Việt khi `language="en"`), `tutor_context.py`, `evals/pipeline.py`, `evals/rubric.py` (kiểm rò dấu tiếng Việt ở khóa `en`), và selector chọn ngôn ngữ trên `frontend/src/app/new/page.tsx`.
+- **Wave 2.3 (`P1-CONTENT-TRUNC` + `M2-P99`):**
+  - Nâng nhẹ trần mặc định `llm_max_output_tokens_lesson`: `3000 → 4000` (`config.py`, `docker-compose.yml`).
+  - `openai_compatible_provider.py`: mọi `finish_reason == "length"` đều raise `ProviderBudgetError(truncated=True)` kể cả khi thiếu `usage`; `_chat_json()` thực hiện tối đa 1 lần compact retry (gọn nội dung + escalation có giới hạn), tuyệt đối không lưu `ready` nếu vẫn bị cắt; nhắc rõ quy tắc 1 chỗ trống `blank` và độ chính xác định lượng (`p99`) trong `LESSON_SYSTEM`.
+  - `providers/validation.py` + `evals/rubric.py`: thêm deterministic completeness lint (`check_text_completeness`, `check_lesson_completeness`) chặn code fence/inline backtick/ngoặc chưa đóng hoặc kết thúc lơ lửng (vd `diem = [7, 8,`).
+- **Kiểm chứng thực chạy (`2026-11-22`, 100% offline/mock, 0 lời gọi API trả phí):**
+  - `cd backend && .venv/bin/python -m pytest -q` → **813 passed, 31 skipped, 0 failed** (41 test mới trong `test_p1_language.py`, `test_p1_truncation.py`, `test_p1_level_fit.py`, cộng `test_p61_ci_contract.py` 16/16 pass).
+  - `cd backend && .venv/bin/python -m bandit -r app -q` → exit `0` (0 findings).
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8100 npm run build` → exit `0` (`11/11` pages).
+  - `cd frontend && npm run test:e2e` → **3 passed (8.6s)**, exit `0` (Chromium thật + `axe-core` 0 violations trên `1440`/`768`/`390`).
+- **Real-LLM Re-eval (`2026-11-23`, `deepseek-flash` @ `https://api.deepseek.com/v1`, commit `0ceea69`, 12 topics + `--judge --yes`):**
+  - Report (gitignored): `backend/evals/reports/p22_openai_compatible_20261123_002444.json` — `121` requests, `94.098` prompt / `243.906` completion tokens (`costKnown=False`).
+  - **Deterministic rubric:** **`11/12` topics PASS (`92%`)**, **`89/91` bài học** sinh thành công; **`0/89` bài cắt cụt (`truncatedLessons=0`)**; **`0/89` lỗi multi-blank**; **`6/6` topic `en` = `clean English`** (`0` dấu tiếng Việt); **`6/6` topic `vi`** hợp lệ. (1 topic fail: `en-beginner-excel` đạt `7/9` bài do 2 bài trả JSON lỗi cú pháp từ model).
+  - **LLM-as-judge (`N=7/12` scored, `5` lượt `error` do `llm_max_output_tokens_judge=3000/4800` chạm trần reasoning tokens):**
+    - Tổng trung bình: **`3.54 / 4`** (tăng **`+0.37`** so với baseline `3.17 / 4`).
+    - `language_quality`: **`2.273 → 3.571 (+1.299)`** (đạt gate `≥ 3.0`).
+    - `level_fit`: **`2.364 → 3.429 (+1.065)`** (đạt gate `≥ 3.0`).
+    - `answer_consistency`: **`2.818 → 3.286 (+0.468)`** (đạt gate `≥ 3.0`).
+    - `structural_logic`: **`3.545 → 4.000 (+0.455)`**.
+  - **Phát hiện quan trọng ở harness `evals/judges.py`:** `judges.py` nối 6–9 bài rồi cắt `[:MAX_JUDGE_CHARS]` và `openai_compatible_provider.py` cắt tiếp ở `max_input_chars=12_000` ⇒ bản thân **input gửi judge bị cắt giữa Bài 4–6** (không phải bài học thực sự bị cắt cụt). Cần nâng `max_input_chars` cho judge (hoặc chấm theo từng unit) và nâng `llm_max_output_tokens_judge` cho reasoning model.
+- **NOT TESTED:**
+  - PostgreSQL migration/race tests (`31 skipped` do chạy SQLite cục bộ không có `POSTGRES_TEST_URL` và không cài optional OCR engines).
+  - Docker container rebuild/live E2E (Docker daemon đang tắt).
+  - Screen reader thật (NVDA/VoiceOver); human rubric chấm bởi người thật.
+
 ## 2026-11-04 — P1-QUIZ-BLANK — một blank block chỉ được có đúng một chỗ trống, một đáp án
 
 - Repository / branch / HEAD: SopiSkill · `feat/p6.0-ci-pipeline` · `d747e78`. Không commit, không push.

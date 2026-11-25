@@ -1,92 +1,51 @@
 # 15 — Verification Strategy, Test Matrix & Acceptance Scenarios
 
-**Trạng thái:** TEST PLAN / NOT EXECUTED in specs creation. Lịch sử test được ghi nhận ở `00-STATUS-AND-SOURCES.md`.
+**Trạng thái (`2026-11-22`):** Repo hiện có **65 file pytest** (`backend/tests/test_*.py`), script E2E `backend/e2e_acceptance.py`, CI 5 jobs (`.github/workflows/ci.yml`) và bộ eval (`backend/evals/`). Kết quả gần nhất được ghi nhận (`2026-11-05`, `P1-PEDAGOGY-RESULT.md`): **`774 passed, 29 skipped`** (tất cả 29 skip là `POSTGRES_TEST_URL`-gated trên SQLite host; CI Linux chạy PostgreSQL thật). **Trong lần cập nhật spec ngày `2026-11-22` không chạy lại test.**
 
 ## 1. Test layers
 
-- **Unit:** Pydantic validation, grading, normalization, proposal DAG, RRF/fusion, citation validator, quota logic với mock fixtures.
-- **API integration:** FastAPI routes + auth cookie/CSRF + DB owner checks; SQLite cho behavior thuần, PostgreSQL thật cho transactions/unique/race.
-- **Worker integration:** PostgreSQL + Redis + Celery; duplicate delivery, broker down, worker crash, lease expiry, bounded retry.
-- **Frontend:** Next.js build/typecheck, browser E2E cho switching users, quiz UI, stream and citations (Playwright khi thiết lập).
-- **Real AI evaluation:** có phê duyệt budget, key/PII controls, output + metadata; không chạy trong CI mặc định.
-- **Security:** authorization matrix, key leakage scans, SSRF/file corruption, contextRef injection, prompt-injection fixtures.
+- **Unit & API integration (`backend/tests/`):** 65 file pytest phủ auth, course/interview/proposal, pedagogy (`test_p1_pedagogy.py`, `test_p21_pedagogy.py`), grading/quiz (`test_grading.py`, `test_quiz_blank.py`, `test_quiz_integrity.py`), Celery reliability (`test_job_reliability.py`), LLM provider & cost (`test_llm_provider.py`, `test_p22_cost_budget.py`), Source Research (`test_source_research_agent.py`), Tutor SSE/controls/tools (`test_p30_tutor*.py`, `test_p31_tutor*.py`), PDF/RAG/Web/OCR (`test_p40_*`, `test_p41_*`, `test_p42_*`, `test_p43_*`), Mastery/FSRS/BKT/Exposure (`test_p50_*`, `test_p51_*`, `test_p52_*`), CI contract (`test_p61_ci_contract.py`).
+- **PostgreSQL race & migration contracts:** chạy thật trên PostgreSQL 16 trong CI (`POSTGRES_TEST_URL`); skip khi chạy SQLite cục bộ.
+- **Live HTTP E2E (`backend/e2e_acceptance.py`):** chạy trên stack mock (`61/61 PASS` khi Tutor tắt; `71/71 PASS` khi bật `TUTOR_ENABLED=true` trong `TUTOR-MOCK-01`).
+- **Frontend checks:** `npm run lint`, `npm run typecheck`, `npm run build` (11 routes/static targets). **Chưa có** Playwright/Vitest E2E tự động.
+- **Real AI evaluation (`backend/evals/`):** chạy thủ công có duyệt ngân sách (`p22_real_eval.log`, `rag_eval.py`, `ocr_eval.py`, `bkt_eval.py`, `p52_readiness.py`). Không chạy trong CI.
 
-## 2. Critical cross-phase matrix
+## 2. Critical cross-phase test matrix (đã chuẩn hóa T-IDs)
 
-| Scenario | Phase | Expected result |
-|---|---|---|
-| T-001 register/login/logout/me | All | Session đúng; JWT/CSRF/Argon2id hợp lệ |
-| T-002 cross-owner resource access | All | 404 course/lesson/attempt/thread/source |
-| T-003 5 interview and proposal | P2.1 regression | Exactly 5, valid schema, no duplicates |
-| T-004 approve concurrency | P2.1 regression | One active generation job; proposal version pinned |
-| T-005 worker duplicate/recovery | P2.1 regression | No duplicate lessons; state correct |
-| T-006 invalid LLM output/timeout/429 | P2.1 | Correct code + bounded retries |
-| T-007 quiz key privacy | All | GET lesson no answer key in 5 quiz types |
-| T-008 attempt race & XP | All | Single logical attempt on same ID, no XP farm |
-| T-009 content version/reload | All | Stale 409; old history preserved; progress current |
-| T-010 DAG cycle/missing node | P2.1 | Invalid proposal rejected before approval/generation |
-| T-011 10 topic pedagogy evaluation | P2.2 | Reproducible rubric report, failure cases captured |
-| T-012 Tutor SSE full & disconnect | P3.0 | Ordered delta/done/error, persisted final state |
-| T-013 Tutor idempotency/quota | P3.0–P3.1 | No double calls, quota prevents request |
-| T-014 Tutor server-side stop | P3.1 lát A | Flag honoured while tokens flow; `cancelled` frame; partial kept; stop-vs-completed race |
-| T-015 Tutor allowance accounting | P3.1 lát A | Message/token/concurrency limits block before provider; `quota` in error body |
-| T-016 Tutor stale stream recovery | P3.1 lát A | Orphan `running` → `failed/TUTOR_STALE`, user not locked |
-| T-017 Tutor tool allowlist | P3.1 lát B | Unknown tool/args/OOB blocked before execute; audit metadata-only |
-| T-018 Tutor tool resilience | P3.1 lát B | Planner error/unsupported ⇒ turn still answers, no `tool` frame |
-| T-014 Tool allowlist/cancel | P3.1 | Unauthorized tool blocked, stop semantics observed |
-| T-015 PDF ingest failcases | P4.0 | Reject corrupt/oversize, no cross-user data |
-| T-016 Citation integrity | P4.1 | All display citations resolve valid authorized chunks |
-| T-017 RAG injection/no sources | P4.1 | No instruction hijack; abstain without evidence |
-| T-018 URL SSRF/redirect | P4.2 optional | No private/internal fetch |
-| T-019 Review schedule/timezone | P5 | Correct FSRS versioned dates, no synthetic history |
-| T-020 Backup-restore staging | P6 | Recovery verified, schema/data intact |
+| Scenario | Phase | Expected result | Trạng thái gần nhất (REPORTED) |
+|---|---|---|---|
+| T-001 register/login/logout/`/v1/auth/me` | P0.5 / All | Session đúng; JWT HttpOnly/CSRF/Argon2id hợp lệ | **TESTED (PASS)** |
+| T-002 cross-owner resource access | All | 404 course/lesson/attempt/thread/source/review | **TESTED (PASS)** |
+| T-003 5 interview + `LearnerProfile` + proposal | P2.1 + `P1-PEDAGOGY` | 5 câu, schema valid, parser tiếng Việt không dấu/unit chính xác | **TESTED (PASS — uncommitted)** |
+| T-004 approve concurrency | P1.2 / P2.1 | 1 active generation job; proposal version pinned | **TESTED (PASS)** |
+| T-005 worker duplicate / stale-dispatch / visibility timeout | P1.2 / Celery-01-02 | Không nhân đôi lesson; nhánh 3 thu hồi orphan + `DISPATCH_EXHAUSTED` | **TESTED · LIVE-VERIFIED** |
+| T-006 invalid LLM output / timeout / 429 / budget cap | P2.0 / P2.2 | Đúng error taxonomy + bounded retry + fail-fast | **TESTED (PASS)** |
+| T-007 quiz key privacy & HMAC shuffle | P1.1 / P6.1 | `GET /v1/lessons/{id}` 0 answer key; `order`/`match` ký bằng `LESSON_SHUFFLE_SECRET` | **TESTED (PASS)** |
+| T-008 attempt race, `bool` reject & XP cap | P1.1 / `P1-QUIZ-BLANK` | 1 logical attempt trên cùng ID, không farm XP, `blank` đúng 1 chỗ trống | **TESTED (PASS)** |
+| T-009 content version / reload / account switch | P1.1 / P1.3 | Stale 409; lịch sử cũ còn; A→B không rò cache | **TESTED (PASS)** |
+| T-010 DAG cycle / missing node | P2.1 | Proposal lỗi DAG bị từ chối trước approve/generate | **TESTED (PASS)** |
+| T-011 12-topic real pedagogy evaluation | P2.2 | Rubric report tái lập + failure taxonomy | **MEASURED (`3.17/4`, lộ lỗi P1)** |
+| T-012 Tutor SSE full & client disconnect | P3.0 / `TUTOR-MOCK-01` | Ordered `delta`→`done`, disconnect lưu `cancelled` + partial | **TESTED MOCK · REAL NOT TESTED** |
+| T-013 Tutor idempotency / allowance quota | P3.0–P3.1 | Replay không gọi lại; 429 kèm `detail.quota` | **TESTED MOCK** |
+| T-014 Tutor server-side stop & stale reap | P3.1 lát A | `POST .../stop` → `cancelled`, giữ partial; stale → `TUTOR_STALE` | **TESTED MOCK** |
+| T-015 Tutor tool allowlist & resilience | P3.1 lát B | Tool lạ/args sai/OOB bị chặn trước execute + audit; planner lỗi vẫn trả lời | **TESTED MOCK · REAL NOT TESTED** |
+| T-016 PDF ingest failcases & private storage | P4.0 | Reject corrupt/oversize/scan (`no_text`), không cross-user | **TESTED (PASS)** |
+| T-017 Hybrid RAG, citation integrity & abstention | P4.1 | 100% `chk_*` resolve chunk có quyền; không đủ căn cứ ⇒ abstain; chống injection | **TESTED OFFLINE (hashing baseline)** |
+| T-018 Web/arXiv SSRF, DNS rebinding, robots & rights | P4.2 | Chặn private IP/redirect/thiếu `userConfirmedRights`; live probe `example.com` + arXiv | **TESTED (PASS)** |
+| T-019 OCR opt-in (`rapidocr` / `vietocr`) | P4.3 | Chỉ OCR trang thiếu text; gắn `textSource="ocr"`, đo CER/WER | **TESTED SYNTHETIC** |
+| T-020 Mastery, FSRS schedule, BKT eval & exposure token | P5.0–P5.2 | FSRS idempotent; BKT/readiness báo `BLOCKED` trung thực; HMAC token valid | **TESTED (PASS — flags OFF)** |
+| T-021 CI pipeline 5 jobs (migration/race/build/security) | P6.1 | GitHub Actions 5/5 xanh trên Linux + Postgres 16 | **TESTED (run `41583115455`)** |
+| T-022 Browser UI E2E (Playwright) & screen reader | FR-1..FR-5 | Flow tạo khóa → lesson → quiz → docked/overlay tutor + Tab/Focus + NVDA | **NOT TESTED** |
+| T-023 Staging backup-restore & distributed rate-limit | P6.2+ | Recovery toàn vẹn + Redis rate-limit dưới multi-worker | **NOT TESTED / NOT IMPLEMENTED** |
 
-## 3. End-to-end acceptance: current mock flow
+## 3. Các vùng `NOT TESTED` bắt buộc ghi nhận trung thực
 
-**Given** fresh test user + isolated DB, `LLM_PROVIDER=mock`.
+1. **Browser UI E2E tự động (`Playwright`):** chưa có trong `frontend/package.json`; `tsc`/`build` và chụp CDP thủ công không thay thế automated E2E.
+2. **Real LLM streaming cho Tutor & real tool-calling quality:** toàn bộ Tutor mới verified trên `MockProvider`.
+3. **Re-evaluation trên real provider sau `P1-QUIZ-BLANK` và `P1-PEDAGOGY`:** chưa chạy (chờ gộp cùng `P1-CONTENT-TRUNC`, `P1-LANG`, `P1-LEVEL-FIT` và duyệt budget).
+4. **Redis redelivery sau worker stall chủ đích** (`visibility_timeout=3600` đã verify live config nhưng chưa diễn tập stall).
+5. **Screen reader thật (NVDA/VoiceOver)**, **load/stress testing**, và **backup-restore drill**.
 
-1. Register/login; GET `/v1/me` identity matches.
-2. POST course `topic="Python cho người mới"`, retry same `clientCourseId` → same course.
-3. Submit exactly 5 interview answers, GET proposal valid.
-4. Approve twice concurrently, only one active job.
-5. Poll generation (≤ workload cap) → ready, at least 2 lessons (mock hiện được báo 4).
-6. GET lesson never includes private keys, submit correct quiz with private test fixture → correct score.
-7. Reload/new session: attempt/progress/XP persisted; A logout/B login: no course A visible.
-8. Fake user ID, stale contentVersion, double submit, wrong lesson owner and worker retry all rejected/handled correctly.
+## 4. Quy tắc báo cáo kiểm thử
 
-Record logs/commands/exit codes. Do **not** label mocked flow as real provider success.
-
-## 4. P2.1 acceptance suite
-
-- Each topic fixture returns normalized profile, proposal DAG acyclic and versioned.
-- Lesson includes teach+quiz, nonempty pedagogical content, no duplicated options, answer keys only server-side.
-- Provider failure taxonomy tested (config error, 429, 5xx, timeout, invalid JSON, budget).
-- E2E job retry/cancel not corrupt old attempts, schema migrations backward compatible.
-- External API evaluation runs only after explicit real cost/dataset approval; otherwise `BLOCKED REAL` and mock integration `TESTED MOCK` separately.
-
-## 5. P3/P4 separate release gates
-
-**Tutor gate:** SSE id/order, terminal event semantics, history persistence, 404 cross-user, quota block before provider, no duplicate call, tool allowlist/cancel behavior.
-
-**P3.1 lát A evidence (2026-10-31):** `tests/test_p31_tutor_controls.py` (11),
-`tests/test_p31_tutor_migration_contract.py` (5), `tests/test_p31_tutor_postgres_concurrency.py` (4,
-cần `POSTGRES_TEST_URL`), E2E 61/61 (tutor on) và 52/52 (off). Tool allowlist (T-006) vẫn **NOT TESTED**
-vì chưa triển khai.
-**RAG gate:** pages/chunks traceable from owned PDF, no file/URL abuse, 30+ retrieval eval queries, 100% displayed citations resolve valid owned pointers, no-source abstention and injected text test.
-
-## 6. Evidence report template
-
-```text
-Phase: P2.1
-Git branch/HEAD/status: ...
-Implemented modules: ...
-Tests: <exact command>; <exit code>; <passed/failed/skipped>; environment...
-NOT TESTED: ...
-BLOCKED: ...
-Migrations: revision, backup, temp DB upgrade/downgrade, result...
-Security: owner/CSRF/answer key/secrets/cost...
-Regression: ...
-Phase gate: PASS | PARTIAL | BLOCKED
-```
-
-Không báo PASS khi chưa chạy; test đã báo trước đây không thay thế test sau code change.
+Không báo `PASS` nếu chưa có lệnh chạy thực tế và output hiển thị; luôn ghi rõ `IMPLEMENTED / TESTED / NOT TESTED / BLOCKED`, nhánh/HEAD/trạng thái dirty tree, môi trường (`mock` hay real provider) và số lượng `passed / failed / skipped`.

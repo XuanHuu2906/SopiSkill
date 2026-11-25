@@ -175,6 +175,7 @@ async def send_tutor_message(
         linked_source_titles=source_titles,
         max_context_chars=settings.tutor_context_max_chars,
         rag_context_active=bool(rag_result is not None and rag_result.items),
+        language=getattr(course, "language", "vi") or "vi",
     )
     history_rows = await tutor_service.history_for_prompt(
         db,

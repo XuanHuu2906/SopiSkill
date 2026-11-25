@@ -3,7 +3,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, citationStatusLabel, newClientId, type Citation } from "@/lib/api";
+import {
+  api,
+  citationStatusLabel,
+  fetchCourseGlossary,
+  gradeLessonBlock,
+  newClientId,
+  type BlockGradeResult,
+  type Citation,
+} from "@/lib/api";
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
 import { Badge } from "@/components/ui/Badge";
 import { Button, ButtonLink, IconButton } from "@/components/ui/Button";
@@ -12,6 +20,7 @@ import { ProgressBar } from "@/components/ui/Progress";
 import Icon from "@/components/ui/Icon";
 import useModalPanel from "@/components/ui/useModalPanel";
 import useMediaQuery from "@/components/ui/useMediaQuery";
+import VocabSheet from "@/components/course/VocabSheet";
 import TutorPanel from "./TutorPanel";
 
 interface IdText {
@@ -219,6 +228,22 @@ export default function LessonPage() {
   const [step, setStep] = useState(0);
   const [tutorOpen, setTutorOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [vocabOpen, setVocabOpen] = useState(false);
+  const [blockChecks, setBlockChecks] = useState<Record<number, BlockGradeResult>>({});
+  const [checkingBlock, setCheckingBlock] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [matchSelectedLeft, setMatchSelectedLeft] = useState<number | null>(null);
+  const lessonGlossaryKey = useSessionQueryKey(
+    "course-glossary",
+    lesson.data?.courseId ?? "none",
+    lessonId
+  );
+  const lessonGlossary = useQuery({
+    queryKey: lessonGlossaryKey,
+    enabled: Boolean(lesson.data?.courseId && lessonId && isAuthenticated),
+    queryFn: () => fetchCourseGlossary(lesson.data!.courseId!, lessonId),
+    retry: false,
+  });
   // The reference docks the tutor rail beside the lesson rather than covering
   // it, which needs room for both a 720 px column and a 400 px rail.
   const canDock = useMediaQuery("(min-width: 1024px)");
@@ -319,6 +344,8 @@ export default function LessonPage() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "auto" });
+    setMatchSelectedLeft(null);
+    setCheckError(null);
   }, [step]);
 
   if (!lessonId) return <p className="muted">Thiếu lessonId.</p>;
@@ -408,6 +435,11 @@ export default function LessonPage() {
         <IconButton aria-label="Mục lục bài học" onClick={() => setOutlineOpen(true)}>
           <Icon name="book" size={18} />
         </IconButton>
+        {lesson.data.courseId && (
+          <IconButton aria-label="Bảng thuật ngữ" onClick={() => setVocabOpen(true)}>
+            <Icon name="learn" size={18} />
+          </IconButton>
+        )}
       </div>
 
       {submitted && result ? (
@@ -435,6 +467,21 @@ export default function LessonPage() {
                   <p key={j}>{p}</p>
                 ))}
               </div>
+
+              {lessonGlossary.data && lessonGlossary.data.items.length > 0 && (
+                <div className="teach-terms-row" aria-label="Thuật ngữ chính trong bài">
+                  {lessonGlossary.data.items.slice(0, 6).map((term) => (
+                    <button
+                      key={term.id}
+                      type="button"
+                      className="term-pill"
+                      onClick={() => setVocabOpen(true)}
+                    >
+                      {term.term}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {safeStep === 0 && lesson.data.citations.length > 0 && (
                 <Card className="lesson-citations">
@@ -567,32 +614,105 @@ export default function LessonPage() {
           {current!.type === "match" && (
             <>
               <h1 className="block-title-sm">{current!.prompt}</h1>
-              {current!.lefts.map((left) => (
-                <div className="match-row" key={left.id}>
-                  <span style={{ flex: 1, fontSize: 15 }}>{left.text}</span>
-                  <label className="sr-only" htmlFor={`match-${safeStep}-${left.id}`}>
-                    Ghép cho {left.text}
-                  </label>
-                  <select
-                    id={`match-${safeStep}-${left.id}`}
-                    value={matchAnswers[safeStep]?.[left.id] ?? ""}
-                    onChange={(e) =>
-                      setMatchAnswers((p) => ({
-                        ...p,
-                        [safeStep]: { ...p[safeStep], [left.id]: Number(e.target.value) },
-                      }))
-                    }
-                  >
-                    <option value="">-- chọn --</option>
-                    {current!.rights.map((right) => (
-                      <option key={right.id} value={right.id}>
-                        {right.text}
-                      </option>
-                    ))}
-                  </select>
+              <p className="caption" style={{ marginBottom: 8 }}>
+                Chọn một mục bên trái rồi chạm vào mục tương ứng bên phải để ghép cặp.
+              </p>
+              <div className="match-board">
+                <div className="match-col">
+                  <span className="match-col-head">Cột trái</span>
+                  {current!.lefts.map((left, idx) => {
+                    const pairedRightId = matchAnswers[safeStep]?.[left.id];
+                    const isSelected = matchSelectedLeft === left.id;
+                    const isPaired = pairedRightId !== undefined;
+                    return (
+                      <button
+                        key={left.id}
+                        type="button"
+                        className={[
+                          "match-tile",
+                          isSelected ? "is-selected" : "",
+                          isPaired && !isSelected ? "is-paired" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        aria-pressed={isSelected}
+                        onClick={() =>
+                          setMatchSelectedLeft((cur) => (cur === left.id ? null : left.id))
+                        }
+                      >
+                        <span>{left.text}</span>
+                        {isPaired && <span className="match-pair-tag">{idx + 1}</span>}
+                      </button>
+                    );
+                  })}
                 </div>
-              ))}
+                <div className="match-col">
+                  <span className="match-col-head">Cột phải</span>
+                  {current!.rights.map((right) => {
+                    const pairedLeftIdx = current!.lefts.findIndex(
+                      (l) => matchAnswers[safeStep]?.[l.id] === right.id
+                    );
+                    const isPaired = pairedLeftIdx >= 0;
+                    return (
+                      <button
+                        key={right.id}
+                        type="button"
+                        className={["match-tile", isPaired ? "is-paired" : ""]
+                          .filter(Boolean)
+                          .join(" ")}
+                        onClick={() => {
+                          if (matchSelectedLeft === null) return;
+                          setMatchAnswers((p) => {
+                            const nextMap = { ...(p[safeStep] ?? {}) };
+                            for (const [k, v] of Object.entries(nextMap)) {
+                              if (v === right.id) delete nextMap[Number(k)];
+                            }
+                            nextMap[matchSelectedLeft] = right.id;
+                            return { ...p, [safeStep]: nextMap };
+                          });
+                          setMatchSelectedLeft(null);
+                        }}
+                      >
+                        <span>{right.text}</span>
+                        {isPaired && <span className="match-pair-tag">{pairedLeftIdx + 1}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="sr-only">
+                {current!.lefts.map((left) => (
+                  <div key={left.id}>
+                    <label htmlFor={`match-${safeStep}-${left.id}`}>
+                      Ghép cho {left.text}
+                    </label>
+                    <select
+                      id={`match-${safeStep}-${left.id}`}
+                      value={matchAnswers[safeStep]?.[left.id] ?? ""}
+                      onChange={(e) =>
+                        setMatchAnswers((p) => ({
+                          ...p,
+                          [safeStep]: { ...p[safeStep], [left.id]: Number(e.target.value) },
+                        }))
+                      }
+                    >
+                      <option value="">-- chọn --</option>
+                      {current!.rights.map((right) => (
+                        <option key={right.id} value={right.id}>
+                          {right.text}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
             </>
+          )}
+
+          {checkError && (
+            <div className="error-box" role="alert" style={{ marginTop: 14 }}>
+              {checkError}
+            </div>
           )}
 
           <p className="citation-line">{lesson.data.title}</p>
@@ -605,54 +725,143 @@ export default function LessonPage() {
         </div>
       )}
 
-      <div className={`lesson-bar${isPerfect ? " is-perfect" : ""}`}>
-        <div className="lesson-bar-inner">
-          {safeStep > 0 && !submitted && (
-            <IconButton className="lesson-bar-prev" aria-label="Bước trước" onClick={goPrev}>
-              <Icon name="arrowLeft" size={18} />
-            </IconButton>
-          )}
-          <span className="lesson-bar-spacer" />
+      {(() => {
+        const activeCheck = !submitted ? blockChecks[safeStep] : undefined;
+        const barTone = activeCheck
+          ? activeCheck.correct
+            ? " is-correct"
+            : " is-wrong"
+          : isPerfect
+            ? " is-perfect"
+            : "";
+        const primaryVariant = submitted
+          ? "success"
+          : activeCheck
+            ? activeCheck.correct
+              ? "success"
+              : "wrong"
+            : "primary";
 
-          {submitted ? (
-            <ButtonLink
-              href="/"
-              variant="secondary"
-              size="lg"
-              className="lesson-bar-secondary"
-              aria-label="Về trang chủ"
-            >
-              <span className="lesson-bar-glyph" aria-hidden="true">
-                <Icon name="home" size={20} />
-              </span>
-              <span className="lesson-bar-label">Trang chủ</span>
-            </ButtonLink>
-          ) : (
-            <Button
-              variant="secondary"
-              size="lg"
-              className="lesson-bar-secondary"
-              onClick={() => setTutorOpen(true)}
-              aria-label="Hỏi trợ giảng"
-            >
-              <span className="lesson-bar-glyph" aria-hidden="true">
-                <Icon name="chat" size={20} />
-              </span>
-              <span className="lesson-bar-label">Hỏi trợ giảng</span>
-            </Button>
-          )}
+        async function runBlockCheck(dispute = false) {
+          if (!lesson.data) return;
+          const single = buildAnswers(blocks, answerState, orderCandidates).find(
+            (a) => a.index === safeStep
+          );
+          if (!single) return;
+          setCheckingBlock(true);
+          setCheckError(null);
+          try {
+            const res = await gradeLessonBlock(lessonId, safeStep, {
+              contentVersion: lesson.data.contentVersion,
+              answer: single.answer,
+              ...(dispute ? { dispute: true } : {}),
+            });
+            setBlockChecks((prev) => ({ ...prev, [safeStep]: res }));
+          } catch (e) {
+            setCheckError(
+              e instanceof Error
+                ? e.message
+                : dispute
+                  ? "Không thể chấm lại."
+                  : "Không kiểm tra được câu này."
+            );
+          } finally {
+            setCheckingBlock(false);
+          }
+        }
 
-          <Button
-            size="lg"
-            variant={submitted ? "success" : "primary"}
-            className="lesson-bar-primary"
-            onClick={() => (submitted ? router.push(backHref) : primaryAction())}
-            disabled={primaryDisabled}
-          >
-            {primaryLabel}
-          </Button>
-        </div>
-      </div>
+        return (
+          <div className={`lesson-bar${barTone}`}>
+            {activeCheck && (
+              <div className="lesson-feedback-band" role="status">
+                <div>
+                  <span className="lesson-feedback-title">
+                    <Icon name={activeCheck.correct ? "checkCircle" : "close"} size={18} />
+                    {activeCheck.correct ? "Quá chuẩn!" : "Chưa chính xác"}
+                  </span>
+                  <p className="lesson-feedback-text">{activeCheck.feedback}</p>
+                  {activeCheck.solution &&
+                    current &&
+                    solutionText(current, activeCheck.solution) && (
+                      <p className="lesson-feedback-solution">
+                        Đáp án: {solutionText(current, activeCheck.solution)}
+                      </p>
+                    )}
+                </div>
+                {activeCheck.disputeAllowed && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={checkingBlock}
+                    onClick={() => void runBlockCheck(true)}
+                  >
+                    Yêu cầu chấm lại
+                  </Button>
+                )}
+              </div>
+            )}
+
+            <div className="lesson-bar-inner">
+              {safeStep > 0 && !submitted && (
+                <IconButton className="lesson-bar-prev" aria-label="Bước trước" onClick={goPrev}>
+                  <Icon name="arrowLeft" size={18} />
+                </IconButton>
+              )}
+              <span className="lesson-bar-spacer" />
+
+              {submitted ? (
+                <ButtonLink
+                  href="/"
+                  variant="secondary"
+                  size="lg"
+                  className="lesson-bar-secondary"
+                  aria-label="Về trang chủ"
+                >
+                  <span className="lesson-bar-glyph" aria-hidden="true">
+                    <Icon name="home" size={20} />
+                  </span>
+                  <span className="lesson-bar-label">Trang chủ</span>
+                </ButtonLink>
+              ) : (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    className="lesson-bar-secondary"
+                    onClick={() => setTutorOpen(true)}
+                    aria-label="Hỏi Sopi"
+                  >
+                    <span className="lesson-bar-glyph" aria-hidden="true">
+                      <Icon name="chat" size={20} />
+                    </span>
+                    <span className="lesson-bar-label">Hỏi Sopi</span>
+                  </Button>
+                  {isQuestionStep && (
+                    <Button
+                      variant="ghost"
+                      size="lg"
+                      disabled={!answeredCurrent || checkingBlock}
+                      onClick={() => void runBlockCheck(false)}
+                    >
+                      {checkingBlock ? "Đang kiểm tra…" : "Kiểm tra câu này"}
+                    </Button>
+                  )}
+                </>
+              )}
+
+              <Button
+                size="lg"
+                variant={primaryVariant}
+                className="lesson-bar-primary"
+                onClick={() => (submitted ? router.push(backHref) : primaryAction())}
+                disabled={primaryDisabled}
+              >
+                {primaryLabel}
+              </Button>
+            </div>
+          </div>
+        );
+      })()}
 
       <OutlineSheet
         open={outlineOpen}
@@ -664,6 +873,15 @@ export default function LessonPage() {
           setOutlineOpen(false);
         }}
       />
+
+      {lesson.data.courseId && (
+        <VocabSheet
+          courseId={lesson.data.courseId}
+          lessonId={lesson.data.id}
+          open={vocabOpen}
+          onClose={() => setVocabOpen(false)}
+        />
+      )}
 
       {lesson.data.courseId && (
         <TutorPanel
@@ -771,24 +989,44 @@ function ResultView({
   lessonTitle: string;
 }) {
   const perfect = result.score.correct === result.score.total && result.score.total > 0;
+  const accuracy =
+    result.score.total > 0 ? Math.round((result.score.correct / result.score.total) * 100) : 100;
   return (
     <section className="lesson-result" aria-label="Kết quả bài kiểm tra">
-      <span className="block-eyebrow">{perfect ? "Hoàn hảo" : "Kết quả"}</span>
-      <h1 className="block-title-sm">
-        {result.score.correct}/{result.score.total} câu đúng
-      </h1>
-      <p className="lesson-result-xp">
-        XP: +{result.rewards.xpEarned} (tổng {result.rewards.xp})
-        {result.duplicate && " · lần nộp trước (idempotent)"}
-        {result.rewards.xpEarned === 0 &&
-          !result.duplicate &&
-          (result.score.correct > 0
-            ? " — bài này đã được cộng XP tối đa"
-            : " — chưa có câu đúng nên chưa cộng XP")}
-      </p>
-      {result.reviewCardCreated && (
-        <p className="caption">Đã thêm bài này vào lịch ôn tập.</p>
-      )}
+      <div className={`complete-hero${perfect ? " is-perfect" : ""}`}>
+        <div className="complete-medal" aria-hidden="true">
+          <Icon name={perfect ? "trophy" : "checkCircle"} size={32} />
+        </div>
+        <span className="block-eyebrow" style={{ display: "block" }}>
+          {perfect ? "Hoàn hảo!" : "Hoàn thành bài học"}
+        </span>
+        <h1 className="block-title-sm" style={{ marginTop: 6 }}>
+          {result.score.correct}/{result.score.total} câu đúng
+        </h1>
+        <div className="complete-stats">
+          <div className="complete-stat">
+            <div className="complete-stat-val">{accuracy}%</div>
+            <div className="complete-stat-label">Độ chính xác</div>
+          </div>
+          <div className="complete-stat">
+            <div className="complete-stat-val">+{result.rewards.xpEarned}</div>
+            <div className="complete-stat-label">XP nhận được</div>
+          </div>
+          <div className="complete-stat">
+            <div className="complete-stat-val">{result.rewards.xp}</div>
+            <div className="complete-stat-label">Tổng XP</div>
+          </div>
+        </div>
+        <p className="caption" style={{ marginTop: 14 }}>
+          {result.duplicate && "Lần nộp trước (idempotent) · "}
+          {result.rewards.xpEarned === 0 &&
+            !result.duplicate &&
+            (result.score.correct > 0
+              ? "Bài này đã được cộng XP tối đa · "
+              : "Chưa có câu đúng nên chưa cộng XP · ")}
+          {result.reviewCardCreated ? "Đã thêm vào lịch ôn tập ngắt quãng." : lessonTitle}
+        </p>
+      </div>
 
       <ol className="lesson-result-list">
         {blocks.map((block, index) => {

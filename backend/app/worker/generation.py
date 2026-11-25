@@ -28,6 +28,7 @@ from app.models import (
     Unit,
 )
 from app.providers import SchemaInvalidError, get_provider
+from app.providers.base import accepts_language
 from app.providers.usage import collect_usage
 from app.providers.validation import validate_lesson
 from app.schemas.schemas import ProposalPayload
@@ -263,8 +264,9 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
                 raise RuntimeError("SUPERSEDED")
 
             lesson_index += 1
+            course_language = getattr(course, "language", "vi") or "vi"
             try:
-                content = await asyncio.wait_for(
+                lesson_coro = (
                     provider.generate_lesson(
                         course.topic,
                         proposal,
@@ -272,7 +274,20 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
                         lesson_title,
                         previous_titles,
                         source_context or None,
-                    ),
+                        language=course_language,
+                    )
+                    if accepts_language(provider.generate_lesson)
+                    else provider.generate_lesson(
+                        course.topic,
+                        proposal,
+                        proposal_unit.title,
+                        lesson_title,
+                        previous_titles,
+                        source_context or None,
+                    )
+                )
+                content = await asyncio.wait_for(
+                    lesson_coro,
                     timeout=settings.generation_lesson_timeout_seconds,
                 )
             except asyncio.TimeoutError:
@@ -319,6 +334,17 @@ async def _generate_lessons(db, job: GenerationJob, course: Course, usage=None) 
             # giữ citation của phiên bản nội dung cũ trỏ sang nguồn đã đổi.
             lesson_row.grounding = source_context_service.lesson_grounding(source_context)
             await db.flush()
+            # Wave 4 / P1-GLOSSARY — rút trích thuật ngữ từ `teach` blocks (không đụng câu hỏi).
+            try:
+                from app.services import glossary_service
+
+                await glossary_service.upsert_lesson_glossary(
+                    db, course.id, lesson_row.id, content.title, new_blocks
+                )
+            except Exception:  # pragma: no cover - phòng thủ, không chặn sinh bài
+                logger.warning(
+                    "glossary upsert skipped course=%s lesson=%s", course.id, lesson_row.id
+                )
             await citation_service.replace_lesson_citations(
                 db,
                 lesson_row,

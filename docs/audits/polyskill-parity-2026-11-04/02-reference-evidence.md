@@ -260,3 +260,30 @@ MISSING. They suppress Evidence Coverage and contribute 0 to the Conservative Fl
 - It does not claim the reference's tutor consumed the lesson context. `contextRef` being **sent**
   is a fact; **consumption** is `UNKNOWN`.
 - It does not treat the 93 origin-filtered requests as content evidence.
+
+---
+
+## 11. Addendum — Craft Anything `0.6.1` Full Bundle Reverse (2026-11-22, Tier E0+)
+
+On **2026-11-22**, Craft Anything `0.6.1` opened `https://web.polyskill.app/home` (redirected to
+`/sign-in`, `ev_c798…`), captured HTML/CSS tokens (`ev_c9d5…`), saved all 26 scripts (`ev_3025…`),
+and structurally restored the monolithic bundle (`ev_01f4…`).
+
+**Bundle identity check (`FACT`):** PolySkill still serves the **exact same bundle** as on
+2026-10-30: `entry-a3803cab42a2ab75ae9ef2e391ee92d0.js`, `5,849,374` bytes, SHA-256
+`e7f84aaffae7a3be5d943437e1ccd084a69c12aad1675f3bcc841703bde5d4ce` (2,177 Metro modules).
+Because this pass was unauthenticated, **all Nov 4 runtime scores (Evidence Coverage 53.0%,
+Measured Parity 74.7%, Conservative Floor 62.0%) remain unchanged**. However, unpacking all 19
+shared Zod modules (`M817`–`M915`) and app screens resolved several client-side `UNKNOWN`s in §4
+and §9 at the **`OBSERVED_STATIC` (E0+)** tier:
+
+| Earlier §4 / §9 item | Client-side resolution (2026-11-22, `OBSERVED_STATIC`) | Still `UNKNOWN` (server/runtime) |
+|---|---|---|
+| Citation inert `StaticText` (§4, §6) | **Explained (`M1753`, `M2097`):** `citationUrl()` returns `null` when `source.canonicalUrl` is `null` (PDF uploads), intentionally rendering an inert pill. For `arxiv` (`/abs/`→`/html/#S1`) and `web` (`#anchor`), it renders a clickable link. | Live arXiv/web click-through |
+| Proposal editing / `revise_proposal` | **Resolved (`M2163`, `M2166`, `M905`):** `PlanChat` runs an inline Pol thread (`entryPoint: 'proposal'`) on `/new/interview`; when `revise_proposal` returns `ok: true`, `ProposalCard` slides to the latest turn and collapses the prior draft. | Runtime execution of `revise_proposal` |
+| Client vs server attempt grading (§3.4, §9) | **Resolved (`M2107`, `M2118`):** `mc`/`blank`/`order`/`match` are graded **client-side** (attempt #0 locked into `results[]`); `short` calls `POST /lessons/{id}/blocks/{index}/grade` (`18s` timeout, `SelfMarkFooter` fallback offline) + `/dispute`. | Whether `api.polyskill.app` re-verifies `correct` or flags `timeMs` (`flagged`) |
+| Gamification rules (hearts, XP, streak freeze, milestones, leagues) | **Resolved (`M902`, `M911`, `M1666`):** `HEARTS_MAX=5`, `XP_LESSON_BASE=80`, `XP_PERFECT_BONUS=20`, `GOAL_LESSON_LEVELS=[1,2,3]`, `STREAK_FREEZE_EARNED_EVERY=7` (max 2), 7 milestone categories + 9 ladder milestones, 5 league tiers (`LEAGUE_COHORT_SIZE=30`, web flag `leagues: false`). | Live heart depletion/refill schedule & server anti-cheat `flagged` trigger |
+| Billing / SePay flow (§9) | **Resolved (`M914`, `M915`, `M1793`, `M1848`–`M1850`):** Web uses **Polar.sh** (card, auto-renew) + **SePay VietQR** (one-time QR transfer polled every `3s`, auto-preferred in `Asia/Ho_Chi_Minh`). Free tier copy: 1 course, unit 1, 25 Pol Qs; Pro: 25 courses/mo, all units, unlimited Pol. | Live payment webhook settlement & paywall click enforcement |
+| Undocumented major subsystems | **Discovered:** (1) Narrated audiovisual **Reel engine** (`M908`, `M2122`–`M2160`, 11 scene kinds + word-synced audio); (2) 5 practice formats (`scenario`, `spot`, `speed`/`SpeedRound`, `explain`, `recap`) & `table` figure + 7 diagram layouts + `teach.image` (`save_lesson` tool hint); (3) `x-client-blocks: short` header; (4) SQLite `polyskill.db` WAL v3 (6 tables + offline attempt outbox with `5s→300s` backoff); (5) 7 push notification types + quiet hours `22:00–08:00`. | Whether Reels / `SpeedRound` / `short` grading are enabled for all accounts at runtime |
+
+Full module-by-module reference: [`../../../polyskill-analysis-report.md`](../../../polyskill-analysis-report.md).

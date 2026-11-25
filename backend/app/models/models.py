@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Float, ForeignKey, Index, Integer, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -171,6 +171,9 @@ class Course(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     topic: Mapped[str] = mapped_column(Text)
+    language: Mapped[str] = mapped_column(
+        String(16), default="vi", server_default="vi", nullable=False
+    )
     status: Mapped[CourseStatus] = mapped_column(
         Enum(CourseStatus, name="course_status"), default=CourseStatus.interview
     )
@@ -1066,6 +1069,30 @@ class RecommendationEvent(Base):
     propensity: Mapped[float] = mapped_column(Float)
     reason_code: Mapped[str] = mapped_column(Text)
     exposed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class CourseGlossaryTerm(Base):
+    """Thuật ngữ của khóa học rút trích từ `teach` blocks (Wave 4 / P1-GLOSSARY)."""
+
+    __tablename__ = "course_glossary_terms"
+    __table_args__ = (
+        UniqueConstraint("course_id", "term_key", name="uq_course_glossary_term_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("courses.id", ondelete="CASCADE"), index=True
+    )
+    lesson_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("lessons.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    term_key: Mapped[str] = mapped_column(String(120))
+    term: Mapped[str] = mapped_column(Text)
+    definition: Mapped[str] = mapped_column(Text)
+    example: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

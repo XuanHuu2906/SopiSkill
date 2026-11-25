@@ -10,8 +10,11 @@ from app.providers import ProviderConfigError, ProviderError, get_provider
 from app.schemas.schemas import (
     AttemptOut,
     AttemptRequest,
+    BlockGradeOut,
+    BlockGradeRequest,
     CourseCreateRequest,
     CourseDetailOut,
+    CourseGlossaryOut,
     CourseListOut,
     CourseOut,
     GenerationOut,
@@ -19,8 +22,9 @@ from app.schemas.schemas import (
     InterviewOut,
     LessonOut,
     ProposalOut,
+    ProposalUpdateRequest,
 )
-from app.services import course_service, job_service, lesson_service
+from app.services import course_service, glossary_service, job_service, lesson_service
 from app.services import citation_service, source_context as source_context_service, source_service
 from app.services.lesson_content import public_blocks
 
@@ -56,13 +60,19 @@ async def create_course(
     verify_csrf(request)
     rate_limit(request, "create_course", limit=30, window_seconds=60)
     course, created = await course_service.create_course(
-        db, user.id, body.topic, body.clientCourseId, _provider()  # type: ignore[arg-type]
+        db,
+        user.id,
+        body.topic,
+        body.clientCourseId,
+        _provider(),  # type: ignore[arg-type]
+        language=body.language,
     )
     return CourseOut(
         id=f"crs_{course.id}",
         topic=course.topic,
         status=course.status.value,
         clientCourseId=course.client_course_id,
+        language=course.language,  # type: ignore[arg-type]
     )
 
 
@@ -112,6 +122,46 @@ async def get_proposal(
         approved=proposal.approved_at is not None,
         payload=proposal.payload,
     )
+
+
+@router.patch("/courses/{course_id}/proposal", response_model=ProposalOut)
+async def update_proposal(
+    course_id: str,
+    body: ProposalUpdateRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    verify_csrf(request)
+    rate_limit(request, "proposal_edit", limit=30, window_seconds=60)
+    course = await course_service.get_owned_course(db, course_id, user.id)
+    updated = await course_service.update_proposal(db, course, body)
+    return ProposalOut(
+        version=updated.version,
+        approved=updated.approved_at is not None,
+        payload=updated.payload,
+    )
+
+
+@router.get("/courses/{course_id}/glossary", response_model=CourseGlossaryOut)
+async def get_course_glossary(
+    course_id: str,
+    lessonId: str | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    course = await course_service.get_owned_course(db, course_id, user.id)
+    lesson_uuid = None
+    if lessonId:
+        lesson = await lesson_service.get_owned_lesson(db, lessonId, user.id)
+        if lesson.course_id != course.id:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "LESSON_NOT_FOUND", "message": "Lesson không thuộc khóa học này."},
+            )
+        lesson_uuid = lesson.id
+    items = await glossary_service.list_course_glossary(db, course.id, lesson_id=lesson_uuid)
+    return CourseGlossaryOut(courseId=f"crs_{course.id}", total=len(items), items=items)
 
 
 @router.post("/courses/{course_id}/approve", status_code=202)
@@ -256,4 +306,29 @@ async def submit_attempt(
         rewards={"xp": user.xp, "xpEarned": attempt.xp_awarded},
         results=attempt.results or [],
         reviewCardCreated=review_card_created,
+    )
+
+
+@router.post("/lessons/{lesson_id}/blocks/{block_index}/grade", response_model=BlockGradeOut)
+async def grade_lesson_block(
+    lesson_id: str,
+    block_index: int,
+    body: BlockGradeRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    verify_csrf(request)
+    rate_limit(request, "grade_block", limit=90, window_seconds=60)
+    if body.dispute:
+        rate_limit(request, "grade_block_dispute", limit=15, window_seconds=60)
+    lesson = await lesson_service.get_owned_lesson(db, lesson_id, user.id)
+    provider = None
+    if body.dispute:
+        try:
+            provider = get_provider()
+        except ProviderConfigError:
+            provider = None
+    return await lesson_service.grade_lesson_block(
+        db, lesson, user, block_index, body, provider=provider
     )

@@ -3,11 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
   fetchCourseMastery,
+  fetchCourses,
   fetchCourseSources,
   fetchLearningPath,
   isVerifiedStatus,
@@ -17,8 +18,10 @@ import {
 import { useRequireAuth, useSessionQueryKey } from "../../providers";
 import { Badge } from "@/components/ui/Badge";
 import { Button, ButtonLink } from "@/components/ui/Button";
-import { ProgressBar } from "@/components/ui/Progress";
+import { ProgressBar, ProgressRing } from "@/components/ui/Progress";
 import Icon from "@/components/ui/Icon";
+import VocabSheet from "@/components/course/VocabSheet";
+import { useSopi } from "@/components/layout/SopiContext";
 
 interface CourseDetail {
   id: string;
@@ -106,8 +109,43 @@ function LockGlyph() {
 export default function CoursePage() {
   const { courseId } = useParams<{ courseId: string }>();
   const { isAuthenticated, isLoading: authLoading } = useRequireAuth();
+  const { openSopi } = useSopi();
+  const [vocabOpen, setVocabOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const switcherRef = useRef<HTMLDivElement | null>(null);
+  const switcherTriggerRef = useRef<HTMLButtonElement | null>(null);
   const courseKey = useSessionQueryKey("course", courseId);
+
+  useEffect(() => {
+    if (!switcherOpen) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSwitcherOpen(false);
+        switcherTriggerRef.current?.focus();
+      }
+    }
+    function onPointerDown(e: MouseEvent) {
+      if (switcherRef.current && !switcherRef.current.contains(e.target as Node)) {
+        setSwitcherOpen(false);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [switcherOpen]);
   const sourcesKey = useSessionQueryKey("course-sources", courseId);
+  const allCoursesKey = useSessionQueryKey("courses", { limit: 10 });
+
+  const allCourses = useQuery({
+    queryKey: allCoursesKey,
+    enabled: isAuthenticated,
+    queryFn: () => fetchCourses(10, 0),
+    retry: false,
+  });
 
   const course = useQuery({
     queryKey: courseKey,
@@ -183,7 +221,57 @@ export default function CoursePage() {
     <div className="course-page">
       <div className="course-head">
         <div className="course-head-main">
-          <h1 className="course-topic">{course.data?.topic ?? "Đang tải…"}</h1>
+          <div className="course-switcher-wrap" ref={switcherRef}>
+            <h1 style={{ margin: 0 }}>
+              <button
+                ref={switcherTriggerRef}
+                type="button"
+                className="course-switcher-trigger"
+                aria-expanded={switcherOpen}
+                aria-haspopup="menu"
+                onClick={() => setSwitcherOpen((v) => !v)}
+              >
+                <span className="course-topic">{course.data?.topic ?? "Đang tải…"}</span>
+                {(allCourses.data?.items.length ?? 0) > 1 && (
+                  <Icon name="chevronDown" size={22} />
+                )}
+              </button>
+            </h1>
+            {switcherOpen && allCourses.data && (
+              <div className="course-switcher-menu" role="menu" aria-label="Chuyển khóa học">
+                {allCourses.data.items.map((item) => (
+                  <Link
+                    key={item.id}
+                    href={`/course/${item.id}`}
+                    role="menuitem"
+                    className={`course-switcher-item${item.id === courseId ? " is-current" : ""}`}
+                    onClick={() => setSwitcherOpen(false)}
+                  >
+                    <ProgressRing
+                      percent={item.progress.percent}
+                      size={22}
+                      thickness={3}
+                      label={`${item.progress.percent}%`}
+                    />
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {item.topic}
+                    </span>
+                    <span className="caption">{item.progress.percent}%</span>
+                  </Link>
+                ))}
+                <Link
+                  href="/new"
+                  role="menuitem"
+                  className="course-switcher-item"
+                  onClick={() => setSwitcherOpen(false)}
+                  style={{ color: "var(--ember-deep)" }}
+                >
+                  <Icon name="plus" size={18} />
+                  <span>Tạo khóa học mới</span>
+                </Link>
+              </div>
+            )}
+          </div>
           <div className="course-progress-row">
             <ProgressBar
               percent={progress?.percent ?? 0}
@@ -196,15 +284,23 @@ export default function CoursePage() {
             </span>
           </div>
         </div>
-        {resumeLessonId ? (
-          <ButtonLink href={`/lesson/${resumeLessonId}`} size="md" className="course-resume">
-            <Icon name="play" size={16} />
-            Tiếp tục
-          </ButtonLink>
-        ) : (
-          <Badge tone="muted">Đã hết bài</Badge>
-        )}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <Button variant="secondary" size="md" onClick={() => setVocabOpen(true)}>
+            <Icon name="learn" size={16} />
+            Thuật ngữ
+          </Button>
+          {resumeLessonId ? (
+            <ButtonLink href={`/lesson/${resumeLessonId}`} size="lg" className="course-resume">
+              <Icon name="play" size={16} />
+              Tiếp tục
+            </ButtonLink>
+          ) : (
+            <Badge tone="muted">Đã hết bài</Badge>
+          )}
+        </div>
       </div>
+
+      <VocabSheet courseId={courseId} open={vocabOpen} onClose={() => setVocabOpen(false)} />
 
       {course.isLoading && (
         <div className="course-timeline">
@@ -413,10 +509,27 @@ export default function CoursePage() {
       )}
 
       {course.data?.status === "ready" && (
-        <p className="caption course-footnote">
-          Nội dung bài học do AI sinh. Kiến thức chưa được đối chiếu với nguồn trừ khi bài
-          học ghi rõ trạng thái đã xác minh.
-        </p>
+        <>
+          <button
+            type="button"
+            className="course-adjust-card"
+            onClick={() => openSopi(courseId)}
+          >
+            <div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)" }}>
+                Quá dễ? Quá khó? Hỏi Sopi
+              </div>
+              <div style={{ fontSize: 14, color: "var(--ink-2)", marginTop: 2 }}>
+                Hỏi Sopi giải thích sâu hơn, lấy thêm ví dụ hoặc gợi ý cách học phù hợp với bạn.
+              </div>
+            </div>
+            <Icon name="chat" size={20} />
+          </button>
+          <p className="caption course-footnote">
+            Nội dung bài học do AI sinh. Kiến thức chưa được đối chiếu với nguồn trừ khi bài
+            học ghi rõ trạng thái đã xác minh.
+          </p>
+        </>
       )}
     </div>
   );

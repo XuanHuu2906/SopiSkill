@@ -1,6 +1,6 @@
 # P5.0 — Learner Profile, Mastery Baseline & FSRS (Design)
 
-**Ngày:** 2026-11-02 · **Phase:** P5.0 · **Trạng thái:** APPROVED (chờ implement)
+**Ngày:** 2026-11-02 (cập nhật trạng thái `2026-11-22`) · **Phase:** P5.0 · **Trạng thái:** **IMPLEMENTED · REPORTED TESTED (`P50_ENABLED=false` mặc định; migration `0015_p50_learner_profile`)**
 **Quyết định người dùng:** B — snapshot bền vững + thư viện `fsrs`; phạm vi full gồm UI review.
 
 ---

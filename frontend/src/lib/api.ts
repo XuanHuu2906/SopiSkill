@@ -102,10 +102,13 @@ export async function registerRequest(
   });
 }
 
+export type CourseLanguage = "vi" | "en";
+
 export interface CourseListItem {
   id: string;
   topic: string;
   status: string;
+  language?: CourseLanguage;
   createdAt: string | null;
   updatedAt: string | null;
   progress: { completed: number; total: number; percent: number };
@@ -836,4 +839,108 @@ export function reviewStateLabel(state: number): string {
     default:
       return "Không rõ";
   }
+}
+
+// ---------- Wave 4: Proposal Edit, Glossary, Per-block Grading, Me Surface ----------
+
+export interface ProposalUpdatePayload {
+  expectedVersion: number;
+  name: string;
+  objective: string;
+  units: { title: string; blurb: string; lessonTitles: string[] }[];
+  outcomes: string[];
+}
+
+export function updateProposal<T = unknown>(
+  courseId: string,
+  body: ProposalUpdatePayload
+): Promise<T> {
+  return api<T>(`/v1/courses/${courseId}/proposal`, {
+    method: "PATCH",
+    body,
+  });
+}
+
+export interface GlossaryTerm {
+  id: string;
+  termKey: string;
+  term: string;
+  definition: string;
+  example: string | null;
+  lessonId: string | null;
+  lessonTitle: string | null;
+}
+
+export interface CourseGlossary {
+  courseId: string;
+  total: number;
+  items: GlossaryTerm[];
+}
+
+export function fetchCourseGlossary(
+  courseId: string,
+  lessonId?: string
+): Promise<CourseGlossary> {
+  const query = lessonId ? `?lessonId=${encodeURIComponent(lessonId)}` : "";
+  return api<CourseGlossary>(`/v1/courses/${courseId}/glossary${query}`);
+}
+
+export interface BlockGradeResult {
+  blockIndex: number;
+  type: string;
+  correct: boolean;
+  grader: "deterministic" | "semantic_rubric" | "llm_rubric";
+  feedback: string;
+  solution: Record<string, unknown> | null;
+  disputeAllowed: boolean;
+}
+
+export function gradeLessonBlock(
+  lessonId: string,
+  blockIndex: number,
+  body: {
+    contentVersion: number;
+    answer: unknown;
+    dispute?: boolean;
+    disputeReason?: string;
+  }
+): Promise<BlockGradeResult> {
+  return api<BlockGradeResult>(`/v1/lessons/${lessonId}/blocks/${blockIndex}/grade`, {
+    method: "POST",
+    body,
+  });
+}
+
+export interface MeStats {
+  userId: string;
+  email: string | null;
+  displayName: string;
+  xp: number;
+  streakDays: number;
+  lastActiveDate: string | null;
+  coursesTotal: number;
+  coursesReady: number;
+  lessonsCompleted: number;
+  lessonsTotal: number;
+  attemptsTotal: number;
+  reviewsDue: number;
+  createdAt: string | null;
+}
+
+export function fetchMeStats(): Promise<MeStats> {
+  return api<MeStats>("/v1/me/stats");
+}
+
+export function updateMe(displayName: string): Promise<AuthUser> {
+  return api<AuthUser>("/v1/me", {
+    method: "PATCH",
+    body: { displayName },
+  });
+}
+
+export function deleteMe(body: { confirmText: string; password?: string }): Promise<void> {
+  return api<void>("/v1/me", {
+    method: "DELETE",
+    body,
+  });
 }

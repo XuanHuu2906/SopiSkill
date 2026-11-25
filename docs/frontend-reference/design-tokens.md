@@ -188,3 +188,51 @@ Base radius 22, padded 20 (some hero cards measured with 32).
 
 Textarea composer 50 px tall, radius 22, 1 px linen border, 16 px horizontal padding,
 17/27 text. Chat composer sends with a 48 px pill button.
+
+---
+
+## Craft Anything `0.6.1` Complete Bundle Token Verification (FACT, 2026-11-22)
+
+Direct extraction from Metro theme modules `M1362`–`M1372` (`ev_3025…`) and live CSS custom
+properties (`ev_c9d5…`) confirmed all tokens above and revealed additional tokens & exact
+corrections not listed in the 2026-11-03 survey:
+
+### Additional Colour Tokens (`M1364`, `M1370`, `ev_c9d5…`)
+
+| Token (`--c-*`) | Light | Dark | Role |
+|---|---|---|---|
+| `inkDeep` | `#150E2B` | `#B197FF` | Deepest ink / dark hover highlight |
+| `btn` | `#241C3B` | `#9B7BFF` | Primary dark/accent button fill |
+| `btnFg` | `#FCFAFF` | `#17112B` | Foreground on `btn` |
+| `btnHover` | `#150E2B` | `#B197FF` | Hover state for `btn` |
+| `onEmber` | `#FFFFFF` | `#17112B` | Foreground on `--c-ember` (note: dark mode flips to dark ink `#17112B` over `#9B7BFF`!) |
+| `slab` | `#241C3B` | `#2A2247` | Dark slab card surface |
+| `slabFg` | `#F1ECFD` | `#EFE9FC` | Text on slab surface |
+| `emberGlow` | `rgba(123, 91, 230, 0.3)` | `rgba(155, 123, 255, 0.3)` | Focus/halo glow |
+| `knob` | `#FFFFFF` | `#EFE9FC` | Toggle switch knob |
+| `washOnDark` | `rgba(235,227,255,0.12)` | `rgba(235,227,255,0.12)` | Subtle fill over dark slabs |
+| `sandOnDark` | `rgba(205,193,239,0.5)` | `rgba(205,193,239,0.5)` | Muted border/track over dark slabs |
+
+### Exact Dark Shadows (`M1368`)
+
+| Token (`--shadow-*`) | Dark value |
+|---|---|
+| `card` | `0px 1px 2px rgba(0, 0, 0, 0.3), 0px 10px 24px -12px rgba(0, 0, 0, 0.65)` |
+| `raised` | `0px 2px 6px rgba(0, 0, 0, 0.35), 0px 22px 44px -18px rgba(0, 0, 0, 0.8)` |
+| `overlay` | `0px 28px 64px -20px rgba(0, 0, 0, 0.85)` |
+| `sheet` | `0px -18px 48px -12px rgba(0, 0, 0, 0.75)` |
+| `glow` | `0px 14px 32px -12px rgba(155, 123, 255, 0.5)` |
+| `knob` | `0px 2px 5px -1px rgba(0, 0, 0, 0.6)` |
+| `rail` | `-18px 0px 48px -28px rgba(0, 0, 0, 0.8)` |
+
+### Additional Font Weights, Layout & Motion Constants (`M1365`, `M1366`, `M1372`)
+
+- **Fonts (8 faces total):** also includes `Inter_700Bold` (`fontFamily.bold`) and `JetBrainsMono_500Medium` (`fontFamily.monoMedium`).
+- **Layout extras (`M1366`):** `border.hairline = 1`, `screenPadding.waitingTop = 40`, `screenPadding.conceptTop = 24`, `contentWidth.profile = 1000`, `contentWidth.prompt = 680`.
+- **Theme persistence (`M1370`):** stored in `localStorage['polyskill.theme']` (`'light' | 'dark'`; removed when `'system'`), toggles `:root[data-theme="dark"]` + `@media (prefers-color-scheme: dark)`.
+- **Motion corrections & springs (`M1372`):**
+  - `duration.pulse = 1600` ms; `easeInOut = cubic-bezier(0.77, 0, 0.175, 1)`.
+  - **`press.scale = 0.97`** (not `0.98`; `0.98` is only passed as an override on Paywall plan rows).
+  - `pop`: `{fromScale: 0.9, fromTranslateY: -10, overshootScale: 1.04, overshootTranslateY: 1, overshootAt: 0.6}`.
+  - `pulse`: `{min: 0.35, max: 1}`; `rise`: `{fromTranslateY: 10}`.
+  - Springs: `settle {duration: 400, dampingRatio: 1}`, `snappy {duration: 300, dampingRatio: 0.8}`, `bouncy {duration: 550, dampingRatio: 0.55}`.

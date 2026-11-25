@@ -1,67 +1,46 @@
 # 14 — Nonfunctional Requirements, Observability & Operations
 
-**Trạng thái:** PROPOSAL/P6 cho release; một số cơ chế job/auth được báo cáo đã có. Ngưỡng hiệu năng là **mục tiêu đề xuất**, không phải số đã benchmark.
+**Trạng thái (`2026-11-22`):** **P6.1 CI Pipeline** đã **IMPLEMENTED · REPORTED TESTED** (GitHub Actions run `41583115455`, 5/5 jobs xanh — chi tiết `25-P61-CI-PIPELINE.md`) và **RELIABILITY-CELERY-01/02** đã deployed/live-verified. Các cổng production **P6.2+** (staging TLS/CSP, distributed Redis rate-limit, backup-restore drill, retention/deletion policy, real-provider budget/rollout) vẫn là **PLANNED / NOT VERIFIED**.
 
-## 1. Reliability & consistency
+## 1. Reliability & Operations Requirements
 
-| ID | NFR | Xác minh |
+| ID | NFR | Trạng thái (2026-11-22) |
 |---|---|---|
-| OPS-001 | DB là source of truth cho trạng thái course/job/progress | Reload/restart kiểm chứng |
-| OPS-002 | At-least-once queue + idempotent writes, worker crash recovery | Failure injection |
-| OPS-003 | Timeout/retry bounded cho provider, tools, ingest; no infinite loops | Unit/integration |
-| OPS-004 | Token/cost quota đo được và có guard trước gọi model | Mock provider + usage test |
-| OPS-005 | Health/liveness và readiness kiểm tra phụ thuộc thiết yếu | HTTP/stack smoke |
-| OPS-006 | Log/metrics/traces không chứa secrets hoặc raw content cá nhân | Redaction scan |
-| OPS-007 | Backup có restore drill; migration backward-compatible | Test DB riêng |
-| OPS-008 | HTTPS/cookie secure/CSP/CORS/proxy policy có test staging | Security checks |
-| OPS-009 | CI/test gates, review/rollback trước deployment | CI evidence |
+| OPS-001 | DB là source of truth cho trạng thái course/job/progress/source | **IMPLEMENTED · TESTED** |
+| OPS-002 | At-least-once queue + idempotent writes, worker crash/stale-dispatch recovery (`visibility_timeout=3600`) | **IMPLEMENTED · TESTED · DEPLOYED** (`RELIABILITY-CELERY-01/02`) |
+| OPS-003 | Timeout/retry bounded cho provider, tools, ingest, web fetch, OCR | **IMPLEMENTED · TESTED** |
+| OPS-004 | Token/cost quota đo được (`llm_usage_events`, `tutor_usage_events`) và guard trước gọi model | **IMPLEMENTED · TESTED** |
+| OPS-005 | `/health` liveness + `/ready` deep readiness (DB, Redis, activation guardrails) + Docker Compose healthchecks | **IMPLEMENTED · LIVE-TESTED** (`2026-11-23`: Postgres 16.15 + Redis 7 trả `200 ready`) |
+| OPS-006 | Logs/metrics không chứa secrets, cookies, raw prompts hoặc answer keys | **IMPLEMENTED · TESTED** |
+| OPS-007 | Backup định kỳ + restore drill (`backend/scripts/pg_backup_restore.py`); migration expand-only kiểm thử trên Postgres rỗng | **IMPLEMENTED · LIVE-TESTED** (`2026-11-23`: `pg_dump` + SHA-256 verify + `pg_restore` vào `ailp_restore_drill` xác nhận `0017_p1_course_language` & 28 bảng; migration roundtrip + 29/29 Postgres race tests PASS) |
+| OPS-008 | HTTPS, `COOKIE_SECURE=true`, baseline security headers/HSTS, trusted proxy, distributed Redis rate-limit (`limits.py` Lua sliding window) | **IMPLEMENTED · PARTIALLY LIVE-TESTED** (Redis 7 Lua limiter `429 Retry-After` + `ZCARD=10`/`PTTL` + security headers LIVE-TESTED; staging TLS/reverse-proxy CSP **NOT TESTED**) |
+| OPS-009 | Automated CI gates (backend tests, migrations, Postgres races, frontend build, Bandit/pip-audit) | **IMPLEMENTED · TESTED** (`P6.1`) |
 
-## 2. Proposed SLO starting points (chưa cam kết)
+## 2. Proposed SLO starting points (mục tiêu tham chiếu — chưa benchmark tải)
 
-- API non-AI read/write p95 ≤500 ms khi chạy staging gần mức tải mục tiêu; **phải đo baseline phần cứng và query trước**.
-- Tutor first delta p95 ≤5 s trên provider đã chọn là mục tiêu thử nghiệm, **không bảo đảm** qua mạng/LLM; report theo model.
-- Job `queued` bị broker unavailable phải được beat/reconciler phát hiện lại theo nhịp hiện tại báo cáo 30s; kiểm tra end-to-end với fail injection, không biến thành SLA production khi chưa benchmark.
-- 100% displayed citations phải resolve được chunk có quyền; đây là **integrity gate**, không chứng minh factual correctness của mọi câu.
-- Job success/timeout/cost baseline lấy từ eval set 10 topics và workload test trước khi chốt threshold release.
+- API non-AI read/write p95 ≤ 500 ms ở staging (chưa đo tải).
+- Beat reconciler quét 30s; stale dispatch thu hồi sau `300s` (max `5` lần → `DISPATCH_EXHAUSTED`).
+- Integrity gate: 100% displayed citations phải resolve được chunk thuộc quyền user; 0% answer key leak trên `GET /v1/lessons/{id}`.
+- Chất lượng LLM thật: theo dõi từ eval 12 topics (baseline `3.17/4`, mục tiêu sau fix P1: `language_quality` & `level_fit` ≥ `3.0/4`, `0` truncation).
 
-## 3. Observability schema proposal
+## 3. CI Pipeline hiện hữu (`P6.1` — `.github/workflows/ci.yml`)
 
-- IDs: `requestId`, `traceId`, `userId` hashed/pseudonymous nếu cần, `courseId`, `generationJobId`, `providerRequestId` nếu có, promptVersion.
-- Events: `course.created`, `interview.completed`, `proposal.approved`, `generation.queued/claimed/ready/failed`, `attempt.submitted`, `tutor.started/done/error`, `source.ready/failed`, `citation.validation_failed`.
-- Metrics: error rate by endpoint/phase, job queue age, lease expiry/requeue, retries, LLM token/latency/cost estimate, streaming disconnects, source ingest errors, retrieval Recall@k on eval.
-- Metrics aggregate/minimize personal data; không log full user input, content PDF, prompts hoặc answer key.
+5 automated jobs chạy trên Linux runner + PostgreSQL 16 (không gọi LLM trả phí):
+1. Backend unit/integration suite (`pytest`).
+2. Alembic migration `upgrade head` trên PostgreSQL rỗng + `downgrade -1` + `upgrade head`.
+3. PostgreSQL real concurrency/race tests (`POSTGRES_TEST_URL`).
+4. Frontend `npm run lint` (`--max-warnings=0`), `npm run typecheck` (`tsc --noEmit`), `npm run build`.
+5. Security scans (`bandit`, `pip-audit`, `npm audit`).
 
-## 4. Deployment configuration (P6)
+**Ghi nhận vận hành quan trọng (`RELIABILITY-CELERY-02`):**
+- Không chạy `pytest` trong long-lived worker container (gây xung đột asyncpg event loop và thiếu `.github/`). Gate đúng là host/CI pytest + live E2E.
+- Tránh để chạy song song host Celery worker với Docker worker cùng nối 1 Redis queue (từng gây stale orphan job; đã có quy trình kiểm `celery inspect ping` phải đúng `1 node online`).
+- Hiện tại `P1-PEDAGOGY` đã sửa trong working tree nhưng **chưa rebuild/deploy** vào container backend/worker/beat.
 
-- CI: Python unit/integration tests, typecheck/lint khi config sẵn, Next.js build, Postgres migration on fresh DB, security/dependency scanning, OpenAPI diff check.
-- Staging: TLS + `COOKIE_SECURE=true`, trusted proxy, allowlist CORS, CSP/HSTS, secret manager; không bật demo header.
-- Rate-limit distributed (Redis) trước khi scale replicas; avoid relying on in-memory login limits.
-- Backups encrypted + retention + restore tests; DB migrations staging-first và có stop condition cho destructive steps.
-- Rollback: code rollback + data forward-compatibility; restore DB backup chỉ sau được người sở hữu phê duyệt.
-- Release là manual gate, không để coding agent auto deploy/push main.
+## 4. Hạng mục bắt buộc trước Production Release (`P6.2+` — OPEN)
 
-## 5. Privacy, safety and retention (open decisions)
-
-- Quyết định thời gian lưu interview, course, tutor messages, PDF, embeddings, logs, usage; xóa account/source có cascade/revocation.
-- Chính sách dữ liệu gửi tới external model/provider và user consent; cung cấp export/delete nếu sản phẩm cần và tuân thủ quy định áp dụng.
-- Phải audit tool security/SSRF/file parser abuse và prompt injection trước public release.
-
-## 6. Windows runbook for re-validation
-
-```powershell
-git status --short
-git branch --show-current
-git rev-parse HEAD
-docker compose config
-docker compose ps
-cd backend
-python -m pytest -q
-cd ..
-cd frontend
-npm run build
-cd ..
-$env:E2E_BASE = "http://127.0.0.1:8001"
-python .\backend\e2e_acceptance.py
-```
-
-**Lưu ý:** Trước `docker compose up -d --build`/`alembic upgrade head` trên DB chứa dữ liệu cần giữ, inspect migrations & backup. Các lệnh này được đưa làm runbook, **không phải lệnh đã chạy trong phiên soạn specs**.
+- Chuyển rate-limiter từ in-memory sang **Redis distributed** (`M1-SEC-LIMITER`).
+- Bổ sung **Playwright E2E** vào CI để kiểm chứng browser UI thật (hiện `tsc`/`build` chỉ chứng minh biên dịch).
+- Thiết lập staging TLS + `COOKIE_SECURE=true` + CSP/HSTS + CORS allowlist.
+- Thực hiện **backup & restore drill** có bằng chứng trên DB tách biệt.
+- Chốt **data retention / account deletion (`DELETE /v1/me`) / external LLM privacy policy** và ngân sách provider thật trước khi bật `LLM_PROVIDER=openai_compatible` hoặc `TUTOR_ENABLED=true` cho người dùng thật.

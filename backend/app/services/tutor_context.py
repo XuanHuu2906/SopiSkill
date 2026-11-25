@@ -86,6 +86,7 @@ def build_tutor_system(
     linked_source_titles: list[str] | None = None,
     max_context_chars: int = 6000,
     rag_context_active: bool = False,
+    language: str = "vi",
 ) -> str:
     """Dựng system prompt từ lesson **public** blocks do server đọc.
 
@@ -94,6 +95,13 @@ def build_tutor_system(
     (`tutor_service`) chỉ dùng `lesson_content.public_blocks`.
     """
     parts = [TUTOR_SYSTEM_BASE]
+    if (language or "vi").strip().lower() == "en":
+        parts.append(
+            "Course language: English. Reply primarily in clear, natural English "
+            "unless the learner explicitly asks in another language."
+        )
+    else:
+        parts.append("Ngôn ngữ khóa học: tiếng Việt (vi).")
     parts.append(f"Bài học hiện tại: {clip(lesson_title, 200)}")
 
     current = blocks[block_index] if 0 <= block_index < len(blocks) else None

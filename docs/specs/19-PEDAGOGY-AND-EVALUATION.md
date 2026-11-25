@@ -1,74 +1,45 @@
 # 19 — Learning Design, DAG Curriculum & AI Evaluation Specification
 
-**Trạng thái:** PROPOSAL / P2.1–P2.2; không đồng nhất JSON hợp lệ với nội dung dạy tốt.
+**Trạng thái (`2026-11-22`):** **P2.1 (DAG + `LearnerProfile`)**, **P2.2 (12-topic eval harness + rubric + cost tracking)** và **`P1-PEDAGOGY`** (fix parser tiếng Việt không dấu/đơn vị) đã **IMPLEMENTED · REPORTED TESTED**. Kết quả eval thực tế đầu tiên đạt **3.17/4** và đã khoanh vùng chính xác các lỗi cần sửa ở Wave 2 (`P1-CONTENT-TRUNC`, `P1-LANG`, `P1-LEVEL-FIT`).
 
-## 1. Learning objectives
+## 1. Learning objectives & DAG validation (IMPLEMENTED — P2.1)
 
-- Dùng **Bloom's Taxonomy** để viết outcomes đo được (remember, understand, apply, analyze, evaluate, create), tránh chỉ dùng “hiểu rõ”.
-- Gắn lesson với một hoặc nhiều outcomes và skill nodes; complexity phù hợp learner profile được user tự khai, không giả mastery thực tế.
-- Từ cơ bản đến nâng cao theo prerequisite DAG; topological order dùng cho sequencing, không nhất thiết ép user tuân thủ tuyệt đối.
-- Quiz bám sát teach content và objectives; tránh câu hỏi không có lời giải trong bài hoặc đáp án mơ hồ.
-- Tutor khuyến khích làm từng bước và kiểm tra hiểu, không luôn cho đáp án trọn vẹn khi user đang trong quiz.
+- Dùng **Bloom's Taxonomy** (`remember`, `understand`, `apply`, `analyze`, `evaluate`, `create`) trên từng `CurriculumSkill`.
+- `ProposalPayload` chứa `learnerProfile`, `skills[]` (tối đa 48), `prerequisites[]` (tối đa 96 cạnh `[prereqId, skillId]`).
+- **Invariants đã cài & kiểm thử (`test_p21_pedagogy.py`):**
+  1. Skill IDs unique, title không rỗng, mapping lesson khớp `lessonTitles`.
+  2. Edge endpoints tồn tại, không self-loop, đồ thị **acyclic** (reject cycle trước approve/generate).
+  3. Beginner graph không bắt buộc phải có cạnh; legacy proposals không có `skills` vẫn đọc được.
+- **Cập nhật `P1-PEDAGOGY` (`2026-11-05`, uncommitted):** chuẩn hóa bỏ dấu tiếng Việt (`_fold()`), word boundary lookaround, sửa parser thời lượng (`gio`/`phut`/`tieng`), độ sâu (`hiểu sâu` + cảnh báo xung đột `deep`/`broad`) và phong cách (`đồ thị`, `ví dụ thực tế`) — 54 tests pass (`tests/test_p1_pedagogy.py`).
 
-## 2. DAG validation
+## 2. Evaluation harness & Baseline thực tế (`P2.2`, `2026-11-04`)
 
-**Input:** `nodes[{skillId,label,bloomLevel?}]`, `edges[{prerequisiteSkillId,skillId}]`, `lessonSkillRefs`.
+- **Harness:** `backend/evals/` (`p22_real_eval.log`, `docs/audits/polyskill-parity-2026-11-04/08-ai-quality-evaluation.md`).
+- **Baseline đã đo trên provider thật (`openai_compatible`, `deepseek-ai/deepseek-v4.1-flash-1017`, prompt `p3.0-v1`):**
+  - 12 topics, 149 LLM calls, **`N = 11` scored** (1 topic chạm `PROVIDER_BUDGET_EXCEEDED`).
+  - **Mean: `3.17 / 4`** (median `3.22`, min `2.67`, max `3.56`, stdev `0.315`).
+  - Tiêu chí cao nhất: `safety` (`4.000`), `repetition` (`3.727`).
+  - Tiêu chí thấp nhất: **`language_quality` (`2.273`)**, **`level_fit` (`2.364`)**, **`answer_consistency` (`2.818`)**.
+  - **Lỗi lặp lại phát hiện được:**
+    1. **Truncation (`P1-CONTENT-TRUNC`):** `7/11` topic bị cắt cụt ở trần output token — **OPEN**.
+    2. **Language mismatch (`P1-LANG`):** `6/6` topic tiếng Anh bị trả tiếng Việt do chưa có tham số ngôn ngữ — **OPEN**.
+    3. **Level mismatch (`P1-LEVEL-FIT`):** `8/11` topic lệch trình độ so với yêu cầu — **OPEN**.
+    4. **Multi-blank ambiguity (`P1-QUIZ-BLANK`):** `5/11` topic có 2 chỗ trống / 1 đáp án — **FIXED IN CODE (`BLANK_SLOT_COUNT=1`), chưa đo lại bằng real LLM**.
+  - **Bài học quan trọng:** bộ structural validation pass `12/12` trên chính tập đầu ra này ⇒ *valid JSON ≠ nội dung dạy tốt*.
+  - **Chưa đo (`UNMEASURED`):** tutor scaffolding (`TUTOR_ENABLED=false`) và citation/abstention trên dữ liệu thật (`RAG_ENABLED=false`).
 
-**Invariants (must test):**
+## 3. Rubric đánh giá (0–4 theo judge harness & review người)
 
-1. Node IDs unique, label không rỗng.
-2. Edge endpoints tồn tại, không self-loop, duplicate edge được reject/deduplicate minh bạch.
-3. Directed graph **acyclic**; topological sort phải lấy đủ nodes, không tạo thứ tự giả nếu cycle.
-4. Lesson references chỉ trỏ known skills, ít nhất một outcome tương ứng.
-5. Không đặt hard rule mọi course phải có edges; beginner graph 1 node/0 edges là hợp lệ.
+- Các chiều cốt lõi: Alignment với outcomes, Progression theo DAG, Factual accuracy, `level_fit`, `language_quality`, `answer_consistency` / Quiz quality, `repetition`, `safety`.
+- **Nguyên tắc bắt buộc:** *"Điểm do LLM chấm chỉ là tín hiệu tham khảo, không phải ground truth và không thay thế người chấm."* Mọi báo cáo eval phải ghi rõ `n`, failed cases, prompt/model version, token/latency/cost (hoặc `costKnown=false`), và mẫu human review.
 
-## 3. Evaluation dataset P2.2
+## 4. Target gate cho đợt Re-eval tiếp theo (Wave 2 — cần duyệt ngân sách)
 
-**Tối thiểu 10 topics** đa dạng: 
+1. Đóng toàn bộ 3 lỗi mở: `P1-CONTENT-TRUNC`, `P1-LANG`, `P1-LEVEL-FIT` (cộng `P1-QUIZ-BLANK` & `P1-PEDAGOGY` đã xong).
+2. Deterministic gate đạt 100% trên toàn bộ 12 topic fixtures (0 truncation, 0 multi-blank, 0 answer-key leak, 0 DAG cycle).
+3. Real-provider re-eval (sau khi owner duyệt ngân sách) hướng tới `language_quality ≥ 3.0/4`, `level_fit ≥ 3.0/4`, `0` lỗi truncation và không hồi quy `safety`/`answer_consistency`.
+4. Sau khi bật `TUTOR_ENABLED` và `RAG_ENABLED` ở môi trường đánh giá, bổ sung 2 trục đang `UNMEASURED`: tutor scaffolding và citation groundedness/abstention.
 
-| Topic example | Language / level | Risk to evaluate |
-|---|---|---|
-| Python cho người mới | vi / beginner | Progression & simple code |
-| Cấu trúc dữ liệu: Hash Table | vi / intermediate | Definitions and collision handling |
-| SQL căn bản | vi / beginner | Query correctness |
-| Git & branching | vi / beginner | Procedural steps |
-| Thống kê mô tả | vi / beginner | Numeric examples |
-| Mạng máy tính TCP/IP | vi / intermediate | Layer misconceptions |
-| English job interview | en / intermediate | Target language consistency |
-| Linear algebra vectors | en / beginner | Math formatting & examples |
-| Kỹ năng nghiên cứu học thuật | vi / intermediate | Avoid inventing references |
-| Chủ đề mơ hồ “AI” | vi / unspecified | Clarify goal/unknown level |
+## 5. Không làm
 
-Dùng fixtures không nhạy cảm, có answers/profile variants; split regression stable; lưu prompt version/model/schema version, dataset checksum.
-
-## 4. Rubric per course/lesson (proposed 0–3 each)
-
-| Dimension | 0 | 1 | 2 | 3 |
-|---|---|---|---|---|
-| Alignment | Không bám mục tiêu | Lệch nhiều | Chủ yếu phù hợp | Phù hợp rõ từng outcome |
-| Progression | Sai prerequisite | Có gaps lớn | Logic chấp nhận | DAG & order hợp lý |
-| Accuracy | Lỗi nghiêm trọng | Lỗi đáng kể | Lỗi nhỏ/cần review | Được reviewer kiểm chứng mẫu |
-| Learner fit | Sai level rõ | Gượng ép | Khá phù hợp | Ví dụ/độ khó nhất quán |
-| Quiz quality | Không có answerable quiz | Mơ hồ/sai key | Chấm được, còn vấn đề | Chấm được, bám nội dung |
-| Clarity | Rối/thiếu | Khó theo dõi | Rõ cơ bản | Cấu trúc/ví dụ dễ hiểu |
-
-**Mọi điểm rubric ngoài validation deterministic cần người review hoặc đánh giá có kiểm soát.** Nếu dùng LLM-as-judge: lưu model/prompt/version, sample human audit; không gọi là ground truth.
-
-## 5. Acceptance metrics & gates
-
-- **Deterministic gate:** 100% JSON valid theo schema, DAG no cycles, all links valid, lesson has teach+quiz, no leaked keys, no duplicate lesson title within scope, no invalid options.
-- **Evaluative metrics:** rubric scores và rate of critical factual errors trên ít nhất 10 cases; kết quả `n`, failures, prompt/model version, token/latency/cost; không chỉ cherry-pick best output.
-- **Cost:** theo job + stage + provider; ước lượng phí phải gắn bảng giá có timestamp/nguồn hoặc ghi unknown nếu không kiểm chứng.
-- Ngưỡng trung bình rubric/maximum cost là **OPEN decision**, không tự chốt con số không dựa baseline.
-
-## 6. Regression & reviewer workflow
-
-1. Freeze dataset & expected deterministic validators.
-2. Generate bằng mock/offline, fail nếu contract/graph invalid.
-3. Với real provider đã được phép: run sampled topics, save redacted outputs/metrics có quyền; không đưa raw PII vào repo.
-4. Review blind samples về pedagogy/accuracy; label lỗi: factual, coherence, difficulty, miskey, source hallucination, repetitiveness.
-5. So sánh versions cùng dataset, báo improvements/regressions và cost tradeoff; không ra mắt nếu có critical safety/key leak/ownership failure.
-
-## 7. Không làm
-
-Không diễn giải nghiên cứu Bloom/Bastani/Kestin thành lời cam kết hiệu quả SopiSkill; không đổ lỗi chất lượng vào provider khi schema validator sai; không tự deploy adaptive deep learning chưa có dữ liệu.
+Không coi điểm LLM-as-judge là ground truth; không gọi `MockProvider` là kết quả chất lượng sư phạm; không chạy real-provider eval khi chưa được duyệt ngân sách; không diễn giải nghiên cứu học thuật thành cam kết hiệu quả điểm số của SopiSkill.

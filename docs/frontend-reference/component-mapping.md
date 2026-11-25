@@ -84,9 +84,20 @@ The tutor UI is all inside `TutorPanel.tsx`; the planned `TutorSheet.tsx`,
 
 | Reference element | Reason |
 |---|---|
-| League, milestones, weekly chart on `/profile` | No backend contract (GAP-03) |
+| Weekly XP bar chart, 46 milestones, League on `/profile` | No backend endpoint yet (GAP-03); `/profile` renders real 4-tile stats from `GET /v1/me/stats` + courses list |
 | OAuth providers | SopiSkill auth is email/password |
 | Paywall, billing | Out of scope for this task |
 | Mascot / logo assets | Brand assets must not be copied (D-01) |
-| Per-lesson duration, unit tone, paywall flags, lock state | API GAP; requires additive backend fields (GAP-01, GAP-02, GAP-12) |
-| Offline save, vocabulary list, lesson summary sheet | API GAP (GAP-13, GAP-14) |
+| Per-lesson duration, unit tone, paywall flags, Audio Reels | API GAP; requires additive backend fields (GAP-01, GAP-02, GAP-12, GAP-16) |
+| Offline SQLite cache + outbox | API/storage GAP (GAP-13) |
+
+## PolySkill A-Z UI Parity Pass (2026-11-23, IMPLEMENTED)
+
+- `frontend/src/app/globals.css`: Added complete PolySkill light/dark tokens (`--ink-deep`, `--btn`, `--btn-fg`, `--btn-hover`, `--slab`, `--slab-fg`, `--ember-glow`, `--knob`, `--shadow-knob`), `0.97` active press scale, motion animations (`sopi-rise`, `sopi-pop`), `.side-stats-card`, `.course-switcher-*`, `.match-board`, `.lesson-feedback-band`, `.complete-hero`, `.profile-*`, `.list-group-*`, `.tutor-chips-row`, `.proposal-card`, `.interview-composer`.
+- `frontend/src/components/layout/AppFrame.tsx` & `TabBar.tsx`: Added Daily Counters card (Streak + XP pills from `/v1/me/stats`), `/profile` route nav + 5-tab mobile bar, single-row Dark/Light toggle in SideNav footer.
+- `frontend/src/app/page.tsx`: Cleaned Home dashboard (Greeting → Hero Resume Card → Course Grid → Completed Courses → Review Due banner).
+- `frontend/src/app/profile/page.tsx`: New dedicated Profile page (avatar, joined date, 4 real stat tiles from `/v1/me/stats`, courses grid, `ListGroup` shortcuts).
+- `frontend/src/app/settings/page.tsx`: Restyled with PolySkill `ListGroup` sections + `ThemeToggle`.
+- `frontend/src/app/course/[courseId]/page.tsx`: Added Course Switcher dropdown on title + bottom `"Quá dễ? Quá khó?"` card.
+- `frontend/src/app/lesson/[lessonId]/page.tsx` & `TutorPanel.tsx` & `VocabSheet.tsx`: Added glossary term pills on `teach` blocks, 2-column tap-to-pair `.match-board` (with synced `sr-only` `<select>` fallback), PolySkill bottom Moss/Clay `.lesson-feedback-band` wired to Wave 4 `gradeLessonBlock` + dispute, `.complete-hero` 3-stat celebration screen, Tutor avatar + quick-reply chips + `.tool-status-item` badges, and fixed `--linen`/`--radius-md` CSS vars in `VocabSheet`.
+- `frontend/src/app/new/page.tsx`, `new/interview/page.tsx`, `new/proposal/page.tsx`: Fixed `--wash` chip token, added source banner CTA, pill `.interview-composer`, and `.proposal-card` with moss check-circle outcomes.

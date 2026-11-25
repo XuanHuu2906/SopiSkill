@@ -1,90 +1,52 @@
 # 17 — Decision Log & Open Questions
 
-**Trạng thái:** Chỉ các mục có bằng chứng đã được quyết định mới xem là accepted. Số còn lại là proposed/open.
+**Trạng thái (`2026-11-22`):** Chỉ các mục có quyết định/bằng chứng triển khai rõ ràng mới đánh dấu `ACCEPTED`. Các câu hỏi mới phát sinh sau eval thật và đối chiếu PolySkill `2026-11-22` được giữ rõ ở mục `OPEN`.
 
-| ID | Decision | Status | Evidence / what to decide |
+## 1. Core & Phase Decisions
+
+| ID | Decision | Status | Evidence / Ghi chú |
 |---|---|---|---|
-| DEC-001 | SopiSkill xây độc lập, không clone PolySkill | ACCEPTED project principle | Project context + master plan |
-| DEC-002 | Giữ stack hiện hữu Next.js 15/FastAPI/Postgres/Redis/Celery | Chọn cho kế hoạch | Master plan; check current repo before edits |
-| DEC-003 | MockProvider là default, real provider fail-fast | REPORTED IMPLEMENTED | `llm-provider.md`, progress P2.0 |
-| DEC-004 | Auth HttpOnly JWT cookie + CSRF + Argon2id | REPORTED IMPLEMENTED | progress P0.5; không dùng demo header production |
-| DEC-005 | Quiz closed-form deterministic, answer key server-only | REPORTED IMPLEMENTED | progress P1.1 |
-| DEC-006 | Generation job at-least-once + atomic claim/outbox | REPORTED IMPLEMENTED | progress P1.2 |
-| DEC-007 | Course completed lesson threshold ≥80% | INCUMBENT / PRODUCT APPROVAL PENDING | Có code/report, chưa duyệt policy lâu dài |
-| DEC-008 | XP cap theo user/lesson/contentVersion | INCUMBENT / PRODUCT APPROVAL PENDING | Có code/report, cần duyệt public policy |
-| DEC-009 | Real smoke Deploy.com DeepSeek 3 requests | APPROVED FOR THAT SMOKE ONLY | Không là quyền chạy 10-topic real eval |
-| DEC-010 | Curriculum prerequisite DAG, Bloom outcomes | DESIGN CHOICE, P2.1 NOT VERIFIED | Chọn cấu trúc và validation/migration |
-| DEC-011 | Hybrid RAG FTS + pgvector + RRF | DESIGN CHOICE, P4 NOT VERIFIED | Benchmark retrieval/model/dimension trước code |
-| DEC-012 | AI Tutor SSE + read-only tools | PROPOSED P3 | API/status/quota/replay chưa duyệt |
-| DEC-013 | FSRS rồi BKT conditional | FUTURE P5 | Cần review history/eval before activation |
-| DEC-014 | Production deployment, billing, paid plans | NOT APPROVED | P6/P7 manual gate |
+| DEC-001 | SopiSkill xây độc lập, không sao chép code/UI/assets/prompts PolySkill | **ACCEPTED** | Project rule (`AGENTS.md`, `00-STATUS-AND-SOURCES.md`) |
+| DEC-002 | Giữ stack Next.js 15 / FastAPI / PostgreSQL 16 / Redis 7 / Celery / MinIO (`frontend/`, `backend/`) | **ACCEPTED · IMPLEMENTED** | Live repo & `docker-compose.yml` |
+| DEC-003 | `MockProvider` mặc định, real provider fail-fast (`503 PROVIDER_NOT_CONFIGURED`) | **ACCEPTED · IMPLEMENTED** | `config.py`, `providers/`, P2.0 |
+| DEC-004 | Auth HttpOnly JWT cookie + CSRF double-submit + Argon2id; `ALLOW_DEMO_HEADER=false` | **ACCEPTED · IMPLEMENTED** | `api/v1/auth.py`, P0.5 |
+| DEC-005 | Quiz server-authoritative 100%, `public_block()` không bao giờ lộ đáp án; HMAC shuffle key (`LESSON_SHUFFLE_SECRET`) | **ACCEPTED · IMPLEMENTED** | `lesson_content.py`, P1.1 + P6.1 |
+| DEC-006 | Generation job at-least-once + atomic claim/lease/outbox + stale-dispatch recovery + `visibility_timeout=3600` | **ACCEPTED · IMPLEMENTED · DEPLOYED** | `job_service.py`, `celery_app.py`, `RELIABILITY-CELERY-01/02` |
+| DEC-007 | Course completed lesson threshold `≥80%` | **INCUMBENT / PRODUCT APPROVAL PENDING** | `lesson_service.py`; chưa chốt chính sách lâu dài |
+| DEC-008 | XP policy (`10/câu đúng + 20 bonus`, cap theo `(user, lesson, contentVersion)`) | **INCUMBENT / PRODUCT APPROVAL PENDING** | `lesson_service.py`; cần chốt public policy |
+| DEC-009 | Real smoke & 12-topic eval Deploy.com DeepSeek | **SCOPED APPROVAL ONLY** | Chỉ áp dụng cho các lượt đã duyệt; không là blanket budget |
+| DEC-010 | Curriculum prerequisite DAG (`skills`, `prerequisites`) & Bloom outcomes lưu versioned trong `course_proposals.payload` | **ACCEPTED · IMPLEMENTED** | `schemas.py`, `pedagogy.py`, P2.1 (`test_p21_pedagogy.py`) |
+| DEC-011 | Hybrid RAG offline-first (Phương án A): PostgreSQL FTS + JSON exact cosine (`hashing` default, `openai_compatible` opt-in), **hoãn `pgvector`** tới khi benchmark model thật | **ACCEPTED · IMPLEMENTED** (`RAG_ENABLED=false`) | Duyệt `2026-10-31`, `20-P41-HYBRID-RAG.md`, `0012_p41_rag` |
+| DEC-012 | AI Tutor SSE + server-side deterministic read-only tools (`read_lesson`, `explain_deeper`, `read_source`) + quota + best-effort stop | **ACCEPTED · IMPLEMENTED** (`TUTOR_ENABLED=false`) | `0008`–`0010`, `10-AI-TUTOR-SSE.md`, `TUTOR-MOCK-01` |
+| DEC-013 | P5.0 (Phương án B: snapshot bền vững + `fsrs` + UI `/review`); P5.1 BKT research-only; P5.2 readiness gate + HMAC exposure logging | **ACCEPTED · IMPLEMENTED** (`P50_ENABLED=false`, ML deploy BLOCKED) | `0015`–`0016`, `22-P50`, `23-P51`, `24-P52` |
+| DEC-014 | Production deployment, billing, entitlements, paid plans | **NOT APPROVED / DEFERRED** | Manual gate P6.2+ / P7 |
+| DEC-015 | Tự host 21 `.woff2` fonts (Manrope/Inter/JetBrains Mono) thay `next/font/google` để đảm bảo build webpack offline ổn định | **ACCEPTED · IMPLEMENTED** (FR-4, D-12) | `frontend/src/app/fonts.css`, `frontend/public/fonts/` |
+| DEC-016 | Tutor rail **dock `400px`** cạnh bài học ở desktop `≥1024px` (phi modal) và **modal overlay** có focus trap + `inert` ở `<1024px`; dùng `<div role="dialog">` thay `<aside>` | **ACCEPTED · IMPLEMENTED** (FR-4b, FR-5) | `TutorPanel.tsx`, `useModalPanel.ts`, axe-core 0 violations |
+| DEC-017 | `P1-QUIZ-BLANK`: reject ngay (severity `error`) mọi `blank` có ≠1 chỗ trống thay vì multi-blank hoặc `warning`; không rewrite 7 bài cũ trong DB | **ACCEPTED · IMPLEMENTED** (`2026-11-04`) | `validation.py`, `worker/generation.py`, `test_quiz_blank.py` |
+| DEC-018 | `P4.3` OCR opt-in cục bộ (`rapidocr` & `vietocr`, mặc định TẮT), tách `pipelineVersion` để bảo toàn citation lịch sử | **ACCEPTED · IMPLEMENTED** (`OCR_ENABLED=false`) | `21-P43-OCR.md`, `0014_p43_ocr` |
 
-## Câu hỏi cần chốt theo thời điểm (không chặn viết specs)
+## 2. Decisions lịch sử đã chốt ở P3.1 (bảo toàn + cập nhật trạng thái)
 
-1. **P2.1:** Có cho phép tạo schema `curriculumGraph` trong payload proposal v2 không? Hay dùng bảng graph versioned riêng? Điều kiện: query patterns, migration/backfill & version compatibility.
-2. **P2.1:** Ngôn ngữ course và thời lượng học được nhập explicit UI hay trích từ interview? Ngữ nghĩa `availableMinutesPerDay` khi user không trả lời là unknown.
-3. **P2.1 real test:** Nhà cung cấp/model cụ thể, giới hạn USD hoặc số tokens, 1–2 topic được phép gửi, dữ liệu ngoài hay synthetic; không tự dùng quyền smoke cũ.
-4. **P2.2:** Rubric và ngưỡng go/no-go về factuality, difficulty, cost/latency; ai là reviewer pedagogy.
-5. **P3:** Quota tutor (messages/tokens/day), thread retention, timeout, `409 in-progress` behavior, event log/replay; stop billing semantics.
-6. **P4:** PDF size/pages/time limits, private storage provider, retention/deletion, embedding model & dimension, quyền sử dụng tài liệu.
-7. **P5:** Completion threshold 80%, XP formulas, version policy khi regenerate; có gamification công khai hay không.
-8. **P6:** Host/deployment, legal/privacy policy, backups SLA, incident response, dữ liệu được đưa sang real AI provider.
+- **`DEC-P31-A1` (ACCEPTED):** Tutor SSE replay = **explicit restart** (`replaySupported=false`, không chấp nhận `Last-Event-ID`).
+- **`DEC-P31-A2` (ACCEPTED):** Stop = **best-effort server cancellation** (`cancel_requested_at`, `providerStopGuaranteed=false`), không hứa hoàn tiền token đã sinh.
+- **`DEC-P31-B1` (ACCEPTED):** Tutor tools = **server-side deterministic JSON** qua `plan_tutor_tool`, không dùng native `tool_calls`.
+- **`DEC-P31-B2` (SUPERSEDED BY P4.1):** Ở P3.1, `read_source` được để `available=False`; từ **P4.1** đã chuyển `available=True` nhưng chỉ thực thi khi `RAG_ENABLED=true` và có `source_reader` đã scope quyền, ngược lại từ chối sạch không bịa citation (`backend/app/services/tutor_tools.py`).
 
+## 3. Câu hỏi mở cần owner chốt (OPEN — tính đến 2026-11-22)
 
-## Accepted during P3.1 lát A (2026-10-31, agent implementation — user-approved scope)
+1. **Kích hoạt tính năng đã code:** Có bật `TUTOR_ENABLED=true`, `P50_ENABLED=true`, `P52_EXPOSURE_ENABLED=true` trên môi trường dev/staging không? Định mức `TUTOR_MESSAGES_PER_DAY` / `TUTOR_TOKENS_PER_DAY` mong muốn là bao nhiêu?
+2. **Real LLM & Embedding Provider:** Chọn provider/model/ngân sách nào cho (a) tái đánh giá 12 topics sau khi sửa `P1-CONTENT-TRUNC` + `P1-LANG` + `P1-LEVEL-FIT`, (b) real streaming Tutor smoke, và (c) semantic embedding thật thay `hashing-ngram-v1` (và có chuyển sang `pgvector` sau benchmark hay không)?
+3. **Ngôn ngữ (`P1-LANG` & `GAP-21`):** Chỉ thêm `language` (`vi`/`en`) trên course trước, hay triển khai luôn `PATCH /v1/me` tách `appLanguage` và `lessonLanguage`?
+4. **Proposal revision (`GAP-08`):** Chọn `PATCH /v1/courses/{id}/proposal` (form sửa trực tiếp có version conflict) hay `PlanChat` hội thoại qua Tutor với tool `revise_proposal`?
+5. **Chấm từng câu & Tự luận AI (`GAP-11`):** Có bổ sung `POST /v1/lessons/{id}/blocks/{index}/grade` (giữ server-authoritative) và AI rubric grader cho `short` (`got_it | almost | not_yet` + `dispute`), hay giữ cơ chế nộp 1 batch cuối bài?
+6. **Chính sách sản phẩm & Gamification (`DEC-007/008`, `GAP-03`):** Chốt chính thức ngưỡng `≥80%`, công thức XP, và phạm vi `/v1/me/stats` (streak/hearts/weekly chart) hay giữ tối giản.
+7. **Phạm vi dài hạn (`GAP-16`, `GAP-17`, `GAP-22`, `GAP-23`):** Xác nhận giữ **DEFERRED** cho Narrated Reel Engine, `SpeedRound`, Offline SQLite Outbox, Leagues và Billing (Polar/SePay) cho tới sau Production Release.
+8. **P6.2 Production & Privacy:** Chính sách retention/deletion (`DELETE /v1/me`), đồng thuận dữ liệu gửi tới external LLM, Redis rate-limit, và lịch backup-restore drill.
 
-```text
-DEC-P31-A1: Tutor SSE replay semantics = explicit restart
-Date / reviewer: 2026-10-31, user chose option when asked
-Status: ACCEPTED
-Context: P3.1.5 requires documenting replay/resume semantics; no durable event log exists.
-Options: (a) explicit restart, no resume; (b) persist event log + Last-Event-ID.
-Choice: (a). Keep `id = streamId:seq` for future extension, but do NOT accept Last-Event-ID.
-Consequences: `replaySupported=false` stays; client reloads thread history after disconnect;
-  changing this requires an event-log table + reconnect tests before any claim.
-Evidence: docs/specs/10-AI-TUTOR-SSE.md §5, thread-detail response, E2E 12b.
-```
+## 4. Format ghi quyết định mới
 
 ```text
-DEC-P31-A2: Stop semantics = best-effort server cancellation, no refund claim
-Date / reviewer: 2026-10-31
-Status: ACCEPTED
-Context: pausing a provider stream cannot unsend tokens already generated/billed.
-Options: (a) claim "cancelled ⇒ free"; (b) expose cancel_requested + providerStopGuaranteed=false.
-Choice: (b). Endpoint writes `cancel_requested_at`; the stream task persists the terminal state.
-Consequences: UI says the partial answer is kept; docs state tokens already produced may be billed.
-Evidence: tests/test_p31_tutor_controls.py, PostgreSQL race test, development-progress P3.1 lát A.
-```
-
-```text
-DEC-P31-B1: Tutor tools = server-side deterministic JSON, not native tool_calls
-Date / reviewer: 2026-10-31, user chose option when asked; implemented same day
-Status: ACCEPTED
-Context: tools must work with mock provider offline and with any OpenAI-compatible adapter.
-Options: (a) server-side deterministic tools; (b) native OpenAI tool_calls; (c) no tools.
-Choice: (a). Model returns {tool, args} via `plan_tutor_tool`; server validates allowlist +
-  strict args + block bounds, then executes read-only code.
-Consequences: mock/provider share one contract; server is the only executor; no native streaming
-  of tool deltas; tool quality with real models still NOT TESTED.
-Evidence: app/services/tutor_tools.py, migration 0010, tests/test_p31_tutor_tools.py, E2E 63/63.
-```
-
-```text
-DEC-P31-B2: Tool scope = read_lesson + explain_deeper; read_source deferred to P4.1
-Date / reviewer: 2026-10-31
-Status: ACCEPTED
-Context: no ingested sources/chunks exist yet, so source tools would have nothing to read.
-Options: (a) implement read_source with fake data; (b) allowlist it but return
-  TUTOR_TOOL_NOT_AVAILABLE; (c) omit entirely.
-Choice: (b) — honest refusal instead of invented citations.
-Consequences: TUTOR-010 stays blocked on P4.1; the allowlist already reserves the name.
-Evidence: tutor_tools.TOOLS["read_source"].available == False + test.
-```
-
-## Format for new accepted decisions
-
-```text
-DEC-015: <short title>
+DEC-0XX: <short title>
 Date / reviewer: <date, role>
 Status: ACCEPTED | REJECTED | SUPERSEDED | PENDING
 Context: <facts and constraints>
@@ -93,5 +55,3 @@ Choice: <explicit user decision>
 Consequences: <schema/api/rollout/tests>
 Evidence: <issue/PR/commit/log>
 ```
-
-Không suy diễn user đã chấp thuận một product policy chỉ vì code hiện thực hóa baseline đề xuất.

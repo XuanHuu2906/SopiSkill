@@ -21,8 +21,10 @@ from app.models import (
     Unit,
 )
 from app.providers import LLMProvider, ProviderError, SchemaInvalidError
+from app.providers.base import accepts_language
 from app.providers.usage import collect_usage
-from app.schemas.schemas import ProposalPayload
+from app.providers.validation import validate_proposal
+from app.schemas.schemas import ProposalPayload, ProposalUpdateRequest
 from app.services import llm_usage_service, pedagogy
 from app.services.lesson_content import COMPLETION_THRESHOLD_PERCENT
 
@@ -75,7 +77,13 @@ async def get_owned_course(db: AsyncSession, course_id: str, user_id: uuid.UUID)
 
 
 async def create_course(
-    db: AsyncSession, user_id: uuid.UUID, topic: str, client_course_id: str, provider: LLMProvider
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    topic: str,
+    client_course_id: str,
+    provider: LLMProvider,
+    *,
+    language: str = "vi",
 ) -> tuple[Course, bool]:
     """Trả về (course, created). Idempotent theo (user_id, client_course_id)."""
     result = await db.execute(
@@ -87,14 +95,24 @@ async def create_course(
     if existing is not None:
         return existing, False
 
-    course = Course(user_id=user_id, topic=topic, client_course_id=client_course_id)
+    course = Course(
+        user_id=user_id,
+        topic=topic,
+        client_course_id=client_course_id,
+        language=language or "vi",
+    )
     db.add(course)
     await db.flush()
 
     # Interview questions do NOT consume provider tokens for mock provider, but do
     # for real providers — record usage so cost reports don't silently omit it.
     with collect_usage() as usage:
-        questions = await provider.generate_interview_questions(topic)
+        if accepts_language(provider.generate_interview_questions):
+            questions = await provider.generate_interview_questions(
+                topic, language=course.language
+            )
+        else:
+            questions = await provider.generate_interview_questions(topic)
     await llm_usage_service.record_standalone(usage, user_id=user_id)
     interview = CourseInterview(
         course_id=course.id, questions=questions[:INTERVIEW_QUESTIONS_COUNT], answers=[], completed_count=0
@@ -151,9 +169,17 @@ async def _generate_proposal(
     try:
         with collect_usage() as harness:
             try:
-                payload = await provider.generate_proposal(
-                    course.topic, interview.questions or [], clean_answers
-                )
+                if accepts_language(provider.generate_proposal):
+                    payload = await provider.generate_proposal(
+                        course.topic,
+                        interview.questions or [],
+                        clean_answers,
+                        language=getattr(course, "language", "vi") or "vi",
+                    )
+                else:
+                    payload = await provider.generate_proposal(
+                        course.topic, interview.questions or [], clean_answers
+                    )
             finally:
                 # Chi phí đã phát sinh kể cả khi provider lỗi/sai schema. Ghi bằng
                 # session riêng: request này có thể rollback sau đó.
@@ -211,6 +237,91 @@ async def get_latest_proposal(db: AsyncSession, course: Course) -> CourseProposa
         .limit(1)
     )
     return result.scalars().first()
+
+
+async def update_proposal(
+    db: AsyncSession,
+    course: Course,
+    body: ProposalUpdateRequest,
+) -> CourseProposal:
+    """Chỉnh sửa proposal có kiểm soát phiên bản (optimistic locking, Wave 4 / P1-PROPOSAL-EDIT).
+
+    - Khóa row course để tuần tự hóa với `approve_course` hoặc 2 tab cùng sửa.
+    - Chỉ cho sửa khi course đang ở trạng thái `proposed`, chưa approve, và chưa có job active.
+    - Giữ nguyên `learnerProfile` do server suy ra từ phỏng vấn (client không thể giả mạo).
+    - Tạo bản ghi `CourseProposal` mới (`version + 1`) thay vì ghi đè lịch sử.
+    """
+    course = await _lock_course_row(db, course.id)
+    if await _active_job(db, course.id) is not None or course.status != CourseStatus.proposed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PROPOSAL_LOCKED",
+                "message": f"Không thể chỉnh sửa đề xuất khi khóa học đang ở trạng thái {course.status.value}.",
+            },
+        )
+
+    latest = await get_latest_proposal(db, course)
+    if latest is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NO_PROPOSAL", "message": "Chưa có đề xuất để chỉnh sửa."},
+        )
+    if latest.approved_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "PROPOSAL_LOCKED", "message": "Đề xuất đã được duyệt, không thể chỉnh sửa."},
+        )
+    if latest.version != body.expectedVersion:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PROPOSAL_VERSION_CONFLICT",
+                "message": "Đề xuất đã thay đổi trên phiên bản mới hơn, hãy tải lại trước khi lưu.",
+                "currentVersion": latest.version,
+            },
+        )
+
+    prev_payload = latest.payload if isinstance(latest.payload, dict) else {}
+    cleaned_outcomes = [o.strip() for o in body.outcomes if o and o.strip()]
+    try:
+        candidate = ProposalPayload.model_validate(
+            {
+                "name": body.name.strip(),
+                "objective": body.objective.strip(),
+                "units": [
+                    {
+                        "title": u.title.strip(),
+                        "blurb": u.blurb.strip(),
+                        "lessonTitles": [t.strip() for t in u.lessonTitles if t and t.strip()],
+                    }
+                    for u in body.units
+                ],
+                "outcomes": cleaned_outcomes,
+                "learnerProfile": prev_payload.get("learnerProfile"),
+                "skills": [],
+                "prerequisites": [],
+            }
+        )
+        candidate = validate_proposal(candidate)
+        candidate = pedagogy.normalize_curriculum(candidate)
+        pedagogy.validate_curriculum(candidate)
+    except (SchemaInvalidError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "PROPOSAL_INVALID", "message": str(exc)[:300]},
+        ) from exc
+
+    new_row = CourseProposal(
+        course_id=course.id,
+        version=latest.version + 1,
+        payload=candidate.model_dump(),
+        approved_at=None,
+    )
+    db.add(new_row)
+    await db.commit()
+    await db.refresh(new_row)
+    return new_row
 
 
 async def _lock_course_row(db: AsyncSession, course_id: uuid.UUID) -> Course:
@@ -393,6 +504,7 @@ async def list_courses(
                 "id": f"crs_{course.id}",
                 "topic": course.topic,
                 "status": course.status.value,
+                "language": getattr(course, "language", "vi") or "vi",
                 "createdAt": course.created_at.isoformat() if course.created_at else None,
                 "updatedAt": course.updated_at.isoformat() if course.updated_at else None,
                 "progress": {
@@ -462,6 +574,7 @@ async def get_course_detail(db: AsyncSession, course: Course, user_id: uuid.UUID
         "id": f"crs_{course.id}",
         "topic": course.topic,
         "status": course.status.value,
+        "language": getattr(course, "language", "vi") or "vi",
         "units": units_out,
         "progress": {"completed": completed, "total": total, "percent": 0 if total == 0 else round(completed / total * 100)},
     }

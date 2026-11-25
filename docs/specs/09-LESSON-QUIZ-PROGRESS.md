@@ -1,71 +1,63 @@
 # 09 — Lesson Engine, Quiz, Progress & XP
 
-**Trạng thái:** P1.1 đã được báo cáo IMPLEMENTED + TESTED; kiểm tra code hiện tại trước khi thay đổi. Policy 80% cần product owner chốt lâu dài.
+**Trạng thái (`2026-11-22`):** **P1.1**, **P6.1 HMAC shuffle**, **`P1-QUIZ-BLANK`** (`BLANK_SLOT_COUNT=1`), **P5.0 `reviewCardCreated`** và **FR-4/FR-5 step-by-step lesson player** đã **IMPLEMENTED · REPORTED TESTED**. Policy hoàn thành `≥80%` và thang XP vẫn giữ nhãn `INCUMBENT / PRODUCT APPROVAL PENDING`.
 
-## 1. Block contract
+## 1. Block contract hiện hữu (`schemas.py`, `lesson_content.py`, `validation.py`)
 
-| Block | Public payload | Private grading key | Grading |
+| Block | Public payload (`GET /v1/lessons/{id}`) | Private grading key (`Lesson.content`) | Grading hiện tại |
 |---|---|---|---|
-| `teach` | Nội dung giảng, ví dụ | Không có | Không chấm |
-| `mc` | Câu hỏi + options | `answerIndex` | So index/ID hợp lệ |
-| `blank` | Câu điền với `____` | normalized accepted answer(s) | Trim + casefold theo policy |
-| `order` | Các items được shuffle, stable public IDs | thứ tự đúng/private IDs | So full ordered ID sequence |
-| `match` | Hai nhóm được shuffle, stable public IDs | đúng map cặp ghép | So pair mapping |
-| `short` | Câu hỏi tự luận ngắn | `acceptedAnswers[]` hoặc rubric | Giai đoạn hiện tại exact-match normalized, **không** LLM grading |
-
-Kiểu `short` nếu mở rộng semantic grading bằng LLM là phase khác, phải tách `pending`/rubric và evaluation; không tự dùng LLM để chấm chính xác như quiz đóng.
+| `teach` | `title`, `paragraphs[]` (1..30) | Không có | Không chấm |
+| `mc` | `question`, `options[2..6]` | `answerIndex` | So index hợp lệ (từ chối `bool`) |
+| `blank` | `sentence` (bắt buộc đúng **1** chỗ trống `____`) | `answer` | Trim + casefold exact-match |
+| `order` | `prompt`, `items[]` đã shuffle bằng **HMAC key** + stable public IDs | thứ tự gốc | So full ordered ID sequence |
+| `match` | `prompt`, hai cột đã shuffle bằng **HMAC key** + stable public IDs | `pairs[]` | So pair mapping |
+| `short` | `question` | `acceptedAnswers[1..10]` | Exact-match normalized; **chưa có** LLM rubric grading |
 
 ## 2. Requirements
 
-| ID | Yêu cầu |
-|---|---|
-| LESSON-001 | Public `GET lesson` không lộ bất cứ answer key trước submit |
-| LESSON-002 | Server chấm, client không được gửi `correct`, `score` hay giải pháp |
-| LESSON-003 | `order` và `match` không tiết lộ đáp án qua thứ tự public arrays |
-| LESSON-004 | Attempts lưu `clientAttemptId`, `contentVersion`, answer/results/score, userId từ session |
-| LESSON-005 | Same clientAttemptId retry → same result/reward, kể cả concurrency |
-| LESSON-006 | Stale contentVersion → 409, không làm mất attempt cũ |
-| LESSON-007 | Progress từ attempts đạt yêu cầu ở version hiện hành, không phải lesson ready |
-| LESSON-008 | XP award không thể farm bằng repeated attempts; transaction/unique enforced |
-| LESSON-009 | Sau submit có feedback/solution theo policy nhưng không leak trước submit |
-| LESSON-010 | Lessons ít nhất một teach + một quiz; typed blocks validate đủ |
+| ID | Yêu cầu | Trạng thái |
+|---|---|---|
+| LESSON-001 | Public `GET /v1/lessons/{id}` không lộ bất cứ answer key trước submit | **IMPLEMENTED · TESTED** |
+| LESSON-002 | Server chấm toàn bộ; client không gửi `correct`/`score` (`extra=forbid`, reject `bool`) | **IMPLEMENTED · TESTED** |
+| LESSON-003 | `order`/`match` shuffle bằng HMAC `LESSON_SHUFFLE_SECRET` (fallback `JWT_SECRET`), không suy ngược được từ dữ liệu công khai | **IMPLEMENTED · TESTED** (P6.1) |
+| LESSON-004 | Attempts lưu `clientAttemptId`, `contentVersion`, `answers/results/score`, `userId` từ session | **IMPLEMENTED · TESTED** |
+| LESSON-005 | Same `clientAttemptId` retry → same result/reward, kể cả concurrent Postgres | **IMPLEMENTED · TESTED** |
+| LESSON-006 | Stale `contentVersion` → `409`, không làm mất attempt cũ | **IMPLEMENTED · TESTED** |
+| LESSON-007 | Progress tính từ attempts đạt `≥80%` ở `contentVersion` hiện hành | **IMPLEMENTED · TESTED** |
+| LESSON-008 | XP cap theo `(user, lesson, contentVersion)`; transaction + row lock chống farm | **IMPLEMENTED · TESTED** |
+| LESSON-009 | Sau submit mới trả `results[].solution`, `score`, `rewards` | **IMPLEMENTED · TESTED** |
+| LESSON-010 | Mỗi lesson có ≥1 `teach` + ≥1 quiz; `blank` đúng 1 chỗ trống; worker gọi `validate_lesson` | **IMPLEMENTED · TESTED** (`P1-QUIZ-BLANK`) |
 
-## 3. Public/private separation
+## 3. Public/private separation (ưu thế bảo mật của SopiSkill)
 
-- Bản ghi `Lesson.content` private có answer keys; API read dùng `public_blocks` projection server-side.
-- `order`/`match` dùng stable IDs theo lessonId/contentVersion/blockId, shuffle ổn định; không gửi private canonical order.
-- Response `POST attempts` mới trả `results[].solution`, score, reward (`xpEarned` từ `attempt.xp_awarded` đã ghi, không tính lại sau).
-- Test E2E **không** dựa vào đáp án đọc từ GET public; dùng private test fixture/database dành cho test.
+- Khác với PolySkill (chấm `mc`/`blank`/`order`/`match` ở client bằng đáp án nằm trong payload bài học), **SopiSkill giữ nguyên tắc server-authoritative 100%**.
+- `Lesson.content` chỉ lưu phía server; `GET /v1/lessons/{id}` luôn chiếu qua `public_block()`.
+- `order`/`match` dùng HMAC key bí mật (`LESSON_SHUFFLE_SECRET`, bắt buộc tồn tại ở production — cả `backend` và `worker` dùng chung khoá để không lệch hoán vị).
+- `GET /v1/lessons/{id}` còn trả `grounding` (`source_grounded` | `general_ai_knowledge`), `citations[]` và `evidenceNotice`.
 
-## 4. Progress and XP policy
+## 4. Progress & XP policy (`lesson_service.py`)
 
-**INCUMBENT (đang áp dụng theo progress, product approval pending):**
+**INCUMBENT (đang chạy trong code, chờ product approval chính thức):**
 
 ```text
-lesson_completed = exists(attempt where user matches,
-   attempt.content_version == lesson.content_version,
-   correct/total >= 0.80)
+XP_PER_CORRECT = 10
+XP_LESSON_COMPLETED_BONUS = 20
+lesson_completed = (correct / total >= 0.80) at current lesson.content_version
 course_progress_percent = 100 * completed_current_lessons / total_ready_lessons
 ```
-
-- Nếu `total_ready_lessons=0`: percent = 0 (tránh chia 0).
-- Lịch sử attempts phiên bản cũ được giữ, nhưng không tính đạt bản mới nếu nội dung thay đổi; version bump chỉ khi title/content thực thay đổi.
-- XP upper-bound theo `(user, lesson, contentVersion)`; reattempt chỉ cộng chênh lệch tối đa. Lock/unique ở DB bảo vệ concurrent submissions.
-- Policy mức thưởng/threshold 80% và behavior khi remake content cần quyết định product chính thức nếu ra production.
+- `xp_awarded` chỉ cộng phần chênh lệch so với mức XP cao nhất user đã từng đạt cho cùng `(user, lesson, contentVersion)`; retry/replay không farm được XP.
+- Khi `P50_ENABLED=true`, nộp attempt kích hoạt cập nhật `skill_mastery` và khởi tạo `review_cards` (`AttemptOut.reviewCardCreated = true`).
 
 ## 5. Attempt lifecycle
 
-1. Client lưu draft answers tại UI, tạo một `clientAttemptId` cho **một lần nộp**.
-2. POST `results[]` và contentVersion; backend auth & owner, validate indices/IDs, reject duplicates/extra fields, lock XP data.
-3. Chấm private answer key, insert attempt hoặc replay existing, allocate XP an toàn, commit transaction.
-4. Trả result/solution/reward; frontend invalidate course/progress/XP queries.
-5. Nếu timeout phía client: retry **cùng** clientAttemptId, không tạo id mới.
+1. Player dạng bước (FR-4) hiển thị 1 block/màn, giữ draft answers trên client, mint 1 `clientAttemptId` cho mỗi lần nộp.
+2. Client `POST /v1/lessons/{id}/attempts` với `{clientAttemptId, contentVersion, durationMs?, answers: [{index, answer}]}`.
+3. Backend xác minh owner, `contentVersion`, schema, lock XP của user, chấm theo private `Lesson.content`, ghi/replay `lesson_attempts` và `xp_events`, trả `AttemptOut` kèm `results[].solution`.
+4. Frontend invalidate session-scoped queries (`course`, `courses`, `me`, `mastery`, `learning-path`).
 
-## 6. Negative and concurrency tests
+## 6. Mở rộng đề xuất từ đối chiếu PolySkill (`PROPOSAL — NOT IMPLEMENTED`)
 
-- Missing/foreign lesson → 404; malformed answer/boolean injected → 422.
-- GET all 5 quiz types không chứa answer keys; `order`/`match` shuffle không leak solution.
-- `correct=true`, score client giả, invalid index/duplicate blocks → bị reject/ignore an toàn.
-- 20 POST cùng id dưới PostgreSQL → một attempt, một XP award; 20 POST id khác nhau → XP vẫn không quá cap.
-- Regen changed content → version tăng, past attempts còn; stale submit → 409; unchanged content → không tăng version giả.
-- Reload / switching users giữ progress đúng và không leak A sang B.
+Xem chi tiết trong `docs/frontend-reference/api-gap-register.md`:
+- **Per-block grading & AI Short-Answer Rubric Grader (`GAP-11`):** thêm `POST /v1/lessons/{id}/blocks/{index}/grade` để cho phản hồi tức thì từng câu **nhưng vẫn giữ đáp án ở server**, riêng `short` hỗ trợ chấm rubric (`got_it | almost | not_yet`, `keyPoints[]`, `feedback`) + `dispute`.
+- **Glossary & Recap (`GAP-06`, `GAP-14`):** thêm `terms[]`, inline `termKey`, `takeaway`, và `GET /v1/courses/{id}/glossary`.
+- **Figures, Tables, MathJax & Practice Formats (`GAP-16`, `GAP-17`, `GAP-18`):** `teach.figure` (`formula`/`table`/`visual`/`diagram`), MathJax `$...$`, `estimatedMinutes`, practice formats (`scenario`, `spot`, `speed`, `explain`), và Reel engine (đánh giá ROI riêng trước khi đầu tư).

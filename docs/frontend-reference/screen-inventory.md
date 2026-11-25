@@ -245,3 +245,33 @@ perfect band.
 **Known divergence.** The disabled-state primary CTA uses `--sand` with `--ink-2` text,
 which differs from the reference's disabled treatment; contrast still passes (see
 `accessibility-review.md`).
+
+---
+
+## Complete Route & Sheet Map — Craft Anything `0.6.1` Addendum (2026-11-22, `OBSERVED_STATIC`)
+
+Unpacking Metro module `M9` (Expo Router context) and `M1808` (`./_layout.tsx`) from
+`entry-a3803cab42a2ab75ae9ef2e391ee92d0.js` (`ev_3025…`) gives the **complete** screen inventory
+of PolySkill (15 production routes + 5 global sheets) compared against SopiSkill's actual
+Next.js App Router pages (`frontend/src/app/**/page.tsx`):
+
+| PolySkill Route (`M9`) | Purpose | SopiSkill Equivalent | Status |
+|---|---|---|---|
+| `./_layout.tsx` (`M1808`) | Root auth guard, sync, push router, `OfflineBar`, 5 global sheets | `layout.tsx` + `providers.tsx` | Partial (no push/offline sync/global sheets) |
+| `./index.tsx` (`M1869`) | Redirect to `/onboarding` or `/(tabs)/home` | `page.tsx` (dashboard directly) | Different (no onboarding gate) |
+| `./sign-in.tsx` (`M2181`) | Apple + Google OAuth only | `login/page.tsx` (email/password) | Different by design |
+| `./onboarding.tsx` (`M2170`) | 5-step onboarding (`Hello → Language → 4 Questions → Reminder → Done`) | — | **Not in SopiSkill** |
+| `./(tabs)/_layout.tsx` (`M10`) | Desktop `SideNav` (`264px`) + mobile 5-tab bar (`Home/Learn/New/Pol/You`) | App shell components | Implemented (without `Pol`/`You` mobile tabs) |
+| `./(tabs)/home.tsx` (`M1757`) | Greeting, `upNext` hero, active/completed courses, `WeekRecapCard`, streak nudges | `page.tsx` | Partial (no week recap/streak nudges) |
+| `./(tabs)/new.tsx` (`M1798`) | Topic input + `AddSourceMenu` (`pdf`/`arxiv`/`url`) + course quota gate | `new/page.tsx` + `sources/page.tsx` | Partial (split across `/new` and `/sources`) |
+| `./(tabs)/course/[id].tsx` (`M1651`) | Units (`ember`/`bone`), `CourseSourceRow`, node states, `Pro` lock, `Too easy?` Pol card | `course/[courseId]/page.tsx` | Partial (no unit tone/paywall/`preparing` poll/`path_harder` card) |
+| `./(tabs)/profile.tsx` (`M1807`) | Stats, `WeekChart`, 7-category `Milestones`, `LeagueCard`, settings | `profile/page.tsx` + `settings/page.tsx` | Partial (4 real stat tiles from `/v1/me/stats`, courses grid, `ListGroup` shortcuts; no weekly chart/milestones/league) |
+| `./league/index.tsx` (`M1870`) | 30-user cohort leaderboard, 5 tiers (`leagues` flag currently `false` on web) | — | **Not in SopiSkill** (disabled on ref web too) |
+| `./lesson/[id]/index.tsx` (`M2121`) | `ReelPlayer` intro + 6 block types + 5 formats (`SpeedRound`, `StepsQuestion`, `ShortQuestion` + `SelfMarkFooter`/dispute) + `RecapView` + `VocabSheet` | `lesson/[lessonId]/page.tsx` | Partial (6 blocks implemented; no Reel, `SpeedRound`, `RecapView`, `VocabSheet`, per-block short grading) |
+| `./lesson/[id]/complete.tsx` (`M1871`) | Optimistic/settled rewards, streak/freeze/milestones, `UnitBreakdown`, `Confetti` | Inline `.lesson-result` in `lesson/[lessonId]/page.tsx` | Partial (no dedicated route, milestones, or `UnitBreakdown`) |
+| `./new/source.tsx` (`M2169`) | Source ingest polling (`1.5s`), `SourceCard`, structured `brief` preview | `sources/page.tsx` | Different flow (separate source management page) |
+| `./new/interview.tsx` (`M2162`) | 5-question interview (`single`/`multi` chips) + `PlanChat` (`revise_proposal`) + `ProposalCard` | `new/interview/page.tsx` + `new/proposal/page.tsx` | Partial (split into 2 routes; textarea instead of chips; no `PlanChat` revision) |
+| `./new/generating.tsx` (`M2161`) | 4-step generation progress (`2s` poll) + retry | `new/generating/page.tsx` | Implemented |
+| *SopiSkill-only:* `review/page.tsx` | FSRS spaced-repetition review queue (P5.0) | `review/page.tsx` | SopiSkill extension (not in PolySkill) |
+
+**5 Global Sheets mounted in PolySkill (`M1808`):** `TutorSheet` (slide-over rail + conversation history + course switcher), `SettingsSheet` (display name, `appLanguage`/`lessonLanguage`, theme, plan, notifications/reminder picker, linked identities, delete account), `AvatarSheet` (5 avatars), `PaywallSheet` (Polar Card + SePay VietQR), `LinkAccountSheet` (`ACCOUNT_LINK_REQUIRED` challenge).
