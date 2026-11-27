@@ -47,6 +47,13 @@ SOURCE_RESEARCH_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Focused search query describing the topic and sub-concepts.",
                     },
+                    "englishQuery": {
+                        "type": "string",
+                        "description": (
+                            "Optional canonical English academic search query when the learner's topic is in Vietnamese "
+                            "(or another non-English language) so English open textbooks and papers match accurately."
+                        ),
+                    },
                     "max_results": {
                         "type": "integer",
                         "minimum": 1,
@@ -269,6 +276,13 @@ LESSON_GENERATOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Keyword or concept query to fetch relevant source excerpts.",
                     },
+                    "englishQuery": {
+                        "type": "string",
+                        "description": (
+                            "When writing a Vietnamese lesson from an English textbook, provide the exact English "
+                            "academic terminology here to search the English book accurately."
+                        ),
+                    },
                 },
                 "required": ["query"],
             },
@@ -445,6 +459,10 @@ TUTOR_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "query": {
                         "type": "string",
                         "description": "Search query for the source material.",
+                    },
+                    "englishQuery": {
+                        "type": "string",
+                        "description": "Optional canonical English terminology when the learner asks in Vietnamese about an English source.",
                     },
                     "section_anchor": {
                         "type": "string",

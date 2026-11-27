@@ -494,18 +494,30 @@ public class TutorController {
             );
         }
 
-        // Load linked source brief (if any) for `read_source` section-anchor lookup
-        Map<String, Object> sourceBrief = jdbc.sql("""
-                SELECT s.brief::text
+        // Load linked source IDs (max 3) & primary brief for `read_source` Hybrid RAG + section-anchor lookup
+        List<Map<String, Object>> linkedSources = jdbc.sql("""
+                SELECT s.id, s.brief::text AS brief_text
                 FROM core.course_sources cs
                 JOIN core.sources s ON s.id = cs.source_id
-                WHERE cs.course_id = :cid AND s.brief IS NOT NULL
-                LIMIT 1
+                WHERE cs.course_id = :cid
+                ORDER BY CASE WHEN cs.role = 'primary' THEN 0 ELSE 1 END ASC, cs.linked_at ASC
+                LIMIT 3
                 """)
                 .param("cid", cid)
-                .query(String.class)
-                .optional()
-                .map(raw -> json.fromJson(raw, new TypeReference<Map<String, Object>>() {}))
+                .query((rs, rowNum) -> {
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("id", IdCodec.format("src", rs.getObject("id", UUID.class)));
+                    r.put("briefText", rs.getString("brief_text"));
+                    return r;
+                })
+                .list();
+        List<String> linkedSourceIds = linkedSources.stream()
+                .map(r -> String.valueOf(r.get("id")))
+                .toList();
+        Map<String, Object> sourceBrief = linkedSources.stream()
+                .filter(r -> r.get("briefText") != null)
+                .findFirst()
+                .map(r -> json.fromJson(String.valueOf(r.get("briefText")), new TypeReference<Map<String, Object>>() {}))
                 .orElse(null);
 
         // Enforce 24h message quota
@@ -626,6 +638,7 @@ public class TutorController {
         if (unitContext != null) aiPayload.put("unitContext", unitContext);
         if (proposalContext != null) aiPayload.put("proposalContext", proposalContext);
         if (sourceBrief != null) aiPayload.put("sourceBrief", sourceBrief);
+        if (!linkedSourceIds.isEmpty()) aiPayload.put("sourceIds", linkedSourceIds);
         if (body.delayMs() != null && body.delayMs() > 0) aiPayload.put("delayMs", Math.min(body.delayMs(), 2000));
         aiPayload.put("history", history);
         aiPayload.put("ragEnabled", props.ragEnabled());

@@ -248,13 +248,101 @@ def run_static_qa(lesson: dict[str, Any]) -> QaReport:
     return QaReport(blocking_errors=blocking, content_flags=flags, estimated_minutes=est)
 
 
+def verify_and_strip_ungrounded_block_citations(
+    lesson: dict[str, Any],
+    *,
+    source_excerpts: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Phase L5 Tier-1 Deterministic Locator Verification.
+
+    Validates every `block.cite` on `teach` blocks strictly against the set of
+    `(anchor, chunkId, pageNumber, sourceId)` returned by `read_source` in this session.
+    Strips any hallucinated/ungrounded `cite` deterministically and returns warning flags.
+    """
+    blocks = lesson.get("blocks") if isinstance(lesson.get("blocks"), list) else []
+    if not blocks:
+        return []
+
+    valid_anchors: set[str] = set()
+    valid_chunk_ids: set[str] = set()
+    valid_source_ids: set[str] = set()
+    for ex in source_excerpts or []:
+        if not isinstance(ex, dict):
+            continue
+        for key in ("anchor", "sectionAnchor"):
+            val = str(ex.get(key) or "").strip()
+            if val:
+                valid_anchors.add(val)
+        cid = str(ex.get("chunkId") or "").strip()
+        if cid:
+            valid_chunk_ids.add(cid)
+        sid = str(ex.get("sourceId") or "").strip()
+        if sid:
+            valid_source_ids.add(sid)
+
+    flags: list[dict[str, Any]] = []
+    for idx, blk in enumerate(blocks):
+        if not isinstance(blk, dict) or blk.get("type") != "teach":
+            continue
+        cite = blk.get("cite")
+        if cite is None:
+            continue
+        if not isinstance(cite, dict):
+            blk.pop("cite", None)
+            flags.append(
+                _flag(
+                    block_index=idx,
+                    code="other",
+                    rule="CITATION_LOCATOR_INVALID",
+                    details=f"Removed malformed cite object on teach block {idx}.",
+                )
+            )
+            continue
+
+        c_anchor = str(cite.get("anchor") or cite.get("sectionAnchor") or "").strip()
+        c_chunk = str(cite.get("chunkId") or "").strip()
+        c_source = str(cite.get("sourceId") or "").strip()
+
+        verified = False
+        if c_chunk and c_chunk in valid_chunk_ids:
+            verified = True
+        elif c_anchor and c_anchor in valid_anchors:
+            verified = True
+        elif not c_chunk and not c_anchor and c_source and c_source in valid_source_ids:
+            verified = True
+
+        # If source_id was explicitly provided, it MUST also match observed sources when we have source_ids
+        if verified and c_source and valid_source_ids and c_source not in valid_source_ids:
+            verified = False
+
+        if not verified:
+            blk.pop("cite", None)
+            flags.append(
+                _flag(
+                    block_index=idx,
+                    code="other",
+                    rule="CITATION_LOCATOR_UNVERIFIED",
+                    details=(
+                        f"Stripped unverified cite (anchor={c_anchor!r}, chunkId={c_chunk!r}) "
+                        f"on teach block {idx}: locator was not returned by read_source."
+                    ),
+                )
+            )
+    return flags
+
+
 async def run_two_tier_validator(
     lesson: dict[str, Any],
     *,
     provider: LLMProvider,
     llm_qa_enabled: bool = False,
+    source_excerpts: list[dict[str, Any]] | None = None,
 ) -> QaReport:
     report = run_static_qa(lesson)
+    if source_excerpts is not None:
+        stripped = verify_and_strip_ungrounded_block_citations(lesson, source_excerpts=source_excerpts)
+        if stripped:
+            logger.warning("tier1_stripped_unverified_citations count=%d", len(stripped))
     if report.blocking_errors:
         return report
 
@@ -263,11 +351,14 @@ async def run_two_tier_validator(
         try:
             tool_reviewer = getattr(provider, "review_lesson_with_tools", None)
             if callable(tool_reviewer):
-                raw_flags, approved, _usage = await tool_reviewer(
-                    lesson=lesson,
-                    static_flags=report.content_flags,
-                    language="en",
-                )
+                review_kwargs: dict[str, Any] = {
+                    "lesson": lesson,
+                    "static_flags": report.content_flags,
+                    "language": "en",
+                }
+                if source_excerpts:
+                    review_kwargs["source_excerpts"] = source_excerpts
+                raw_flags, approved, _usage = await tool_reviewer(**review_kwargs)
                 blocks = lesson.get("blocks") if isinstance(lesson.get("blocks"), list) else []
                 existing_keys = {(f.get("blockIndex"), f.get("code")) for f in report.content_flags}
                 for item in raw_flags:

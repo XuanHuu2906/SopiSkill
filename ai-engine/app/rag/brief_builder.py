@@ -24,6 +24,8 @@ def build_source_brief(
     title: str | None,
     chunks: list[ChunkInput],
     headings: list[tuple[str, str]] | None = None,
+    heading_levels: list[tuple[str, str, int]] | None = None,
+    max_sections: int = 60,
 ) -> dict[str, Any]:
     """Build deterministic hard-schema `source.brief` anchored to real chunks/headings.
 
@@ -32,7 +34,8 @@ def build_source_brief(
       - `claims`: 1..10 key statements extracted from real chunks
       - `notation`: <=20 technical symbols/acronyms observed in chunks
       - `assumes`: <=10 prerequisite hints grounded in document vocabulary
-      - `sections`: <=40 `{anchor, heading, gist}` items anchored to real chunks/headings
+      - `sections`: <=60 `{anchor, heading, gist}` items prioritizing ALL top-level Chapters
+        across the entire book before filling key subsections so Planner sees the full syllabus.
     """
     full_text = " ".join(c.content for c in chunks)
     words = full_text.split()
@@ -90,18 +93,66 @@ def build_source_brief(
         if len(assumes) >= 10:
             break
 
+    safe_max_sections = max(1, min(max_sections, 60))
+    chunk_by_anchor: dict[str, str] = {}
+    for ch in chunks:
+        if ch.section_anchor and ch.section_anchor not in chunk_by_anchor:
+            chunk_by_anchor[ch.section_anchor] = ch.content
+
     sections: list[dict[str, str]] = []
     seen_anchors: set[str] = set()
-    if headings:
-        for idx, (anchor, heading) in enumerate(headings[:40]):
-            gist = _clean_sentence(chunks[min(idx, len(chunks) - 1)].content, max_len=160) if chunks else heading
+
+    if heading_levels:
+        # Phase L3 Full-Book TOC prioritization: keep ALL top-level Chapters (level <= 2) across the entire book
+        # first, then backfill subsections (level >= 3) up to `safe_max_sections`, preserving original book order!
+        indexed = list(enumerate(heading_levels))
+        top_level = [(idx, a, h) for idx, (a, h, lvl) in indexed if lvl <= 2]
+        sub_level = [(idx, a, h) for idx, (a, h, lvl) in indexed if lvl > 2]
+
+        chosen: list[tuple[int, str, str]] = []
+        if len(top_level) <= safe_max_sections:
+            chosen.extend(top_level)
+            remaining = safe_max_sections - len(chosen)
+            if remaining > 0 and sub_level:
+                # Sample subsections evenly across the entire book rather than only Chapter 1
+                step = max(1, len(sub_level) // remaining) if len(sub_level) > remaining else 1
+                chosen.extend(sub_level[::step][:remaining])
+        else:
+            # Evenly stride across top-level chapters so beginning, middle, and final chapters are always represented
+            step = max(1, len(top_level) // safe_max_sections)
+            chosen.extend(top_level[::step][:safe_max_sections])
+            if top_level[-1] not in chosen:
+                chosen[-1] = top_level[-1]
+
+        chosen.sort(key=lambda item: item[0])
+        for idx, anchor, heading in chosen:
+            sec_anchor = anchor or f"s{idx + 1}"
+            if sec_anchor in seen_anchors:
+                continue
+            seen_anchors.add(sec_anchor)
+            snippet_src = chunk_by_anchor.get(sec_anchor) or (
+                chunks[min(idx, len(chunks) - 1)].content if chunks else heading
+            )
+            sections.append(
+                {
+                    "anchor": sec_anchor,
+                    "heading": heading[:120],
+                    "gist": _clean_sentence(snippet_src, max_len=160),
+                }
+            )
+    elif headings:
+        for idx, (anchor, heading) in enumerate(headings[:safe_max_sections]):
+            gist = _clean_sentence(
+                chunk_by_anchor.get(anchor) or (chunks[min(idx, len(chunks) - 1)].content if chunks else heading),
+                max_len=160,
+            )
             sec_anchor = anchor or f"s{idx + 1}"
             if sec_anchor not in seen_anchors:
                 seen_anchors.add(sec_anchor)
                 sections.append({"anchor": sec_anchor, "heading": heading[:120], "gist": gist})
 
     for chunk in chunks:
-        if len(sections) >= 40:
+        if len(sections) >= safe_max_sections:
             break
         anchor = chunk.section_anchor or (f"p{chunk.page_number}" if chunk.page_number else f"c{chunk.chunk_index + 1}")
         if anchor in seen_anchors:
@@ -126,7 +177,7 @@ def build_source_brief(
             "claims": claims[:10],
             "notation": notation[:20],
             "assumes": assumes[:10],
-            "sections": sections[:40],
+            "sections": sections[:safe_max_sections],
         },
         "wordCount": word_count,
         "durationMinutes": duration_minutes,

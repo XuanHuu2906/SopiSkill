@@ -681,12 +681,22 @@ public class CourseController {
                 .param("uid", principal.userId())
                 .query(String.class)
                 .optional();
+        Map<String, Object> sourceCtx = loadCourseSourceContext(cid);
         Map<String, Object> jobPayload = new LinkedHashMap<>();
         jobPayload.put("topic", courseRow.get("topic"));
         jobPayload.put("language", courseRow.get("language"));
         jobPayload.put("learnerProfile", payload.getOrDefault("learnerProfile", Map.of("currentLevel", "beginner")));
         jobPayload.put("units", units);
         jobPayload.put("lessonIds", orderedLessonIds);
+        if (!((List<?>) sourceCtx.get("sourceIds")).isEmpty()) {
+            jobPayload.put("sourceIds", sourceCtx.get("sourceIds"));
+        }
+        if (sourceCtx.get("sourceBrief") != null) {
+            jobPayload.put("sourceBrief", sourceCtx.get("sourceBrief"));
+        }
+        if (!((List<?>) sourceCtx.get("sourceLanguages")).isEmpty()) {
+            jobPayload.put("sourceLanguages", sourceCtx.get("sourceLanguages"));
+        }
         if (onboardingStrOpt.isPresent() && onboardingStrOpt.get() != null) {
             jobPayload.put("onboardingProfile", json.fromJson(onboardingStrOpt.get(), new TypeReference<Map<String, Object>>() {}));
         }
@@ -836,30 +846,61 @@ public class CourseController {
         profile.putIfAbsent("goal", answers.size() > 1 ? answers.get(1) : topic);
 
         boolean en = "en".equals(language);
-        List<Map<String, Object>> units = List.of(
-                Map.of(
-                        "title", en ? "Foundations" : "Nền tảng",
-                        "blurb", en ? "Core concepts and mental models for " + topic + "." : "Khái niệm cốt lõi cho " + topic + ".",
-                        "lessonTitles", List.of(
-                                en ? "What is " + topic + "?" : topic + " là gì?",
-                                en ? "Setting up for " + topic : "Thiết lập ban đầu với " + topic
-                        )
-                ),
-                Map.of(
-                        "title", en ? "Practice" : "Thực hành",
-                        "blurb", en ? "Hands-on exercises and pitfalls in " + topic + "." : "Bài tập áp dụng và lỗi thường gặp với " + topic + ".",
-                        "lessonTitles", List.of(
-                                en ? "First exercise with " + topic : "Bài tập đầu tiên với " + topic,
-                                en ? "Common pitfalls when learning " + topic : "Lỗi thường gặp khi học " + topic
-                        )
-                )
-        );
+        Map<String, Object> sourceCtx = loadCourseSourceContext(courseId);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> primarySourceBrief = (Map<String, Object>) sourceCtx.get("sourceBrief");
+
+        List<Map<String, Object>> units = null;
+        String proposalName = topic;
+        String proposalObjective = en
+                ? "Build a solid practical foundation in " + topic + "."
+                : "Xây dựng nền tảng vững chắc và thực hành hiệu quả với " + topic + ".";
+
+        if (primarySourceBrief != null) {
+            Map<String, Object> planned = aiEngine.generateProposal(
+                    IdCodec.format("crs", courseId), topic, language, profile, primarySourceBrief, null);
+            if (planned != null) {
+                List<Map<String, Object>> normalizedUnits = normalizePlannerUnits(planned);
+                if (!normalizedUnits.isEmpty()) {
+                    units = normalizedUnits;
+                    if (planned.get("name") != null && !String.valueOf(planned.get("name")).isBlank()) {
+                        proposalName = String.valueOf(planned.get("name"));
+                    } else if (planned.get("title") != null && !String.valueOf(planned.get("title")).isBlank()) {
+                        proposalName = String.valueOf(planned.get("title"));
+                    }
+                    if (planned.get("objective") != null && !String.valueOf(planned.get("objective")).isBlank()) {
+                        proposalObjective = String.valueOf(planned.get("objective"));
+                    } else if (planned.get("summary") != null && !String.valueOf(planned.get("summary")).isBlank()) {
+                        proposalObjective = String.valueOf(planned.get("summary"));
+                    }
+                }
+            }
+        }
+
+        if (units == null) {
+            units = List.of(
+                    Map.of(
+                            "title", en ? "Foundations" : "Nền tảng",
+                            "blurb", en ? "Core concepts and mental models for " + topic + "." : "Khái niệm cốt lõi cho " + topic + ".",
+                            "lessonTitles", List.of(
+                                    en ? "What is " + topic + "?" : topic + " là gì?",
+                                    en ? "Setting up for " + topic : "Thiết lập ban đầu với " + topic
+                            )
+                    ),
+                    Map.of(
+                            "title", en ? "Practice" : "Thực hành",
+                            "blurb", en ? "Hands-on exercises and pitfalls in " + topic + "." : "Bài tập áp dụng và lỗi thường gặp với " + topic + ".",
+                            "lessonTitles", List.of(
+                                    en ? "First exercise with " + topic : "Bài tập đầu tiên với " + topic,
+                                    en ? "Common pitfalls when learning " + topic : "Lỗi thường gặp khi học " + topic
+                            )
+                    )
+            );
+        }
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("name", topic);
-        payload.put("objective", en
-                ? "Build a solid practical foundation in " + topic + "."
-                : "Xây dựng nền tảng vững chắc và thực hành hiệu quả với " + topic + ".");
+        payload.put("name", proposalName);
+        payload.put("objective", proposalObjective);
         payload.put("outcomes", en
                 ? List.of("Explain core concepts of " + topic, "Apply " + topic + " to structured exercises")
                 : List.of("Hiểu rõ khái niệm cốt lõi của " + topic, "Áp dụng " + topic + " vào bài tập thực tế"));
@@ -962,5 +1003,85 @@ public class CourseController {
         out.put("resumeLessonId", resumeId);
         out.put("resumeLessonTitle", resumeTitle);
         out.put("lastCompletedLessonTitle", lastCompletedTitle);
+    }
+
+    private Map<String, Object> loadCourseSourceContext(UUID courseId) {
+        List<Map<String, Object>> rows = jdbc.sql("""
+                SELECT s.id, s.language, s.brief::text AS brief_text
+                FROM core.course_sources cs
+                JOIN core.sources s ON s.id = cs.source_id
+                WHERE cs.course_id = :cid
+                ORDER BY CASE WHEN cs.role = 'primary' THEN 0 ELSE 1 END ASC, cs.linked_at ASC
+                LIMIT 3
+                """)
+                .param("cid", courseId)
+                .query((rs, rowNum) -> {
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("id", IdCodec.format("src", rs.getObject("id", UUID.class)));
+                    r.put("language", rs.getString("language"));
+                    r.put("briefText", rs.getString("brief_text"));
+                    return r;
+                })
+                .list();
+
+        List<String> sourceIds = new ArrayList<>();
+        List<String> sourceLanguages = new ArrayList<>();
+        Map<String, Object> primaryBrief = null;
+        for (Map<String, Object> row : rows) {
+            sourceIds.add(String.valueOf(row.get("id")));
+            String lang = row.get("language") == null ? null : String.valueOf(row.get("language")).trim();
+            if (lang != null && !lang.isEmpty() && !sourceLanguages.contains(lang)) {
+                sourceLanguages.add(lang);
+            }
+            if (primaryBrief == null && row.get("briefText") != null) {
+                primaryBrief = json.fromJson(String.valueOf(row.get("briefText")), new TypeReference<Map<String, Object>>() {});
+            }
+        }
+        Map<String, Object> ctx = new LinkedHashMap<>();
+        ctx.put("sourceIds", sourceIds);
+        ctx.put("sourceBrief", primaryBrief);
+        ctx.put("sourceLanguages", sourceLanguages);
+        return ctx;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> normalizePlannerUnits(Map<String, Object> planned) {
+        Object rawUnitsObj = planned.get("units");
+        if (!(rawUnitsObj instanceof List<?> rawUnits)) {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        int uIdx = 0;
+        for (Object item : rawUnits) {
+            if (!(item instanceof Map<?, ?> uMap)) continue;
+            uIdx++;
+            String uTitle = uMap.get("title") == null ? "Unit " + uIdx : String.valueOf(uMap.get("title")).trim();
+            String blurb = uMap.get("blurb") != null
+                    ? String.valueOf(uMap.get("blurb"))
+                    : (uMap.get("objective") != null ? String.valueOf(uMap.get("objective")) : uTitle);
+            List<String> lessonTitles = new ArrayList<>();
+            if (uMap.get("lessonTitles") instanceof List<?> ltList) {
+                for (Object lt : ltList) {
+                    if (lt != null && !String.valueOf(lt).isBlank()) lessonTitles.add(String.valueOf(lt).trim());
+                }
+            } else if (uMap.get("lessons") instanceof List<?> lList) {
+                for (Object lo : lList) {
+                    if (lo instanceof Map<?, ?> lm && lm.get("title") != null) {
+                        String t = String.valueOf(lm.get("title")).trim();
+                        if (!t.isEmpty()) lessonTitles.add(t);
+                    } else if (lo != null && !String.valueOf(lo).isBlank()) {
+                        lessonTitles.add(String.valueOf(lo).trim());
+                    }
+                }
+            }
+            if (!lessonTitles.isEmpty()) {
+                Map<String, Object> u = new LinkedHashMap<>();
+                u.put("title", uTitle);
+                u.put("blurb", blurb);
+                u.put("lessonTitles", lessonTitles);
+                out.add(u);
+            }
+        }
+        return out;
     }
 }

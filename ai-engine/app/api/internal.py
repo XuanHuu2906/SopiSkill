@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.pedagogy import extract_learner_profile
+from app.agents.planner_agent import PlannerMaxTurnsError, generate_proposal_with_tools
 from app.agents.providers import ProviderConfigError, get_llm_provider
 from app.agents.short_grader import grade_short_answer
 from app.agents.source_research_agent import SourceResearchMaxTurnsError, research_sources_with_agent
@@ -22,6 +23,8 @@ from app.schemas.internal import (
     InterviewEvaluateResponse,
     InterviewQuestionsRequest,
     InterviewQuestionsResponse,
+    ProposalGenerateRequest,
+    ProposalGenerateResponse,
     RagDeleteResponse,
     RagSearchRequest,
     RagSearchResponse,
@@ -89,6 +92,30 @@ async def interview_questions(body: InterviewQuestionsRequest) -> InterviewQuest
 async def interview_evaluate(body: InterviewEvaluateRequest) -> InterviewEvaluateResponse:
     profile = extract_learner_profile(body.answers, onboarding_profile=body.onboardingProfile)
     return InterviewEvaluateResponse(learnerProfile=profile)
+
+
+@router.post("/proposal/generate", response_model=ProposalGenerateResponse)
+async def proposal_generate(body: ProposalGenerateRequest) -> ProposalGenerateResponse:
+    provider = _get_provider_or_503()
+    try:
+        res = await generate_proposal_with_tools(
+            topic=body.topic,
+            language=body.language,
+            learner_profile=body.learnerProfile or {"currentLevel": "beginner", "depth": "practical"},
+            provider=provider,
+            source_brief=body.sourceBrief,
+        )
+    except PlannerMaxTurnsError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "max_turns", "message": str(exc)},
+        ) from exc
+    return ProposalGenerateResponse(
+        proposal=res.proposal,
+        toolsCalled=res.tools_called,
+        turnsUsed=res.turns_used,
+        usage=res.usage,
+    )
 
 
 @router.post("/lessons/grade-short", response_model=GradeShortResponse)

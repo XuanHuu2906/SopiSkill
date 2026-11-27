@@ -19,6 +19,10 @@ from app.core.config import Settings, get_settings
 from app.rag.embedding import EmbeddingProvider, fold_diacritics, get_embedding_provider, tokenize
 from app.schemas.internal import RagChunkHitOut
 
+# System owner for shared curated open-library books (visibility='public' in core.sources).
+# Accessible ONLY when an explicit `source_ids` list (pre-authorized by core-api) is passed to `search()`.
+PUBLIC_LIBRARY_OWNER_ID = "system:public_library"
+
 
 @dataclass(frozen=True)
 class ChunkInput:
@@ -232,17 +236,20 @@ class RagRepository:
             }
             if source_ids:
                 params["source_ids"] = list(source_ids)
+                params["public_owner_id"] = PUBLIC_LIBRARY_OWNER_ID
                 vec_sql = text(
                     """
                     SELECT id, source_id, document_id, source_title, page_number, section_anchor, content
                     FROM rag.document_chunks
-                    WHERE owner_id = :owner_id
-                      AND (course_id = :course_id OR course_id IS NULL)
+                    WHERE source_id = ANY(:source_ids)
+                      AND (
+                        (owner_id = :owner_id AND (course_id = :course_id OR course_id IS NULL))
+                        OR (owner_id = :public_owner_id AND course_id IS NULL)
+                      )
                       AND embedding_provider = :emb_provider
                       AND embedding_model = :emb_model
                       AND embedding_version = :emb_version
                       AND embedding IS NOT NULL
-                      AND source_id = ANY(:source_ids)
                     ORDER BY embedding <=> CAST(:qvec AS vector) ASC
                     LIMIT :cand_limit
                     """
@@ -251,10 +258,12 @@ class RagRepository:
                     """
                     SELECT id, source_id, document_id, source_title, page_number, section_anchor, content
                     FROM rag.document_chunks
-                    WHERE owner_id = :owner_id
-                      AND (course_id = :course_id OR course_id IS NULL)
+                    WHERE source_id = ANY(:source_ids)
+                      AND (
+                        (owner_id = :owner_id AND (course_id = :course_id OR course_id IS NULL))
+                        OR (owner_id = :public_owner_id AND course_id IS NULL)
+                      )
                       AND tsv @@ plainto_tsquery('simple', :query_text)
-                      AND source_id = ANY(:source_ids)
                     ORDER BY ts_rank_cd(tsv, plainto_tsquery('simple', :query_text)) DESC
                     LIMIT :cand_limit
                     """
@@ -292,32 +301,57 @@ class RagRepository:
             hits = combine_rrf(vec_rows, fts_rows, rrf_k=rrf_k, top_k=top_k)
             return "hybrid_rrf", hits
 
-        # SQLite fallback for offline unit tests (identical tenant/course filter + RRF).
-        rows_res = await db.execute(
-            text(
-                """
-                SELECT id, source_id, document_id, source_title, page_number, section_anchor,
-                       content, embedding_json
-                FROM document_chunks
-                WHERE owner_id = :owner_id
-                  AND (course_id = :course_id OR course_id IS NULL)
-                  AND embedding_provider = :emb_provider
-                  AND embedding_model = :emb_model
-                  AND embedding_version = :emb_version
-                """
-            ),
-            {
-                "owner_id": owner_id,
-                "course_id": course_id,
-                "emb_provider": spec.provider,
-                "emb_model": spec.model,
-                "emb_version": spec.version,
-            },
-        )
-        all_rows = [dict(r) for r in rows_res.mappings().all()]
+        # SQLite fallback for offline unit tests (identical tenant/course/public-library filter + RRF).
         if source_ids:
+            rows_res = await db.execute(
+                text(
+                    """
+                    SELECT id, source_id, document_id, source_title, page_number, section_anchor,
+                           content, embedding_json
+                    FROM document_chunks
+                    WHERE (
+                        (owner_id = :owner_id AND (course_id = :course_id OR course_id IS NULL))
+                        OR (owner_id = :public_owner_id AND course_id IS NULL)
+                    )
+                      AND embedding_provider = :emb_provider
+                      AND embedding_model = :emb_model
+                      AND embedding_version = :emb_version
+                    """
+                ),
+                {
+                    "owner_id": owner_id,
+                    "course_id": course_id,
+                    "public_owner_id": PUBLIC_LIBRARY_OWNER_ID,
+                    "emb_provider": spec.provider,
+                    "emb_model": spec.model,
+                    "emb_version": spec.version,
+                },
+            )
             allowed_sources = set(source_ids)
-            all_rows = [r for r in all_rows if r["source_id"] in allowed_sources]
+            all_rows = [dict(r) for r in rows_res.mappings().all() if r["source_id"] in allowed_sources]
+        else:
+            rows_res = await db.execute(
+                text(
+                    """
+                    SELECT id, source_id, document_id, source_title, page_number, section_anchor,
+                           content, embedding_json
+                    FROM document_chunks
+                    WHERE owner_id = :owner_id
+                      AND (course_id = :course_id OR course_id IS NULL)
+                      AND embedding_provider = :emb_provider
+                      AND embedding_model = :emb_model
+                      AND embedding_version = :emb_version
+                    """
+                ),
+                {
+                    "owner_id": owner_id,
+                    "course_id": course_id,
+                    "emb_provider": spec.provider,
+                    "emb_model": spec.model,
+                    "emb_version": spec.version,
+                },
+            )
+            all_rows = [dict(r) for r in rows_res.mappings().all()]
 
         q_tokens = set(tokenize(fold_diacritics(query)))
         vec_scored: list[tuple[float, dict]] = []

@@ -2,6 +2,47 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-27 — Open Library Knowledge Foundation (`PLAN-LIB-001`: Phase L0 → Phase L6)
+
+- Repository / branch: SopiSkill · nhánh `feat/library-foundation` (tách từ `feat/polyglot-phase9` commit `c859bce`); cập nhật song song kho nguồn `/home/nguyenhuu/Hoc Tap/Cào sách` cho Phase L0.
+- **IMPLEMENTED:**
+  - **Phase L0 (Harvester Cleanup & Structured Markdown):**
+    - Sửa phân loại `subject` trong `/home/nguyenhuu/Hoc Tap/Cào sách/src/book_harvester/config.py` (map trực tiếp danh mục gốc OpenStax/OTL, không ép `hint` lên vị trí 0), thêm `infer_pedagogy_tier` (`tier1_textbook | tier2_monograph | tier3_paper`) & `is_commercial_safe_license` (`CC BY`, `CC BY-SA`, `CC0`, `Public Domain`, loại `NC`/`ND`/`arXiv`).
+    - Nâng cấp `catalog.py`, `storage.py`, `cli.py` (`reclassify` cập nhật cả `subject`, `domains_json`, `pedagogy_tier`, `commercial_safe` + `books_fts`; `extract --sources openstax,otl --workers 8`), và nâng cấp `extractor.py` ánh xạ bookmark `reader.outline` vào đúng số trang `<!-- page: N -->` với tiêu đề `## / ### / ####`.
+  - **Phase L1 (Source → Proposal → Lesson Generator Pipeline):**
+    - `contracts/internal-ai.yaml`, `ai-engine/app/schemas/internal.py`, `ai-engine/app/api/internal.py`: thêm `POST /internal/proposal/generate` (Agent #3 `planner_agent.py`), bổ sung `sourceIds` vào `TutorStreamInternalRequest`.
+    - `core-api`: nối `AiEngineClient.generateProposal`, `CourseController.createInitialProposalIfAbsent` (sinh Proposal bám `primarySourceBrief`), `CourseController.approveCourse` (truyền `sourceIds`, `sourceBrief`, `sourceLanguages`), `TutorController` (truyền `sourceIds` + `sourceBrief`), và `InternalCallbackController.lessonReady` (lưu `grounding` + ghi idempotent `core.lesson_citations` chỉ chấp nhận `sourceId` thực sự thuộc `core.course_sources`).
+    - `ai-engine`: nối `worker_llm.py` & `lesson_generator.py` vào `RagRepository.search`, bọc đoạn trích sách bằng delimiter chống prompt injection `<<<SOURCE_EVIDENCE_START>>> ... <<<SOURCE_EVIDENCE_END>>>`, thu thập `citations[]` (`locator_verified`) và `grounding="source_grounded"`.
+  - **Phase L2 (Public Library Scope & Multi-Tenant Isolation):**
+    - Flyway additive `core-api/src/main/resources/db/migration/V7__public_library_catalog_and_course_source_roles.sql` (`external_key`, `domain_slug`, `pedagogy_tier`, `commercial_safe`, `isbn`, `doi` trên `core.sources`; `role` + unique partial index `primary` trên `core.course_sources`; `grounding` trên `core.lessons`).
+    - Alembic additive `ai-engine/alembic/versions/0002_public_library_scope_index.py` (partial index cho `owner_id = 'system:public_library'`).
+    - `ai-engine/app/rag/repository.py`: định nghĩa `PUBLIC_LIBRARY_OWNER_ID = "system:public_library"`, chỉ cho phép đọc chung khi `source_ids` được truyền tường minh (đã kiểm quyền bởi `core-api`), tuyệt đối khóa 0% rò rỉ nguồn `private` giữa user A và B.
+    - `core-api/src/main/java/com/sopiskill/core/sources/SourcesAndResearchController.java`: giới hạn tối đa 3 nguồn/khóa học (`primary` + `reference`), kiểm quyền server cho `sourceIds` khi search, fix `owner_id IS NULL` (`system:public_library`), và giữ chặn `404` khi user cố xóa nguồn `public`.
+  - **Phase L3 (Heading-Aware Markdown Chunker & System Importer CLI):**
+    - `ai-engine/app/rag/extractor.py`: thêm `chunk_markdown_by_headings` (bóc frontmatter, bỏ qua TOC lặp, bảo toàn 100% khối code ```` ``` ```` & LaTeX `$$...$$` / `\begin{...}`, chèn breadcrumb `[Source: ... | Section: ...]`, giữ `page_number` & `section_anchor`).
+    - `ai-engine/app/rag/brief_builder.py`: mở rộng `build_source_brief` ưu tiên toàn bộ tiêu đề cấp Chương xuyên suốt từ đầu đến cuối sách (tối đa `60` mục).
+    - `ai-engine/scripts/import_open_library.py` + `POST /internal/library/sources/upsert` (HMAC trên `core-api`): CLI nạp thư viện đọc `catalog.db?mode=ro`, idempotent theo `(external_key, content_hash, pipeline_version="md-heading-v1")`, tuân thủ tuyệt đối ranh giới schema `core.*` / `rag.*`.
+  - **Phase L4 (Cross-Lingual `VI ↔ EN` Query Bridge & Pedagogical Ranking):**
+    - `ai-engine/app/rag/query_bridge.py` + `tool_schemas.py` (`englishQuery`): cầu nối thuật ngữ song ngữ phủ 20 lĩnh vực cho `read_source` & `search_sources`.
+    - `SourcesAndResearchController.java` + `SopiProperties.java` (`billingCommercialStrictSources`): triển khai `GET /v1/sources/discover` và `POST/GET/accept /v1/courses/{id}/research-runs` với xếp hạng sư phạm (`tier1_textbook` đứng đầu, loại bỏ `tier3_paper` `arxiv` khỏi khóa `beginner`/`intermediate`).
+  - **Phase L5 (Strict Citation QA & Open-License Attribution):**
+    - `ai-engine/app/agents/validator_qa.py`: kiểm chứng locator tất định Tầng 1 (`verify_and_strip_ungrounded_block_citations`) tước sạch mọi `block.cite` ảo; truyền `source_excerpts` vào Tầng 2 (`review_lesson_with_tools`) để đối chiếu đáp án quiz với sách gốc.
+    - `core-api/.../LessonController.java` & `frontend/src/components/lesson/CitationChip.tsx`: trả về `attributions[]` chuẩn Creative Commons (`Access for free at openstax.org`), giữ nguyên 0 byte answer key trên `GET /v1/lessons/{id}`.
+  - **Phase L6 (Quantitative Evaluation Benchmark):**
+    - `ai-engine/tests/eval/fixtures_12_topics.json` (`12` chủ đề song ngữ: `9` có sách + `3` âm/adversarial prompt injection) & `ai-engine/tests/eval/eval_library_course_quality.py` (so sánh Chế độ A / B / C).
+- **TESTED (offline/mock, 0đ chi phí):**
+  - Harvester (`/home/nguyenhuu/Hoc Tap/Cào sách`): `.venv/bin/pytest -v` → **exit `0` (`20 passed in 0.35s`)**; `reclassify` trên `718` sách → sửa `141` sách sai `subject` (`0` sách Xã hội học/Chính trị/Giải phẫu/Nông nghiệp còn trong `computer-science`), `126` sách `commercial_safe=true`.
+  - `ai-engine`: `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_"` → **exit `0` (`54 passed, 3 deselected in 0.82s`)**; `bandit -r app -q` → **exit `0` (0 findings)**.
+  - Phase L6 Benchmark: `cd ai-engine && ../backend/.venv/bin/python tests/eval/eval_library_course_quality.py` → **exit `0`**: `Citation Locator Precision = 1.0`, `Cross-Tenant Private Leakage = 0`, `Schema & QA Pass Rate = 1.0`, `promptInjectionDelimited = true`, **`modeScores: A=0.4167, B=0.65, C=1.0`**.
+  - CLI Importer Dry-Run trên sách thật: `scripts/import_open_library.py --tiers tier1_textbook --domains computer-science,mathematics --limit 5 --dry-run` → **exit `0` (`scanned=5, imported=5, failed=0, totalChunks=9534`)**.
+  - `core-api`: `cd core-api && ./mvnw -B test-compile -q` → **exit `0`** (bao gồm `PhaseLibraryFoundationTest.java`).
+  - `frontend`: `cd frontend && npm run lint && npm run typecheck` → **exit `0`** (`0` warnings).
+- **NOT TESTED (do 8 container Docker SopiSkill đang tạm dừng theo yêu cầu trước đó):**
+  - Chạy live `cd core-api && ./mvnw -B test` (gồm `PhaseLibraryFoundationTest`) trên PostgreSQL 16 (Flyway `V7`) + Redis 7.
+  - Chạy live `alembic upgrade head` (`0002_public_library_scope_index`) & nạp thực tế Đợt 1 (`~25` cuốn Pilot) vào PostgreSQL/pgvector.
+  - Trích xuất nền `extracted.md` cho toàn bộ 199 sách Tier-1 (`openstax` + `otl`) đang chạy song song.
+- **ROLLBACK:** Thuần nhánh `feat/library-foundation` + các migration Flyway `V7` & Alembic `0002` đều thuần additive (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`).
+
 ## 2026-11-26 — Chuẩn hóa Hệ thống 8 Agent & Bộ Tool Calling đầy đủ trên Official `openai` SDK (DeepSeek)
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase9` (nối sau commit `be351ba`; giữ nguyên ranh giới **không dùng LLM Agent** cho FSRS/BKT, chấm `mc/blank/order/match`, XP, Streak, Hearts, Billing, Quota).

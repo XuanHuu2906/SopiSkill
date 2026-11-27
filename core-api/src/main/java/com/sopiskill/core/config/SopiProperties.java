@@ -43,7 +43,8 @@ public record SopiProperties(
         long refreshTokenTtlDays,
         String googleClientId,
         String appleClientId,
-        String vapidPublicKey
+        String vapidPublicKey,
+        boolean billingCommercialStrictSources
 ) {
     public List<String> corsOriginList() {
         if (corsOrigins == null || corsOrigins.isBlank()) {

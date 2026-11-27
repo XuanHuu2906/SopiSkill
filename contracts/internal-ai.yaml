@@ -147,6 +147,68 @@ paths:
         "401":
           $ref: "#/components/responses/InternalUnauthorized"
 
+  /internal/proposal/generate:
+    post:
+      summary: Generate a structured course proposal via Agent #3 (`read_source_brief` + `save_proposal`)
+      tags: [planner]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [courseId, topic]
+              properties:
+                courseId:
+                  type: string
+                topic:
+                  type: string
+                language:
+                  type: string
+                  enum: [vi, en]
+                learnerProfile:
+                  type: object
+                sourceBrief:
+                  type: [object, "null"]
+      responses:
+        "200":
+          description: Tailored course proposal grounded in source brief if attached
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/sources/research:
+    post:
+      summary: Run Agent #1 Source Research (`search_sources`, `inspect_source`, `commit_sources`)
+      tags: [sources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic]
+              properties:
+                topic:
+                  type: string
+                language:
+                  type: string
+                  enum: [vi, en]
+                maxTurns:
+                  type: integer
+      responses:
+        "200":
+          description: 1..3 vetted primary sources
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
   /internal/lessons/grade-short:
     post:
       summary: Grade a short-answer learner response against rubric (keyword + optional bounded LLM dispute)
@@ -640,6 +702,12 @@ components:
         ragEnabled:
           type: boolean
           default: false
+        sourceBrief:
+          type: [object, "null"]
+        sourceIds:
+          type: [array, "null"]
+          items:
+            type: string
         allowedTools:
           type: array
           items:

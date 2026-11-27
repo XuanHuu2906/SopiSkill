@@ -17,6 +17,7 @@ from app.db.session import dispose_engine, ensure_sqlite_tables, get_session_fac
 from app.rag.brief_builder import build_source_brief_with_agent
 from app.rag.extractor import (
     ExtractionError,
+    chunk_markdown_by_headings,
     chunk_text_with_provenance,
     extract_arxiv_atom_text,
     extract_html_text,
@@ -64,6 +65,8 @@ async def handle_ingest_job(
     async def _run_with_session(session: AsyncSession) -> dict[str, Any]:
         try:
             pages: list[tuple[int | None, str | None, str]] = []
+            chunks = None
+            heading_levels: list[tuple[str, str, int]] | None = None
             pipeline_version = "pypdf-v1"
             resolved_title = source_title
 
@@ -73,6 +76,15 @@ async def handle_ingest_job(
                     raise ExtractionError("SOURCE_EMPTY", "Raw text source is empty.")
                 pages = [(1, "section-1", raw_text)]
                 pipeline_version = "raw-text-v1"
+            elif source_kind == "markdown_library":
+                raw_md = str(message.get("rawMarkdown") or "").strip()
+                if not raw_md:
+                    raise ExtractionError("SOURCE_EMPTY", "Markdown library source is empty.")
+                chunks, heading_levels = chunk_markdown_by_headings(
+                    raw_md,
+                    source_title=resolved_title or "",
+                )
+                pipeline_version = "md-heading-v1"
             elif source_kind == "pdf_s3":
                 storage_key = str(message.get("storageKey") or "")
                 if not storage_key:
@@ -100,7 +112,8 @@ async def handle_ingest_job(
             else:
                 raise ExtractionError("UNSUPPORTED_SOURCE_KIND", f"Unsupported sourceKind: {source_kind!r}")
 
-            chunks = chunk_text_with_provenance(pages)
+            if chunks is None:
+                chunks = chunk_text_with_provenance(pages)
             if not chunks:
                 raise ExtractionError("NO_EXTRACTABLE_TEXT", "Document produced 0 text chunks.")
 
@@ -116,6 +129,7 @@ async def handle_ingest_job(
             brief_bundle = await build_source_brief_with_agent(
                 title=resolved_title,
                 chunks=chunks,
+                headings=[(a, h) for a, h, _ in (heading_levels or [])] or None,
                 provider=llm_provider,
             )
             callback_payload = {

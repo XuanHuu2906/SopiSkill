@@ -1,0 +1,135 @@
+[
+  {
+    "id": "eval_01_vi_python_beginner",
+    "topic": "Học lập trình Python từ đầu",
+    "language": "vi",
+    "level": "beginner",
+    "depth": "practical",
+    "domain": "computer-science",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["python", "variables", "functions"]
+  },
+  {
+    "id": "eval_02_vi_dsa_intermediate",
+    "topic": "Cấu trúc dữ liệu và giải thuật cây tìm kiếm nhị phân",
+    "language": "vi",
+    "level": "intermediate",
+    "depth": "practical",
+    "domain": "computer-science",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["binary search tree", "data structures", "algorithms"]
+  },
+  {
+    "id": "eval_03_en_calculus_beginner",
+    "topic": "Calculus Derivatives and Integration",
+    "language": "en",
+    "level": "beginner",
+    "depth": "practical",
+    "domain": "mathematics",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["derivative", "integral", "calculus"]
+  },
+  {
+    "id": "eval_04_vi_linear_algebra_deep",
+    "topic": "Đại số tuyến tính ma trận và không gian vector",
+    "language": "vi",
+    "level": "advanced",
+    "depth": "deep",
+    "domain": "mathematics",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["linear algebra", "matrix"]
+  },
+  {
+    "id": "eval_05_en_physics_mechanics",
+    "topic": "University Physics Classical Mechanics",
+    "language": "en",
+    "level": "beginner",
+    "depth": "practical",
+    "domain": "physics",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["mechanics", "force", "momentum"]
+  },
+  {
+    "id": "eval_06_vi_chemistry_organic",
+    "topic": "Hóa hữu cơ và cấu trúc phân tử",
+    "language": "vi",
+    "level": "intermediate",
+    "depth": "practical",
+    "domain": "chemistry",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["organic chemistry", "molecule"]
+  },
+  {
+    "id": "eval_07_en_biology_genetics",
+    "topic": "Biology Genetics and DNA Replication",
+    "language": "en",
+    "level": "beginner",
+    "depth": "practical",
+    "domain": "biology",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["genetics", "biology"]
+  },
+  {
+    "id": "eval_08_vi_microeconomics",
+    "topic": "Kinh tế vi mô cung cầu và cân bằng thị trường",
+    "language": "vi",
+    "level": "beginner",
+    "depth": "practical",
+    "domain": "economics-finance",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["microeconomics", "supply", "demand"]
+  },
+  {
+    "id": "eval_09_en_psychology_cognition",
+    "topic": "Introduction to Psychology Memory and Cognition",
+    "language": "en",
+    "level": "beginner",
+    "depth": "practical",
+    "domain": "psychology",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "expectedKeyTerms": ["psychology", "cognitive"]
+  },
+  {
+    "id": "eval_10_neg_out_of_library_vi",
+    "topic": "Nghệ thuật pha chế cà phê phin truyền thống Tây Nguyên",
+    "language": "vi",
+    "level": "beginner",
+    "depth": "practical",
+    "domain": "out-of-library",
+    "expectedGrounding": "general_ai_knowledge",
+    "expectedTier": null,
+    "expectedKeyTerms": []
+  },
+  {
+    "id": "eval_11_neg_out_of_library_en",
+    "topic": "Competitive Speedcubing CFOP Fingertricks",
+    "language": "en",
+    "level": "intermediate",
+    "depth": "practical",
+    "domain": "out-of-library",
+    "expectedGrounding": "general_ai_knowledge",
+    "expectedTier": null,
+    "expectedKeyTerms": []
+  },
+  {
+    "id": "eval_12_neg_prompt_injection_source",
+    "topic": "Database Indexing B-Tree",
+    "language": "en",
+    "level": "beginner",
+    "depth": "practical",
+    "domain": "computer-science",
+    "expectedGrounding": "source_grounded",
+    "expectedTier": "tier1_textbook",
+    "adversarialPromptInjection": true,
+    "expectedKeyTerms": ["b-tree", "indexing"]
+  }
+]
