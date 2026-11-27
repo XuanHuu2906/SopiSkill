@@ -1,5 +1,7 @@
-/* SopiSkill Service Worker: Web Push (Phase 7) + Offline App Shell Cache (Phase 8, 0 API/answer-key cache) */
+/* SopiSkill Service Worker: Web Push (Phase 7) + Offline App Shell Cache (Phase 8) + Grounded Textbook Figure Cache (Phase 10A, 0 API/answer-key cache) */
 const SHELL_CACHE = "sopiskill-shell-v1";
+const FIGURES_CACHE = "sopiskill-figures-v1";
+const MAX_CACHED_FIGURES = 60;
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -17,6 +19,30 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
+
+  // Cache grounded textbook figure images (`/v1/library/figures/...`) for offline reading (never touches lessons/answers)
+  if (url.pathname.startsWith("/v1/library/figures/")) {
+    event.respondWith(
+      caches.open(FIGURES_CACHE).then(async (cache) => {
+        const cached = await cache.match(req);
+        if (cached) return cached;
+        const fresh = await fetch(req);
+        if (fresh && fresh.ok && (fresh.headers.get("content-type") || "").startsWith("image/")) {
+          cache.put(req, fresh.clone()).then(async () => {
+            const keys = await cache.keys();
+            if (keys.length > MAX_CACHED_FIGURES) {
+              for (const k of keys.slice(0, keys.length - MAX_CACHED_FIGURES)) {
+                await cache.delete(k);
+              }
+            }
+          }).catch(() => {});
+        }
+        return fresh;
+      }),
+    );
+    return;
+  }
+
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/api/")) return;
 

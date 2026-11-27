@@ -36,12 +36,13 @@ import FigureRenderer, { type LessonFigure } from "@/components/lesson/FigureRen
 import MathText, { type InlineTermSpec } from "@/components/lesson/MathText";
 import MultiBlankWordBank from "@/components/lesson/MultiBlankWordBank";
 import RecapView, { type RecapSourceStat } from "@/components/lesson/RecapView";
+import ReelPlayer, { type ReelManifest } from "@/components/lesson/ReelPlayer";
 import { ScenarioQuestion, StepsQuestion } from "@/components/lesson/ScenarioAndSteps";
 import SpeedRound, { type SpeedItem } from "@/components/lesson/SpeedRound";
 import TutorPanel from "./TutorPanel";
 
 const CLIENT_BLOCKS_CAPABILITIES =
-  "teach,mc,blank,multi_blank,order,match,short,speed,recap,figure";
+  "teach,mc,blank,multi_blank,order,match,short,speed,recap,figure,reel";
 
 interface IdText {
   id: number;
@@ -97,6 +98,7 @@ interface LessonOut {
   contentVersion: number;
   status: string;
   blocks: Block[];
+  reel?: ReelManifest | null;
   grounding: "source_grounded" | "general_ai_knowledge";
   citations: Citation[];
   evidenceNotice: string | null;
@@ -402,6 +404,7 @@ export default function LessonPage() {
   const [tutorOpen, setTutorOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [vocabOpen, setVocabOpen] = useState(false);
+  const [reelOpen, setReelOpen] = useState(false);
   const [vocabInitialQuery, setVocabInitialQuery] = useState("");
   const [blockChecks, setBlockChecks] = useState<Record<number, BlockGradeResult>>({});
   const [checkingBlock, setCheckingBlock] = useState(false);
@@ -709,6 +712,16 @@ export default function LessonPage() {
         <span className="lesson-counter" aria-live="polite">
           {safeStep + 1}/{blocks.length}
         </span>
+        {lesson.data.reel && lesson.data.reel.scenes.length > 0 && (
+          <Button
+            variant={reelOpen ? "primary" : "secondary"}
+            data-testid="lesson-reel-toggle"
+            onClick={() => setReelOpen((v) => !v)}
+            style={{ fontSize: 12.5, padding: "5px 10px" }}
+          >
+            {reelOpen ? "Ẩn Reel" : "Xem Reel"}
+          </Button>
+        )}
         <IconButton aria-label="Mục lục bài học" onClick={() => setOutlineOpen(true)}>
           <Icon name="book" size={18} />
         </IconButton>
@@ -718,6 +731,21 @@ export default function LessonPage() {
           </IconButton>
         )}
       </div>
+
+      {reelOpen && lesson.data.reel && lesson.data.reel.scenes.length > 0 && (
+        <ReelPlayer
+          manifest={lesson.data.reel}
+          lessonId={lessonId}
+          ownerId={user?.id}
+          onClose={() => setReelOpen(false)}
+          onStartPractice={() => {
+            setReelOpen(false);
+            if (gradableIndices.length > 0) {
+              setStep(gradableIndices[0]);
+            }
+          }}
+        />
+      )}
 
       {submitted && result ? (
         <ResultView result={result} blocks={blocks} lessonTitle={lesson.data.title} />

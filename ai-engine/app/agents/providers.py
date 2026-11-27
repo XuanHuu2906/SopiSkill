@@ -12,6 +12,7 @@ import httpx
 
 from app.agents.tool_schemas import (
     PLANNER_TOOL_SCHEMAS,
+    REEL_SCRIPT_TOOL_SCHEMAS,
     SOURCE_BRIEF_TOOL_SCHEMAS,
     SOURCE_RESEARCH_TOOL_SCHEMAS,
     VALIDATOR_QA_TOOL_SCHEMAS,
@@ -1170,6 +1171,51 @@ class OpenAICompatibleProvider:
             ensure_ascii=False,
         )
         return await self._chat_json(sys_p, user_p, max_tokens=4000)
+
+    async def generate_reel_script(
+        self,
+        *,
+        topic: str,
+        lesson_title: str,
+        teach_blocks: list[dict[str, Any]],
+        language: str,
+        available_figures: list[dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], LlmUsageOut]:
+        """Agent #6 (Reel Script Agent): 1-turn forced tool call `save_reel_script`."""
+        sys_p = (
+            f"You are SopiSkill's Reel Script Agent (Agent #6). Write a concise 6-to-10-scene narrated "
+            f"audiovisual script in {language} summarizing the lesson's intuition via tool `save_reel_script`. "
+            "Use rich scene kinds: title, statement, bullets, term, compare, figure (may reference verified "
+            "`sourceFigureId` from availableFigures), chart, code, equation, plot (safe math expr only), ready. "
+            "NEVER include quiz answer keys or solutions."
+        )
+        user_payload = {
+            "topic": topic,
+            "lessonTitle": lesson_title,
+            "teachBlocks": teach_blocks[:4],
+            "availableFigures": [
+                {
+                    "figureId": f.get("figureId"),
+                    "caption": f.get("caption"),
+                    "sourceTitle": f.get("sourceTitle"),
+                }
+                for f in (available_figures or [])[:4]
+            ],
+        }
+        messages = [
+            {"role": "system", "content": sys_p},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)[:10_000]},
+        ]
+        tool_calls, _text, usage = await self._chat_with_tools(
+            messages=messages,
+            tools=REEL_SCRIPT_TOOL_SCHEMAS,
+            tool_choice={"type": "function", "function": {"name": "save_reel_script"}},
+            max_tokens=2600,
+        )
+        for tc in tool_calls:
+            if tc.get("name") == "save_reel_script" and isinstance(tc.get("arguments"), dict):
+                return tc["arguments"], usage
+        return {}, usage
 
     async def generate_interview_questions(
         self, topic: str, language: str

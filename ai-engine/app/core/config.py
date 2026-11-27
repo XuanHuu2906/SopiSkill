@@ -97,6 +97,16 @@ class Settings(BaseSettings):
     lesson_gen_max_turns: int = 6
     lesson_refine_max_rounds: int = 2
 
+    # Phase 10A: 2-Phase Narrated Reel Engine & neutral TTSProvider (mock default — 0 cost in CI/dev)
+    reel_enabled: bool = True
+    tts_provider: str = "mock"  # "mock" | "local" | "edge" | "openai_compatible"
+    tts_api_key: str = ""
+    tts_base_url: str = ""
+    tts_model: str = "tts-1"
+    tts_voice_vi: str = "vi-VN-HoaiMyNeural"
+    tts_voice_en: str = "en-US-AriaNeural"
+    tts_timeout_seconds: float = 20.0
+
     readiness_timeout_seconds: float = 2.0
 
     @property

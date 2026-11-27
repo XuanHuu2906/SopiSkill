@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.sopiskill.core.common.ApiException;
 import com.sopiskill.core.common.IdCodec;
 import com.sopiskill.core.common.JsonHelper;
+import com.sopiskill.core.config.SopiProperties;
 import com.sopiskill.core.gamification.GamificationService;
 import com.sopiskill.core.internal.AiEngineClient;
 import com.sopiskill.core.security.AuthPrincipal;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,6 +54,7 @@ public class LessonController {
     private final RateLimiterService rateLimiter;
     private final AiEngineClient aiEngine;
     private final GamificationService gamification;
+    private final SopiProperties props;
 
     public LessonController(
             JdbcClient jdbc,
@@ -60,7 +63,8 @@ public class LessonController {
             CsrfValidator csrf,
             RateLimiterService rateLimiter,
             AiEngineClient aiEngine,
-            GamificationService gamification
+            GamificationService gamification,
+            SopiProperties props
     ) {
         this.jdbc = jdbc;
         this.json = json;
@@ -69,6 +73,7 @@ public class LessonController {
         this.rateLimiter = rateLimiter;
         this.aiEngine = aiEngine;
         this.gamification = gamification;
+        this.props = props;
     }
 
     public record AnswerItem(@NotNull Integer index, Object answer) {}
@@ -186,11 +191,74 @@ public class LessonController {
         out.put("kind", lesson.get("kind"));
         out.put("format", lesson.get("format"));
         out.put("blocks", projector.toPublicBlocks(lid, contentVersion, privateBlocks, clientCaps));
+        out.put("reel", props.reelEnabled() ? lesson.get("reel") : null);
+        out.put("reelStatus", props.reelEnabled() ? lesson.get("reelStatus") : "disabled");
         out.put("grounding", lesson.get("grounding"));
         out.put("citations", citations);
         out.put("attributions", attributions);
         out.put("evidenceNotice", lesson.get("evidenceNotice"));
         return out;
+    }
+
+    private static final java.util.regex.Pattern SAFE_REEL_CLIP_ID =
+            java.util.regex.Pattern.compile("^[a-zA-Z0-9_-]{1,80}\\.(wav|mp3|ogg|webm)$");
+    private static final java.util.Set<String> ALLOWED_AUDIO_MIME = java.util.Set.of(
+            "audio/wav", "audio/mpeg", "audio/ogg", "audio/webm"
+    );
+
+    @GetMapping("/{lessonId}/reel/audio/{clipId}")
+    public ResponseEntity<byte[]> getReelAudio(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String lessonId,
+            @PathVariable String clipId,
+            HttpServletRequest request
+    ) {
+        if (!props.reelEnabled()) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "REEL_DISABLED", "Tính năng Reel đang tắt.");
+        }
+        rateLimiter.check(request, "reel_audio", 240, 60);
+        if (!SAFE_REEL_CLIP_ID.matcher(clipId).matches()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REEL_CLIP", "Mã âm thanh Reel không hợp lệ.");
+        }
+
+        UUID lid = IdCodec.parse(lessonId, "lsn");
+        var lesson = loadOwnedLesson(principal.userId(), lid);
+        UUID courseUuid = (UUID) lesson.get("courseUuid");
+
+        // Verify this clip actually belongs to this owned lesson in core.media_calls (no cross-lesson traversal)
+        var mediaRow = jdbc.sql("""
+                        SELECT content_type
+                        FROM core.media_calls
+                        WHERE lesson_id = :lid AND clip_id = :clip
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """)
+                .param("lid", lid)
+                .param("clip", clipId)
+                .query(String.class)
+                .optional()
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "REEL_AUDIO_NOT_FOUND", "Không tìm thấy tệp âm thanh Reel."));
+
+        String formattedCourseId = IdCodec.format("crs", courseUuid);
+        String formattedLessonId = IdCodec.format("lsn", lid);
+        String internalPath = "/internal/reels/audio/" + formattedCourseId + "/" + formattedLessonId + "/" + clipId;
+        var upstream = aiEngine.getBinary(internalPath, "reel_" + clipId);
+        if (upstream.statusCode() == 404) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "REEL_AUDIO_NOT_FOUND", "Không tìm thấy tệp âm thanh Reel.");
+        }
+        if (upstream.statusCode() < 200 || upstream.statusCode() >= 300) {
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "REEL_AUDIO_UPSTREAM_ERROR", "Không thể tải âm thanh Reel.");
+        }
+
+        String rawType = upstream.headers().firstValue("content-type").orElse(mediaRow).split(";")[0].trim().toLowerCase();
+        String safeType = ALLOWED_AUDIO_MIME.contains(rawType) ? rawType : "audio/wav";
+
+        return ResponseEntity.ok()
+                .header("Content-Type", safeType)
+                .header("Cache-Control", "private, max-age=86400")
+                .header("Accept-Ranges", "bytes")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(upstream.body());
     }
 
     private static String formatAttributionText(
@@ -263,7 +331,9 @@ public class LessonController {
                         "language", lesson.getOrDefault("language", "vi"),
                         "unitTitle", unitTitle,
                         "lessonTitle", lesson.get("title"),
-                        "lessonIds", List.of(IdCodec.format("lsn", lid))
+                        "lessonIds", List.of(IdCodec.format("lsn", lid)),
+                        "contentVersion", ((Number) lesson.get("contentVersion")).intValue(),
+                        "reelEnabled", props.reelEnabled()
                 )
         ));
 
@@ -780,7 +850,8 @@ public class LessonController {
         return jdbc.sql("""
                 SELECT l.id, l.course_id, l.title, l.order_index, l.status, l.content_version,
                        l.content_json, l.grounding, l.evidence_notice, l.estimated_minutes,
-                       l.kind, l.format, c.language
+                       l.kind, l.format, l.reel_manifest::text AS reel_manifest_text, l.reel_status,
+                       c.language
                 FROM core.lessons l
                 JOIN core.courses c ON c.id = l.course_id
                 WHERE l.id = :lid AND c.user_id = :uid
@@ -801,6 +872,9 @@ public class LessonController {
                     m.put("estimatedMinutes", rs.getInt("estimated_minutes"));
                     m.put("kind", rs.getString("kind"));
                     m.put("format", rs.getString("format"));
+                    String reelJson = rs.getString("reel_manifest_text");
+                    m.put("reel", reelJson == null ? null : json.fromJson(reelJson, new TypeReference<Map<String, Object>>() {}));
+                    m.put("reelStatus", rs.getString("reel_status"));
                     m.put("language", rs.getString("language"));
                     return m;
                 })

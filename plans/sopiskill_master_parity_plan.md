@@ -3,7 +3,7 @@
 > **Tài liệu tham chiếu gốc:**
 > - Báo cáo đối chiếu tính năng: [polyskill-analysis-report.md](file:///home/nguyenhuu/Hoc%20Tap/Reverse%20Engineer/polyskill-analysis-report.md)
 > - Kiến trúc mục tiêu: [spring-boot-python-k8s-architecture.md](file:///home/nguyenhuu/Hoc%20Tap/Reverse%20Engineer/docs/spring-boot-python-k8s-architecture.md)
-> - Trạng thái hiện tại: Nhánh `feat/p6.0-ci-pipeline` (`HEAD f6ac4e2`, đã xong Wave 1–4) + thay đổi UI chưa commit (`/profile`, `GlobalSopiSheet`, `SopiContext`). Máy local đã có sẵn **OpenJDK 25.0.5**, **Maven 3.9.11** và **Docker 29.10**.
+> - Trạng thái cập nhật (`2026-11-27`): Nhánh `feat/library-foundation` đã hoàn tất **Phase 0 → Phase 8**, chuẩn hóa **8-Agent SDK**, và mở rộng thêm **Thư viện Giáo trình Mở (`L0–L6`, Flyway `V7`, Alembic `0002`, `491` sách / `545k` chunks)** cùng **Đa phương thức Công thức · Code · Ảnh gốc (`P0–P3`, Alembic `0003`, 6 loại `figure`, `12,860` ảnh WebP trên MinIO)**. **Phase 9 (Billing) được lược bỏ** vì đây là dự án cá nhân phi thương mại; chỉ còn duy nhất chặng cuối **Phase 10 (`Flyway V8`: Narrated Reel Engine + Kubernetes)**.
 >
 > **Nguyên tắc bất biến (`AGENTS.md`):** Clean-room 100% (không sao chép mã nguồn, prompt, tài sản thương hiệu của PolySkill); **100% server-authoritative grading** (`0` answer key lộ xuống Frontend hay sang AI Tutor); tách bạch chủ sở hữu dữ liệu (`core.*` do Flyway của Spring Boot quản lý, `rag.*` do Alembic của Python quản lý); mọi tích hợp ngoài đều có `Mock*` để chạy CI/E2E offline **0 đồng chi phí**.
 
@@ -18,12 +18,12 @@
 | **DEC-021** | Phạm vi sản phẩm & Phase Gate | Bao phủ đầy đủ mọi phân hệ còn thiếu trong báo cáo PolySkill theo 11 Phase (`0 → 10`), mỗi Phase có cổng kiểm thử bắt buộc và feature flag an toàn. |
 | **DEC-022** | Hợp đồng chấm bài & Offline | **Giữ cứng 100% server-authoritative** ở `core-api` (`GET /v1/lessons/{id}` trả `0` answer key). Gợi ý/retry từng câu gọi `POST /v1/lessons/{id}/blocks/{index}/grade`. Chế độ Offline lưu bài học công khai vào IndexedDB và xếp câu trả lời thô vào `outbox_attempts` để `core-api` chấm thật khi có mạng lại. |
 | **DEC-023** | Hệ thống 8 Agent & Validator QA | Giữ nguyên kiến trúc **Specialized Pipeline + Single Tool-Using Agent** (không dùng Multi-Agent tự do, không thêm Router/Supervisor cho Sopi để giữ độ trễ SSE thấp). Chuẩn hóa đầy đủ **8 Agent chuyên biệt** chạy qua **Official `openai` Python SDK (`AsyncOpenAI`, hỗ trợ DeepSeek native `tools`/`tool_calls`)** theo bảng bên dưới; giữ tuyệt đối ranh giới **không biến FSRS/BKT, chấm `mc/blank/order/match`, XP, Streak, Hearts, Quota, Billing thành LLM Agent**. |
-| **DEC-024** | Rich Lesson, Toán, Figure & Practice | Tự host font **KaTeX (`.woff2`)** + **SVG sạch** cho 7 diagram layouts & `table` + `formula` + inline `termKey` + `RecapView` + **multi-blank word bank** (tương thích ngược bài 1-blank) + đủ **5 practice formats** (`scenario`, `spot`, `speed`, `explain`, `recap`); `teach.image` trích từ tài liệu nguồn hoặc qua `LESSON_IMAGES_ENABLED=false`. |
+| **DEC-024** | Rich Lesson, Toán, Code, Đồ thị & Ảnh gốc | Tự host font **KaTeX (`.woff2`)** + **6 loại `figure`** (`formula`, `table`, `visual`, `diagram` 7 layouts, `code` syntax card, `plot` hàm số tương tác không `eval()`) + ảnh sách giáo khoa xác thực `sourceFigureId` từ `rag.source_figures` (`12,860` WebP) + inline `termKey` + `RecapView` + **multi-blank word bank** + **5 practice formats** (`scenario`, `spot`, `speed`, `explain`, `recap`). |
 | **DEC-025** | AI Tutor "Sopi" đa Pod | Đủ **6/6 tools** (`read_lesson`, `explain_deeper`, `read_source`, `flag_question`, `revise_proposal` trên `PlanChat`, `regenerate_unit` kèm `ChangeCard` confirm gate), 3 loại thread, 6 entry points, `/v1/tutor/sessions`, **Redis Stream buffer cho `Last-Event-ID`** và **Redis Pub/Sub cho nút `stop` xuyên pod**. |
 | **DEC-026** | Gamification, Hearts & Leagues | Thực thi gọn trong **1 ACID transaction tại `core-api`**: XP (`80+20`), Daily Goal (`1\|2\|3`), Streak + Freeze (`7d`, max `2`), `WeekChart`, 7 nhóm Milestones + 9 Ladder, màn `/complete`, **Hearts** (`max 5`, hồi theo giờ **và** hồi `+1` tim khi ôn tập FSRS `/review`), cùng **Leagues 5 hạng** sau `LEAGUES_ENABLED`. |
 | **DEC-027** | Auth, Onboarding, i18n & Push | Spring Security 6 giữ Email/Password + thêm **Google & Apple OAuth2/OIDC + Account Linking** trên nền **HttpOnly Access + Rotating Refresh Cookie** (`core.user_sessions`); tách `appLanguage`/`lessonLanguage` (chuẩn hóa sâu `vi`+`en`, khung 12 ngôn ngữ); Onboarding 4 bước; **Web Push VAPID + In-App/Email** cho 7 loại nhắc nhở. |
-| **DEC-028** | Entitlements & Billing | `core-api` quản lý trọn vẹn `Free`/`Pro` + `PaywallSheet` + **SePay VietQR** (auto-prefer cho múi giờ VN) + **Polar.sh** + `MockBillingProvider` cho E2E offline; mặc định `BILLING_ENFORCEMENT_ENABLED=false` ở dev/CI. |
-| **DEC-029** | Narrated Reel Engine & TTS | `ai-worker-llm` biên dịch 2 pha: LLM `reelScript` (11 scene kinds) → **AST math plotter an toàn** (cấm `eval()`) + **`TTSProvider` trung lập** (`MockTTSProvider` + local/free word-boundary TTS cho `vi`/`en` + Cloud TTS) lưu MinIO → callback về `core-api` → `ReelPlayer` (`1×/1.25×/1.5×`, lệch `<80ms`, chạy được cả khi tắt tiếng) sau `REEL_ENABLED`. |
+| **DEC-028** | Không tích hợp Billing / Paywall *(Dự án cá nhân)* | **Lược bỏ hoàn toàn Billing thương mại (`SePay VietQR`, `Polar.sh`, `PaywallSheet`, khóa `openUnits`)**: mở khóa 100% tính năng & sử dụng hợp lệ toàn bộ `491` giáo trình mở (gồm cả `CC BY-NC` / `arXiv` kèm ghi công `attributions[]`). Chỉ giữ **trần an toàn kỹ thuật** (Redis rate-limit tách riêng bucket media `/v1/library/figures/**` + trần token/tin nhắn Tutor mỗi ngày) để bảo vệ API key cá nhân. |
+| **DEC-029** | Narrated Reel Engine & TTS | `ai-worker-llm` biên dịch 2 pha: LLM `reelScript` (11 scene kinds, hỗ trợ cả `sourceFigureId` từ `rag.source_figures`) → **tái sử dụng bộ parse AST toán học an toàn (`figure_validator.py`) & primitives `FunctionPlotSvg`/`CodeBlockCard`/KaTeX từ P0–P3** + **`TTSProvider` trung lập** lưu vào MinIO prefix riêng `reels-audio/` → callback về `core-api` → `ReelPlayer` (`1×/1.25×/1.5×`, lệch `<80ms`, chạy được cả khi tắt tiếng) sau `REEL_ENABLED`. |
 
 ### 1.1 Bảng đầy đủ 8 Agent & Bộ Tool của từng Agent (`ai-engine` · Official `openai` SDK / DeepSeek)
 
@@ -40,11 +40,11 @@
 
 **Ranh giới TUYỆT ĐỐI KHÔNG biến thành LLM Agent:**
 - **Lịch ôn tập & đánh giá năng lực:** Dùng thuật toán toán học **FSRS + BKT** (chạy ~1ms, miễn phí, ổn định — tốt hơn dùng LLM đoán).
-- **Chấm `mc/blank/order/match`, XP, Streak, Hearts, Billing, Quota:** Logic tất định **100%** ở `core-api` (Spring Boot).
+- **Chấm `mc/blank/order/match`, XP, Streak, Hearts, Rate-Limit:** Logic tất định **100%** ở `core-api` (Spring Boot).
 
 ---
 
-## 2. Kiến trúc Đích & Lộ trình Phụ thuộc 11 Phase
+## 2. Kiến trúc Đích & Lộ trình Phụ thuộc (Phase 0 → Phase 10, Bỏ qua Phase 9 Billing)
 
 ```mermaid
 flowchart TD
@@ -59,17 +59,17 @@ flowchart TD
     P6 --> P7
     P4 --> P8["Phase 8: Offline IndexedDB Cache (6 stores), Raw-Answer Outbox & Smart Prefetch"]
     P6 --> P8
-    P5 --> P9["Phase 9: Entitlements, Paywall, SePay VietQR & Polar.sh Billing (Flyway V7)"]
-    P7 --> P9
-    P4 --> P10["Phase 10: 2-Phase Reel Engine (Flyway V8) + Kubernetes (Helm, HPA, KEDA, kind Chaos E2E)"]
+    P8 --> PLM["Library Foundation (L0–L6, Flyway V7, Alembic 0002) & Multimodal Figures/Code/Plot (P0–P3, Alembic 0003)"]
+    P9["Phase 9: Billing & Paywall — SKIPPED (Dự án cá nhân phi thương mại)"]
+    PLM --> P10["Phase 10: 2-Phase Reel Engine (Flyway V8) + Kubernetes (Helm, HPA, KEDA, Split Ingress, kind Chaos E2E)"]
     P5 --> P10
-    P9 --> P10
+    P7 --> P10
 ```
 
 > [!IMPORTANT]
 > **Nguyên tắc Ranh giới Domain (Chống "Distributed Monolith"):**
-> - **`core-api` (Spring Boot)** là cổng `/v1/*` duy nhất cho Frontend và là **chủ sở hữu duy nhất của schema `core`** (Flyway `V1`..`V8`). Tuyệt đối không để Python ghi trực tiếp vào bảng `core.*`.
-> - **`ai-engine` (Python)** chỉ lộ nội bộ qua `ClusterIP` (`/internal/*` bảo vệ bằng `X-Internal-Service-Token` + `X-Correlation-Id`), nhận việc qua 2 Redis Streams (`queue:ai:llm`, `queue:ai:ingest`), trả kết quả qua HTTP callback về `core-api`, và là **chủ sở hữu duy nhất của schema `rag`** (Alembic + `pgvector`).
+> - **`core-api` (Spring Boot)** là cổng `/v1/*` duy nhất cho Frontend và là **chủ sở hữu duy nhất của schema `core`** (Flyway `V1`..`V8`, trong đó `V7` đã dùng cho Public Library Catalog và `V8` dành cho Phase 10A Reel Engine). Tuyệt đối không để Python ghi trực tiếp vào bảng `core.*`.
+> - **`ai-engine` (Python)** chỉ lộ nội bộ qua `ClusterIP` (`/internal/*` bảo vệ bằng `X-Internal-Service-Token` + chữ ký HMAC + `X-Correlation-Id`), nhận việc qua 2 Redis Streams (`queue:ai:llm`, `queue:ai:ingest`), trả kết quả qua HTTP callback về `core-api`, và là **chủ sở hữu duy nhất của schema `rag`** (Alembic `0001`..`0003` cho `document_chunks` & `source_figures`; mọi migration mới bắt đầu từ `0004_*`).
 > - **`ai-engine` cho Tutor chỉ nhận `public_blocks`**, không bao giờ nhận đáp án câu hỏi (`answerIndex`, `answers`, `pairs`, `modelAnswer`).
 
 ---
@@ -230,31 +230,29 @@ flowchart TD
 
 ---
 
-### Phase 9 — Entitlements (Free/Pro), Paywall, SePay VietQR & Polar.sh Billing
+### Phase 9 — Billing & Paywall (`SKIPPED` — Dự án Cá nhân Phi thương mại)
 
-- **Mục tiêu:** Triển khai đầy đủ mô hình gói cước & thanh toán nội địa + quốc tế tại `core-api` (Mục 4.7 báo cáo, `GAP-02`, `GAP-22`), mặc định `BILLING_ENFORCEMENT_ENABLED=false` ở môi trường dev/CI.
-- **Flyway Migration (`core-api`):** `V7__entitlements_and_billing.sql` tạo `core.user_entitlements`, `core.billing_orders`, và `core.billing_webhook_events` (`UNIQUE(gateway, event_id)` chống cộng trùng hạn dùng).
-- **Phân công thực thi:**
-  - **`core-api` (Spring Boot):**
-    - Kiểm tra hạn mức `Free` vs `Pro` (số khóa học, số `openUnits`, hạn mức Tutor) **ngay tại `core-api` trước khi đẩy job sang `ai-engine`**; gắn cờ `paywalled` trên `path` và chặn đọc trực tiếp `GET /v1/lessons/{id}` của unit khóa (`403 ENTITLEMENT_REQUIRED`).
-    - Xây interface `BillingGateway` với 3 implementations: `MockBillingGateway` (cho CI/E2E), **`SePayVietQrGateway`** (`GET /v1/billing/sepay/plans`, `POST /v1/billing/sepay/orders`, `GET .../orders/{code}` cho poll `3s`, webhook `POST /v1/billing/webhooks/sepay` kiểm chữ ký/API key thời gian hằng + khớp số tiền + khóa dòng `FOR UPDATE`), và **`PolarGateway`** (`plans`, `checkout`, `portal`, `sync`, webhook chuẩn Standard Webhooks).
-  - **`frontend/`:** `PaywallSheet.tsx` tự động ưu tiên tab **VietQR (SePay)** khi múi giờ trình duyệt là `Asia/Ho_Chi_Minh` / `Asia/Saigon` (hiển thị QR, copy STK 1 chạm, poll `3s` tự mở khóa ngay khi `paid: true`), kèm tab thẻ quốc tế **Polar** và tự gọi `/v1/billing/sync` khi quay về từ `returnUrl`.
-- **Phase Gate 9:** JUnit test bắn đồng thời 10 webhook trùng mã giao dịch chỉ cộng hạn Pro đúng 1 lần; từ chối chữ ký giả/thiếu tiền; Playwright E2E nâng cấp Pro qua `MockBillingGateway` mở khóa Unit 2 tức thì.
+- **Quyết định sản phẩm (`2026-11-27`):** **Lược bỏ hoàn toàn Phase 9** (`SePay VietQR`, `Polar.sh`, `PaywallSheet.tsx`, khóa `paywalled` trên Unit 2+).
+- **Hệ quả tích cực cho kiến trúc & bản quyền:**
+  - Người học được mở khóa 100% lộ trình bài học, AI Tutor Sopi và mọi công cụ học tập mà không vướng paywall.
+  - Toàn bộ **`491` đầu sách mở** trong kho tri thức (bao gồm cả nhóm giấy phép phi thương mại `CC BY-NC` và `arXiv`) hoàn toàn hợp lệ 100% khi vận hành phi thương mại kèm hiển thị ghi công `attributions[]`.
+  - Chỉ giữ **trần bảo vệ kỹ thuật sẵn có** tại `core-api` (`tutorMessagesPerDay`, `tutorTokensPerDay`, Redis sliding-window rate-limit với bucket riêng cho `/v1/library/figures/**`) để tránh vòng lặp lỗi làm tốn tiền API LLM cá nhân.
 
 ---
 
-### Phase 10 — 2-Phase Narrated Reel Engine (`TTSProvider` + Safe AST Plot) & Đóng gói Kubernetes (`Helm` + `KEDA` + `kind`)
+### Phase 10 — 2-Phase Narrated Reel Engine (`TTSProvider` + Shared Safe AST Plot) & Đóng gói Kubernetes (`Helm` + `KEDA` + `kind`)
 
-- **Mục tiêu:** Hoàn thiện mảnh ghép đa phương tiện cuối cùng (Mục 5.2 báo cáo, `GAP-16`) và vận hành toàn bộ hệ thống đa pod trên cụm Kubernetes chuẩn production theo Mục 6 của [spring-boot-python-k8s-architecture.md](file:///home/nguyenhuu/Hoc%20Tap/Reverse%20Engineer/docs/spring-boot-python-k8s-architecture.md).
-- **Phần 10A — 2-Phase Audiovisual Reel Engine (`Flyway V8__lesson_reels_and_media.sql`):**
-  - **`ai-worker-llm` (Python):** Pha 1 sinh `reelScript` (**11 scene kinds**: `title, statement, bullets, term, compare, figure, chart, code, equation, plot, ready` + `fallback`, `cues: rise/draw/count/pulse`); Pha 2 dùng **bộ parse `ast` whitelist toán học an toàn** (tuyệt đối cấm `eval()`) xuất tọa độ SVG cho `plot` (`segments, tangents, areas`), gọi **`TTSProvider` trung lập** (`MockTTSProvider` + local/free word-boundary TTS cho `vi`/`en` + Cloud TTS adapter) đẩy audio lên MinIO và callback `reelManifest` + `mediaCall` về `core-api` (cờ `REEL_ENABLED`).
-  - **`frontend/`:** `ReelPlayer.tsx` phát 11 loại scene bằng SVG + KaTeX, tốc độ `1× / 1.25× / 1.5×`, tự resync khi lệch `>80ms`, phụ đề karaoke theo từng từ `words[]`, chạy mượt cả khi tắt âm thanh và lưu đệm vào `cached_reel_clips`.
+- **Mục tiêu:** Hoàn thiện mảnh ghép đa phương tiện cuối cùng (Mục 5.2 báo cáo, `GAP-16`) trên nền các thành phần `P0–P3` đã có và vận hành toàn bộ hệ thống đa pod trên cụm Kubernetes chuẩn production theo Mục 6 của [spring-boot-python-k8s-architecture.md](file:///home/nguyenhuu/Hoc%20Tap/Reverse%20Engineer/docs/spring-boot-python-k8s-architecture.md).
+- **Phần 10A — 2-Phase Audiovisual Reel Engine (`Flyway V8__lesson_reels_and_media.sql`, Alembic `0004_*` nếu mở rộng `rag`):**
+  - **`ai-worker-llm` (Python):** Pha 1 sinh `reelScript` (**11 scene kinds**: `title, statement, bullets, term, compare, figure, chart, code, equation, plot, ready` + `fallback`, `cues: rise/draw/count/pulse`, cho phép scene `figure` tham chiếu trực tiếp `sourceFigureId` từ kho `12,860` ảnh `rag.source_figures`); Pha 2 **tái sử dụng trực tiếp bộ kiểm tra `validate_safe_math_expr` (`ast` whitelist trong `figure_validator.py`, cấm `eval()`)** xuất tọa độ SVG cho `plot` (`segments, tangents, areas`), gọi **`TTSProvider` trung lập** (`MockTTSProvider` + local/free word-boundary TTS cho `vi`/`en` + Cloud TTS adapter) đẩy audio vào prefix riêng `reels-audio/{courseId}/{lessonId}/...` trên MinIO (tự dọn file cũ khi gọi `regenerate_unit`) và callback `reelManifest` + `mediaCall` về `core-api` (cờ `REEL_ENABLED`).
+  - **`frontend/`:** Tách các primitive đã hoàn thiện ở P0 (`FunctionPlotSvg`, `CodeBlockCard`, KaTeX `FormulaMath`, `FigureRenderer`) để dùng chung cho cả `teach.figure` và `ReelPlayer.tsx` phát 11 loại scene, tốc độ `1× / 1.25× / 1.5×`, tự resync khi lệch `>80ms`, phụ đề karaoke theo từng từ `words[]`, chạy mượt cả khi tắt âm thanh và lưu đệm có giới hạn vào `cached_reel_clips` (+ cache Service Worker cho ảnh sách giáo khoa khi học offline).
 - **Phần 10B — Đóng gói Kubernetes & Kiểm thử Chaos Đa Pod (`deploy/k8s/`):**
   - Xây dựng Helm Chart `deploy/k8s/sopiskill/` gồm:
     - `Deployment: frontend` (HPA), `Deployment: core-api` (2+ replicas, Virtual Threads, `/actuator/health/liveness` & `/readiness`, `terminationGracePeriodSeconds: 60`), `Deployment: ai-api` (`ClusterIP` nội bộ).
     - `Deployment: ai-worker-llm` & `Deployment: ai-worker-ingest` gắn **KEDA `ScaledObject`** co giãn tự động theo độ dài Redis Streams `queue:ai:llm` và `queue:ai:ingest` (`terminationGracePeriodSeconds: 120`).
-    - Pre-upgrade Helm Hook `Job` chạy Flyway (`core`) & Alembic (`rag`); `CronJob: maintenance` (dọn stream mồ côi, backup `pg_dump` kiểm SHA-256, chốt hạng League, gửi nhắc học).
-    - Nginx Ingress cấu hình chuẩn SSE (`proxy-buffering: "off"`, `proxy-read-timeout: "300"`, `proxy-body-size: "30m"`), `ConfigMap` & `Secret`.
+    - Định cỡ Stateful workloads khớp kho tri thức thật: `pgvector-db` tối thiểu **`2Gi–4Gi` RAM** (`shared_buffers >= 1GB` giữ nóng HNSW/GIN cho `545k+` chunks) + **PVC `>= 20Gi`**; `minio` **PVC `>= 20Gi`** cho `12,860+` ảnh WebP, PDF upload và audio Reel.
+    - Pre-upgrade Helm Hook `Job: core-db-migrate` chạy Flyway (`core` `V1..V8`) & Alembic (`rag` `0001..0004+`), kèm tùy chọn `Job: library-seed` (nạp danh mục `491` sách mở + mirror `library-figures/` cho cụm mới); `CronJob: maintenance` (dọn stream & `reels-audio/` mồ côi, backup `pg_dump` kiểm SHA-256, chốt hạng League, gửi nhắc học).
+    - **Tách 2 Nginx Ingress rules:** Ingress SSE (`/v1/courses/.*/tutor/.*` đặt `proxy-buffering: "off"`, `proxy-read-timeout: "300"`) tách biệt với Ingress REST & Media (`/v1/*`, `/v1/library/figures/*` giữ `proxy-buffering: "on"`, `proxy-body-size: "30m"`, tôn trọng `Cache-Control` hoặc Presigned `GET` URL ở quy mô lớn), `ConfigMap` & `Secret`.
   - Cài `kubectl`, `helm`, `kind` cục bộ trên Docker, dựng cụm K8s thật với `2` replicas `core-api`, chạy full Playwright E2E và **bài test Chaos đa pod**:
     1. Đang stream SSE Tutor qua pod `core-api-1` → xóa pod `core-api-1` → client tự kết nối lại qua `Last-Event-ID` vào `core-api-2` không rớt nội dung.
     2. Mở stream trên `core-api-1` → bắn lệnh `/stop` rơi vào `core-api-2` → Redis Pub/Sub ngắt stream tức thì.
@@ -268,8 +266,8 @@ flowchart TD
 |---|---|---|---|
 | **Auth, OAuth2, Sessions, Onboarding** | Spring Security 6, Google/Apple OIDC, Rotating Refresh Cookie, CSRF | Nhận `onboardingProfile` qua payload nội bộ | `/login`, `/onboarding`, `LinkAccountSheet`, `AvatarSheet` |
 | **Course, Proposal, Lesson-1-First** | Optimistic lock, trạng thái `preparing`, `DELETE /courses/{id}`, Glossary | Interview chips, Planner, Generator Loop, **Validator QA 2 tầng** | `/new`, `/new/interview`, `/new/proposal`, `/course/[id]` |
-| **Rich Lesson, Quiz & Grading** | `PublicBlockProjector` (0 answer key), HMAC shuffle, chấm deterministic | Sinh 7 layout Figure/KaTeX, chấm `short` semantic/LLM rubric + dispute | KaTeX `.woff2`, `FigureRenderer`, `MultiBlank`, `SpeedRound`, `RecapView` |
+| **Rich Lesson, Multimodal & Grading** | `PublicBlockProjector` (0 answer key), HMAC shuffle, chấm deterministic | 6 loại Figure (`formula, table, visual, diagram, code, plot` AST), `sourceFigureId`, chấm `short` | KaTeX `.woff2`, `FigureRenderer`, `CodeBlockCard`, `FunctionPlotSvg`, `MultiBlank`, `SpeedRound` |
 | **AI Tutor "Sopi" (6 Tools + SSE)** | SSE Gateway, Redis `Last-Event-ID` buffer, Pub/Sub `stop`, `ChangeCard` state | Suy luận Sopi + 6 tools (chỉ đọc `public_blocks` + Hybrid RAG) | `TutorPanel`, `GlobalSopiSheet`, `PlanChat`, `ChangeCard` |
-| **Sources, OCR & Hybrid RAG** | Metadata `core.sources`, Presigned MinIO URL, deep-link citation resolver | PyMuPDF, `vietocr`, `source.brief`, `pgvector` + FTS + RRF (`rag.*`) | `/new/source`, `/sources`, `CitationChip` |
+| **Open Library, Sources, OCR & RAG** | Danh mục `491` sách (`Flyway V7`), proxy quyền `/v1/library/figures/*` | PyMuPDF, `vietocr`, arXiv/CNXML/BBox figures (`rag.source_figures` `12,860` WebP), `pgvector` + FTS | `/new/source`, `/sources`, `CitationChip`, ảnh sách giáo khoa kèm `attribution` |
 | **Gamification, FSRS & Leagues** | 1 ACID transaction: XP, Streak/Freeze, **Hearts + FSRS `/review` refill**, Milestones, Leagues | — | `/lesson/[id]/complete`, `/review`, `/profile` (`WeekChart`), `/league` |
-| **Offline, Billing & Reel Engine** | Entitlements, **SePay VietQR**, **Polar.sh**, `MockBilling`, lưu metadata Reel | Pha 1 `reelScript` + Pha 2 AST math SVG + **`TTSProvider`** → MinIO | IndexedDB 6 stores + Outbox, `PaywallSheet`, `ReelPlayer` 11 scenes |
+| **Offline & Narrated Reel Engine** | Lưu metadata Reel (`Flyway V8`), trần bảo vệ API/LLM cá nhân | Pha 1 `reelScript` + Pha 2 shared AST math SVG + **`TTSProvider`** → MinIO `reels-audio/` | IndexedDB 6 stores + Outbox, `ReelPlayer` 11 scenes |

@@ -1,4 +1,5 @@
 import {
+  API_BASE,
   api,
   fetchCourseGlossary,
   type CoursePathOut,
@@ -8,10 +9,11 @@ import {
   putCachedCourse,
   putCachedGlossary,
   putCachedLesson,
+  putCachedReelClip,
 } from "./db";
 
 const CLIENT_BLOCKS_CAPABILITIES =
-  "teach,mc,blank,multi_blank,order,match,short,speed,recap,figure";
+  "teach,mc,blank,multi_blank,order,match,short,speed,recap,figure,reel";
 
 interface NavigatorConnectionLike {
   saveData?: boolean;
@@ -99,6 +101,38 @@ export async function prefetchCourseOffline(
           ? lessonData.contentVersion
           : item.contentVersion;
       await putCachedLesson(item.id, course.id, ownerId, ver, lessonData);
+
+      // Warm up first 2 Reel audio clips into bounded IndexedDB `cached_reel_clips`
+      const reelObj = lessonData.reel as
+        | { scenes?: { audio?: { clipId?: string; url?: string; contentType?: string } | null }[] }
+        | null
+        | undefined;
+      if (reelObj && Array.isArray(reelObj.scenes)) {
+        const audioScenes = reelObj.scenes
+          .filter((sc) => sc?.audio?.clipId && sc?.audio?.url)
+          .slice(0, 2);
+        for (const sc of audioScenes) {
+          if (typeof navigator !== "undefined" && !navigator.onLine) break;
+          try {
+            const audioUrl = sc.audio!.url!.startsWith("http")
+              ? sc.audio!.url!
+              : `${API_BASE}${sc.audio!.url!}`;
+            const resp = await fetch(audioUrl, { credentials: "include" });
+            if (resp.ok) {
+              const buf = await resp.arrayBuffer();
+              await putCachedReelClip(
+                `${item.id}:${sc.audio!.clipId!}`,
+                ownerId,
+                item.id,
+                sc.audio!.contentType || resp.headers.get("content-type") || "audio/wav",
+                buf,
+              );
+            }
+          } catch {
+            // ignore individual audio prefetch failure
+          }
+        }
+      }
 
       // Warm same-origin HTML & Next.js RSC route shell in Service Worker cache (never touches /v1/*)
       if (typeof window !== "undefined") {

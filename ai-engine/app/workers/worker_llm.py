@@ -21,11 +21,14 @@ from app.agents.planner_agent import (
     generate_proposal_with_tools,
 )
 from app.agents.providers import LLMProvider, get_llm_provider
+from app.agents.reel_compiler import compile_lesson_reel
+from app.agents.tts_provider import TTSProvider, get_tts_provider
 from app.core.callback_client import CoreApiCallbackClient
 from app.core.config import Settings, get_settings
 from app.db.session import get_session_factory
 from app.rag.query_bridge import expand_cross_lingual_query
 from app.rag.repository import RagRepository
+from app.rag.storage import get_source_storage
 from app.workers.streams import RedisStreamWorker, default_consumer_name
 
 logger = logging.getLogger(__name__)
@@ -129,6 +132,7 @@ async def handle_llm_job(
     settings: Settings | None = None,
     db: AsyncSession | None = None,
     rag_repo: RagRepository | None = None,
+    tts_provider: TTSProvider | None = None,
 ) -> dict[str, Any]:
     """Execute one LLM generation job, validate completeness lint, and callback `core-api`."""
     cfg = settings or get_settings()
@@ -230,28 +234,71 @@ async def handle_llm_job(
                         raise ValueError("; ".join(qa.blocking_errors))
 
                     lesson["estimatedMinutes"] = qa.estimated_minutes
+
+                    # Phase 10A: 2-Phase Narrated Reel compilation (behind REEL_ENABLED flag)
+                    reel_enabled = bool(payload.get("reelEnabled", cfg.reel_enabled))
+                    reel_manifest: dict[str, Any] | None = None
+                    reel_media_calls: list[dict[str, Any]] = []
+                    current_lesson_id = lesson_ids[lesson_order] if lesson_order < len(lesson_ids) else ""
+                    if reel_enabled and course_id and current_lesson_id:
+                        try:
+                            storage = get_source_storage(cfg)
+                            if job_type == "regenerate_unit":
+                                # Clean old reel audio clips before generating fresh version
+                                await storage.delete_prefix(f"reels-audio/{course_id}/{current_lesson_id}/")
+                            content_ver = int(payload.get("contentVersion") or 1)
+                            tts = tts_provider or get_tts_provider(cfg)
+                            reel_res = await compile_lesson_reel(
+                                course_id=course_id,
+                                lesson_id=current_lesson_id,
+                                content_version=content_ver,
+                                topic=topic,
+                                lesson_title=str(lesson.get("title") or l_title),
+                                lesson=lesson,
+                                language=language,
+                                available_figures=gen_res.available_figures,
+                                provider=llm,
+                                tts_provider=tts,
+                                storage=storage,
+                                settings=cfg,
+                            )
+                            reel_manifest = reel_res.manifest
+                            reel_media_calls = reel_res.media_calls
+                            lesson["reelManifest"] = reel_manifest
+                            lesson["mediaCalls"] = reel_media_calls
+                        except Exception as exc:  # noqa: BLE001 — never block lesson delivery if Reel TTS fails
+                            logger.warning(
+                                "worker_llm_reel_compile_skipped lesson=%s error_type=%s",
+                                current_lesson_id,
+                                type(exc).__name__,
+                            )
+
                     generated_lessons.append(lesson)
                     all_flags.extend(qa.content_flags)
                     last_usage = usage
 
                     # Phase 3 Lesson-1-First: callback each lesson immediately as it completes!
                     if lesson_order < len(lesson_ids) and course_id:
+                        ready_cb: dict[str, Any] = {
+                            "jobId": job_id,
+                            "idempotencyKey": f"{idempotency_key}:lesson:{lesson_order}",
+                            "courseId": course_id,
+                            "lessonId": lesson_ids[lesson_order],
+                            "lessonOrder": lesson_order,
+                            "status": "ready",
+                            "content": lesson,
+                            "estimatedMinutes": qa.estimated_minutes,
+                            "contentFlags": qa.content_flags,
+                            "citations": gen_res.citations,
+                            "grounding": gen_res.grounding,
+                            "usage": usage.model_dump() if usage else None,
+                        }
+                        if reel_manifest is not None:
+                            ready_cb["reelManifest"] = reel_manifest
+                            ready_cb["mediaCalls"] = reel_media_calls
                         await cb.post_callback(
                             f"/internal/jobs/{job_id}/lesson-ready",
-                            {
-                                "jobId": job_id,
-                                "idempotencyKey": f"{idempotency_key}:lesson:{lesson_order}",
-                                "courseId": course_id,
-                                "lessonId": lesson_ids[lesson_order],
-                                "lessonOrder": lesson_order,
-                                "status": "ready",
-                                "content": lesson,
-                                "estimatedMinutes": qa.estimated_minutes,
-                                "contentFlags": qa.content_flags,
-                                "citations": gen_res.citations,
-                                "grounding": gen_res.grounding,
-                                "usage": usage.model_dump() if usage else None,
-                            },
+                            ready_cb,
                             correlation_id=correlation_id,
                         )
                     lesson_order += 1
