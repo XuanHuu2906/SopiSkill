@@ -3,7 +3,8 @@
 > **Mã tài liệu:** `PLAN-LIB-001`  
 > **Ngày lập:** `2026-11-27`  
 > **Nhánh cơ sở đã kiểm toán:** `feat/polyglot-phase9` (SopiSkill Polyglot: `core-api` Spring Boot 3.4 + `ai-engine` Python 3.12 + `frontend` Next.js 15)  
-> **Kho tri thức nguồn đối chiếu:** `/home/nguyenhuu/Hoc Tap/Cào sách/library` (`8.2 GB`, `630` ấn phẩm trên `20` lĩnh vực, quản lý bởi SQLite FTS5 `catalog.db`)  
+> **Kho tri thức nguồn đối chiếu:** `/home/nguyenhuu/Hoc Tap/Cào sách/library` (quản lý bởi SQLite FTS5 `catalog.db` + gói xuất bản sạch `sopiskill_manifest.jsonl`)  
+> **Kế hoạch làm sạch & đóng gói dữ liệu phía `Open Book Harvester`:** [data-cleaning-and-rag-prep-plan.md](file:///home/nguyenhuu/Hoc%20Tap/C%C3%A0o%20s%C3%A1ch/docs/data-cleaning-and-rag-prep-plan.md) (`Phase C1` → `Phase C6`: khử trùng ấn bản, PyMuPDF 2-cột, sửa ligatures, cắt bỏ Index/Bibliography/Answer Key, xuất sẵn `chunks.jsonl` + `brief.json` + `glossary.json`)  
 > **Quy ước nhãn bằng chứng (`sopi-repo-audit`):** **FACT** (đã xác minh trực tiếp từ code/DB thực tế), **INFERENCE** (suy luận kỹ thuật có căn cứ), **PROPOSAL** (thiết kế đề xuất trong kế hoạch này).  
 > **Lưu ý đánh số Phase:** Đặt tên **`Phase L0` → `Phase L6`** (*Library Foundation Phases*) để tách biệt rõ ràng, không trùng lặp với `Phase 0` → `Phase 10` trong `plans/sopiskill_master_parity_plan.md`.
 

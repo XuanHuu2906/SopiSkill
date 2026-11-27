@@ -387,14 +387,14 @@ public class InternalCallbackController {
 
             jdbc.sql("""
                     UPDATE core.sources
-                    SET brief = CASE WHEN :brief IS NOT NULL THEN CAST(:brief AS jsonb) ELSE brief END,
+                    SET brief = COALESCE(CAST(:brief AS jsonb), brief),
                         word_count = COALESCE(:wc, word_count),
                         duration_minutes = COALESCE(:dur, duration_minutes),
                         suggested_topic = COALESCE(:st, suggested_topic),
                         verification_status = 'locator_verified'
                     WHERE id = :sid
                     """)
-                    .param("brief", briefObj == null ? null : json.toJson(briefObj))
+                    .param("brief", briefObj == null ? null : json.toJson(briefObj).replace("\\u0000", "").replace("\u0000", ""), java.sql.Types.VARCHAR)
                     .param("wc", wordCount)
                     .param("dur", durationMin)
                     .param("st", suggestedTopic)
@@ -440,11 +440,17 @@ public class InternalCallbackController {
         if (externalKey.isEmpty() || title.isEmpty()) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_LIBRARY_SOURCE", "externalKey and title are required.");
         }
+        if (externalKey.length() > 160) externalKey = externalKey.substring(0, 160);
         String contentHash = body.get("contentHash") == null ? null : String.valueOf(body.get("contentHash")).trim();
+        if (contentHash != null && contentHash.length() > 128) contentHash = contentHash.substring(0, 128);
         String pipelineVersion = body.get("pipelineVersion") == null ? "md-heading-v1" : String.valueOf(body.get("pipelineVersion")).trim();
+        if (pipelineVersion.length() > 64) pipelineVersion = pipelineVersion.substring(0, 64);
         String sourceType = body.get("sourceType") == null ? "open_textbook" : String.valueOf(body.get("sourceType")).trim();
+        if (sourceType.length() > 32) sourceType = sourceType.substring(0, 32);
         String domainSlug = body.get("domainSlug") == null ? "general" : String.valueOf(body.get("domainSlug")).trim();
+        if (domainSlug.length() > 64) domainSlug = domainSlug.substring(0, 64);
         String pedagogyTier = body.get("pedagogyTier") == null ? "tier1_textbook" : String.valueOf(body.get("pedagogyTier")).trim();
+        if (pedagogyTier.length() > 24) pedagogyTier = pedagogyTier.substring(0, 24);
         boolean commercialSafe = Boolean.TRUE.equals(body.get("commercialSafe"));
         String canonicalUrl = body.get("canonicalUrl") == null ? null : String.valueOf(body.get("canonicalUrl"));
         String author = body.get("author") == null ? null : String.valueOf(body.get("author"));
@@ -452,14 +458,20 @@ public class InternalCallbackController {
         String publisher = body.get("publisher") == null ? null : String.valueOf(body.get("publisher"));
         if (publisher != null && publisher.length() > 200) publisher = publisher.substring(0, 200);
         String publicationDate = body.get("publicationDate") == null ? null : String.valueOf(body.get("publicationDate"));
+        if (publicationDate != null && publicationDate.length() > 64) publicationDate = publicationDate.substring(0, 64);
         String language = body.get("language") == null ? "en" : String.valueOf(body.get("language"));
+        if (language.length() > 32) language = language.substring(0, 32);
         String licenseInfo = body.get("licenseInfo") == null ? null : String.valueOf(body.get("licenseInfo"));
         String isbn = body.get("isbn") == null ? null : String.valueOf(body.get("isbn"));
+        if (isbn != null && isbn.length() > 64) isbn = isbn.substring(0, 64);
         String doi = body.get("doi") == null ? null : String.valueOf(body.get("doi"));
+        if (doi != null && doi.length() > 128) doi = doi.substring(0, 128);
         Object briefObj = body.get("brief");
+        String briefJson = briefObj == null ? null : json.toJson(briefObj).replace("\\u0000", "").replace("\u0000", "");
         Integer wordCount = body.get("wordCount") instanceof Number n ? n.intValue() : null;
         Integer durationMinutes = body.get("durationMinutes") instanceof Number n ? n.intValue() : null;
-        String suggestedTopic = body.get("suggestedTopic") == null ? title : String.valueOf(body.get("suggestedTopic"));
+        String suggestedTopic = body.get("suggestedTopic") == null ? title : String.valueOf(body.get("suggestedTopic")).trim();
+        if (suggestedTopic.length() > 200) suggestedTopic = suggestedTopic.substring(0, 200);
         Integer pageCount = body.get("pageCount") instanceof Number n ? n.intValue() : null;
         long byteSize = body.get("byteSize") instanceof Number n ? n.longValue() : 0L;
         int chunkCount = body.get("chunkCount") instanceof Number n ? n.intValue() : 0;
@@ -505,7 +517,7 @@ public class InternalCallbackController {
                         license_info = :lic, content_hash = :hash, verification_status = 'locator_verified',
                         domain_slug = :domain, pedagogy_tier = :tier, commercial_safe = :comm,
                         isbn = :isbn, doi = :doi,
-                        brief = CASE WHEN :brief IS NOT NULL THEN CAST(:brief AS jsonb) ELSE brief END,
+                        brief = COALESCE(CAST(:brief AS jsonb), brief),
                         word_count = COALESCE(:wc, word_count),
                         duration_minutes = COALESCE(:dur, duration_minutes),
                         suggested_topic = COALESCE(:st, suggested_topic)
@@ -525,10 +537,10 @@ public class InternalCallbackController {
                     .param("comm", commercialSafe)
                     .param("isbn", isbn)
                     .param("doi", doi)
-                    .param("brief", briefObj == null ? null : json.toJson(briefObj))
+                    .param("brief", briefJson, java.sql.Types.VARCHAR)
                     .param("wc", wordCount)
                     .param("dur", durationMinutes)
-                    .param("st", suggestedTopic.length() > 300 ? suggestedTopic.substring(0, 300) : suggestedTopic)
+                    .param("st", suggestedTopic.length() > 200 ? suggestedTopic.substring(0, 200) : suggestedTopic)
                     .param("sid", sid)
                     .update();
 
@@ -579,7 +591,7 @@ public class InternalCallbackController {
                     :sid, NULL, :stype, :title, :url, :author, :pub, :pdate,
                     :lang, 'public', :lic, :hash, 'locator_verified',
                     :ekey, :domain, :tier, :comm, :isbn, :doi,
-                    CASE WHEN :brief IS NOT NULL THEN CAST(:brief AS jsonb) ELSE NULL END,
+                    CAST(:brief AS jsonb),
                     :wc, :dur, :st
                 )
                 """)
@@ -599,10 +611,10 @@ public class InternalCallbackController {
                 .param("comm", commercialSafe)
                 .param("isbn", isbn)
                 .param("doi", doi)
-                .param("brief", briefObj == null ? null : json.toJson(briefObj))
+                .param("brief", briefJson, java.sql.Types.VARCHAR)
                 .param("wc", wordCount)
                 .param("dur", durationMinutes)
-                .param("st", suggestedTopic.length() > 300 ? suggestedTopic.substring(0, 300) : suggestedTopic)
+                .param("st", suggestedTopic)
                 .update();
 
         jdbc.sql("""

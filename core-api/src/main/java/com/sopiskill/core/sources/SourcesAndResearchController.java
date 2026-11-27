@@ -870,14 +870,22 @@ public class SourcesAndResearchController {
     }
 
     private static final List<String[]> VI_TO_EN_DISCOVER_TERMS = List.of(
-            new String[]{"lập trình", "programming python"},
+            new String[]{"lập trình", "programming"},
             new String[]{"khoa học máy tính", "computer science"},
             new String[]{"cấu trúc dữ liệu", "data structures"},
             new String[]{"thuật toán", "algorithms"},
             new String[]{"giải thuật", "algorithms"},
             new String[]{"cơ sở dữ liệu", "databases sql"},
             new String[]{"học máy", "machine learning"},
-            new String[]{"học sâu", "deep learning"},
+            new String[]{"học sâu", "deep learning neural"},
+            new String[]{"trí tuệ nhân tạo", "artificial intelligence"},
+            new String[]{"mô hình ngôn ngữ", "language model llm transformer"},
+            new String[]{"hệ phân tán", "distributed consensus"},
+            new String[]{"giao diện", "react nextjs frontend"},
+            new String[]{"web", "mdn web http"},
+            new String[]{"container", "kubernetes docker"},
+            new String[]{"đám mây", "kubernetes cloud"},
+            new String[]{"tối ưu hóa", "convex optimization"},
             new String[]{"giải tích", "calculus"},
             new String[]{"đại số tuyến tính", "linear algebra"},
             new String[]{"xác suất", "probability"},
@@ -887,6 +895,11 @@ public class SourcesAndResearchController {
             new String[]{"hóa học", "chemistry"},
             new String[]{"sinh học", "biology"},
             new String[]{"giải phẫu", "anatomy physiology"},
+            new String[]{"môi trường", "environmental climate"},
+            new String[]{"thiết kế", "design architecture"},
+            new String[]{"kiến trúc", "architecture design"},
+            new String[]{"giao tiếp", "communication writing"},
+            new String[]{"ngoại ngữ", "language english"},
             new String[]{"kinh tế vi mô", "microeconomics"},
             new String[]{"kinh tế vĩ mô", "macroeconomics"},
             new String[]{"kinh tế", "economics"},
@@ -897,6 +910,17 @@ public class SourcesAndResearchController {
             new String[]{"lịch sử", "history"}
     );
 
+    private static java.util.Set<String> tokenizeDiscoveryText(String text) {
+        if (text == null || text.isBlank()) return java.util.Set.of();
+        java.util.Set<String> set = new java.util.HashSet<>();
+        for (String t : text.toLowerCase().split("[^\\p{L}\\p{Nd}+#]+")) {
+            if (t.length() >= 2) {
+                set.add(t);
+            }
+        }
+        return set;
+    }
+
     private List<Map<String, Object>> rankPublicLibrarySources(
             String rawQuery,
             String domainFilter,
@@ -905,17 +929,22 @@ public class SourcesAndResearchController {
             int limit
     ) {
         String qLower = rawQuery == null ? "" : rawQuery.trim().toLowerCase();
-        StringBuilder expanded = new StringBuilder(qLower);
-        for (String[] pair : VI_TO_EN_DISCOVER_TERMS) {
-            if (qLower.contains(pair[0])) {
-                expanded.append(' ').append(pair[1]);
-            }
-        }
-        List<String> tokens = java.util.Arrays.stream(expanded.toString().split("[^\\p{L}\\p{Nd}+#]+"))
+        List<String> rawTokens = java.util.Arrays.stream(qLower.split("[^\\p{L}\\p{Nd}+#]+"))
                 .map(String::trim)
                 .filter(t -> t.length() >= 2)
                 .distinct()
                 .toList();
+        java.util.Set<String> rawTokenSet = new java.util.HashSet<>(rawTokens);
+        java.util.Set<String> synonymTokens = new java.util.LinkedHashSet<>();
+        for (String[] pair : VI_TO_EN_DISCOVER_TERMS) {
+            if (qLower.contains(pair[0])) {
+                for (String st : pair[1].split("\\s+")) {
+                    if (st.length() >= 2 && !rawTokenSet.contains(st)) {
+                        synonymTokens.add(st);
+                    }
+                }
+            }
+        }
 
         boolean strictCommercial = props.billingCommercialStrictSources();
         boolean deepMode = "advanced".equalsIgnoreCase(learnerLevel) || "deep".equalsIgnoreCase(depth);
@@ -935,7 +964,14 @@ public class SourcesAndResearchController {
         if (domainFilter != null && !domainFilter.isBlank()) {
             sql.append(" AND domain_slug = :domain ");
         }
-        sql.append(" ORDER BY created_at DESC LIMIT 250");
+        sql.append("""
+                 ORDER BY CASE
+                     WHEN pedagogy_tier = 'tier1_textbook' THEN 0
+                     WHEN pedagogy_tier = 'official_docs' THEN 1
+                     WHEN pedagogy_tier = 'tier2_monograph' THEN 2
+                     ELSE 3
+                 END ASC, created_at DESC LIMIT 2000
+                """);
 
         var stmt = jdbc.sql(sql.toString());
         if (domainFilter != null && !domainFilter.isBlank()) {
@@ -957,23 +993,32 @@ public class SourcesAndResearchController {
             String suggested = String.valueOf(row.getOrDefault("suggestedTopic", "")).toLowerCase();
             String briefTxt = row.get("brief") == null ? "" : String.valueOf(row.get("brief")).toLowerCase();
 
+            var titleWords = tokenizeDiscoveryText(title);
+            var metaWords = tokenizeDiscoveryText(domainSlug + " " + suggested);
+            var briefWords = tokenizeDiscoveryText(briefTxt);
+
             int relevance = 0;
-            if (tokens.isEmpty()) {
+            if (rawTokens.isEmpty() && synonymTokens.isEmpty()) {
                 relevance = 10;
             } else {
-                for (String tok : tokens) {
-                    if (title.contains(tok)) relevance += 20;
-                    else if (domainSlug.contains(tok) || suggested.contains(tok)) relevance += 12;
-                    else if (briefTxt.contains(tok)) relevance += 5;
+                for (String tok : rawTokens) {
+                    if (titleWords.contains(tok) || (tok.length() >= 4 && title.contains(tok))) relevance += 35;
+                    else if (metaWords.contains(tok)) relevance += 16;
+                    else if (briefWords.contains(tok)) relevance += 6;
+                }
+                for (String tok : synonymTokens) {
+                    if (titleWords.contains(tok)) relevance += 14;
+                    else if (metaWords.contains(tok)) relevance += 10;
+                    else if (briefWords.contains(tok)) relevance += 3;
                 }
             }
-            if (!tokens.isEmpty() && relevance == 0) {
+            if ((!rawTokens.isEmpty() || !synonymTokens.isEmpty()) && relevance == 0) {
                 continue;
             }
             int tierBonus = switch (tier) {
-                case "tier1_textbook" -> 50;
+                case "tier1_textbook" -> deepMode ? 22 : 45;
                 case "official_docs" -> 30;
-                case "tier2_monograph" -> 15;
+                case "tier2_monograph" -> deepMode ? 20 : 15;
                 case "tier3_paper" -> deepMode ? 12 : -100;
                 default -> 5;
             };

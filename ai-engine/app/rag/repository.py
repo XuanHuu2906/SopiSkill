@@ -36,6 +36,14 @@ def _pgvector_literal(vec: list[float]) -> str:
     return "[" + ",".join(f"{float(v):.6f}" for v in vec) + "]"
 
 
+def _sanitize_pg_text(value: str | None) -> str:
+    """Remove NUL bytes and invalid lone surrogates rejected by PostgreSQL UTF-8."""
+    if not value:
+        return ""
+    cleaned = value.replace("\x00", "")
+    return cleaned.encode("utf-8", errors="ignore").decode("utf-8")
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or len(a) != len(b):
         return 0.0
@@ -134,75 +142,91 @@ class RagRepository:
             await db.commit()
             return 0
 
-        vectors = await self._embedder.embed_documents([c.content for c in chunks])
         spec = self._embedder.spec
+        embed_batch_size = 512
+        vectors: list[list[float]] = []
+        for start in range(0, len(chunks), embed_batch_size):
+            batch_texts = [c.content for c in chunks[start : start + embed_batch_size]]
+            vectors.extend(await self._embedder.embed_documents(batch_texts))
 
-        for chunk, vec in zip(chunks, vectors):
-            chunk_id = f"chk_{uuid.uuid4().hex[:20]}"
-            if dialect == "postgresql":
-                await db.execute(
-                    text(
-                        """
-                        INSERT INTO rag.document_chunks (
-                            id, owner_id, course_id, source_id, document_id, source_title,
-                            chunk_index, page_number, section_anchor, content,
-                            embedding_provider, embedding_model, embedding_version, embedding
-                        ) VALUES (
-                            :id, :owner_id, :course_id, :source_id, :document_id, :source_title,
-                            :chunk_index, :page_number, :section_anchor, :content,
-                            :emb_provider, :emb_model, :emb_version, CAST(:embedding AS vector)
-                        )
-                        """
-                    ),
+        safe_title = _sanitize_pg_text(source_title)[:300] or None
+        insert_batch_size = 500
+        if dialect == "postgresql":
+            insert_sql = text(
+                """
+                INSERT INTO rag.document_chunks (
+                    id, owner_id, course_id, source_id, document_id, source_title,
+                    chunk_index, page_number, section_anchor, content,
+                    embedding_provider, embedding_model, embedding_version, embedding
+                ) VALUES (
+                    :id, :owner_id, :course_id, :source_id, :document_id, :source_title,
+                    :chunk_index, :page_number, :section_anchor, :content,
+                    :emb_provider, :emb_model, :emb_version, CAST(:embedding AS vector)
+                )
+                """
+            )
+            for start in range(0, len(chunks), insert_batch_size):
+                rows = [
                     {
-                        "id": chunk_id,
+                        "id": f"chk_{uuid.uuid4().hex[:20]}",
                         "owner_id": owner_id,
                         "course_id": course_id,
                         "source_id": source_id,
                         "document_id": document_id,
-                        "source_title": source_title,
+                        "source_title": safe_title,
                         "chunk_index": chunk.chunk_index,
                         "page_number": chunk.page_number,
-                        "section_anchor": chunk.section_anchor,
-                        "content": chunk.content,
+                        "section_anchor": _sanitize_pg_text(chunk.section_anchor)[:200] or None,
+                        "content": _sanitize_pg_text(chunk.content),
                         "emb_provider": spec.provider,
                         "emb_model": spec.model,
                         "emb_version": spec.version,
                         "embedding": _pgvector_literal(vec),
-                    },
+                    }
+                    for chunk, vec in zip(
+                        chunks[start : start + insert_batch_size],
+                        vectors[start : start + insert_batch_size],
+                    )
+                ]
+                await db.execute(insert_sql, rows)
+        else:
+            insert_sql = text(
+                """
+                INSERT INTO document_chunks (
+                    id, owner_id, course_id, source_id, document_id, source_title,
+                    chunk_index, page_number, section_anchor, content,
+                    embedding_provider, embedding_model, embedding_version, embedding_json
+                ) VALUES (
+                    :id, :owner_id, :course_id, :source_id, :document_id, :source_title,
+                    :chunk_index, :page_number, :section_anchor, :content,
+                    :emb_provider, :emb_model, :emb_version, :embedding_json
                 )
-            else:
-                await db.execute(
-                    text(
-                        """
-                        INSERT INTO document_chunks (
-                            id, owner_id, course_id, source_id, document_id, source_title,
-                            chunk_index, page_number, section_anchor, content,
-                            embedding_provider, embedding_model, embedding_version, embedding_json
-                        ) VALUES (
-                            :id, :owner_id, :course_id, :source_id, :document_id, :source_title,
-                            :chunk_index, :page_number, :section_anchor, :content,
-                            :emb_provider, :emb_model, :emb_version, :embedding_json
-                        )
-                        """
-                    ),
+                """
+            )
+            for start in range(0, len(chunks), insert_batch_size):
+                rows = [
                     {
-                        "id": chunk_id,
+                        "id": f"chk_{uuid.uuid4().hex[:20]}",
                         "owner_id": owner_id,
                         "course_id": course_id,
                         "source_id": source_id,
                         "document_id": document_id,
-                        "source_title": source_title,
+                        "source_title": safe_title,
                         "chunk_index": chunk.chunk_index,
                         "page_number": chunk.page_number,
-                        "section_anchor": chunk.section_anchor,
-                        "content": chunk.content,
+                        "section_anchor": _sanitize_pg_text(chunk.section_anchor)[:200] or None,
+                        "content": _sanitize_pg_text(chunk.content),
                         "emb_provider": spec.provider,
                         "emb_model": spec.model,
                         "emb_version": spec.version,
                         "embedding_json": json.dumps(vec),
-                    },
-                )
+                    }
+                    for chunk, vec in zip(
+                        chunks[start : start + insert_batch_size],
+                        vectors[start : start + insert_batch_size],
+                    )
+                ]
+                await db.execute(insert_sql, rows)
 
         await db.commit()
         return len(chunks)

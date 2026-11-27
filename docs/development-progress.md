@@ -2,6 +2,48 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-27 — Nạp Toàn Bộ Kho Tri Thức 530 Đầu Sách (`640.656` Chunks · 3 Trụ Cột) & Tối Ưu Discovery `LIMIT 2000`
+
+- Repository / branch: SopiSkill · nhánh `feat/library-foundation` (tiếp nối bản Pilot 25 cuốn bên dưới), kết nối đầy đủ 3 trụ cột từ `/home/nguyenhuu/Hoc Tap/Cào sách/library/sopiskill_manifest.jsonl`.
+- **IMPLEMENTED:**
+  - `core-api/src/main/java/com/sopiskill/core/sources/SourcesAndResearchController.java`: nâng trần quét nguồn công cộng từ `LIMIT 250` lên `LIMIT 2000` (sắp ưu tiên theo `pedagogy_tier`), tách trọng số từ khóa gốc người dùng gõ (`+35` tiêu đề) vs từ đồng nghĩa song ngữ `VI → EN` (`+14`), khớp theo ranh giới từ (`tokenizeDiscoveryText`) và cân bằng `tierBonus` trong chế độ `deepMode` để `curated_classics` (*Attention Is All You Need*, *Raft*, *MapReduce*) và `official_docs` xếp hạng chính xác.
+- **TESTED (live 8-container Docker polyglot stack `deploy/docker-compose.yml`, 0đ chi phí):**
+  - `docker compose -f deploy/docker-compose.yml up -d --build --wait core-api && (cd core-api && ./mvnw -B test -q)` → **exit `0` (`14/14` JUnit PASS)**.
+  - Nạp toàn bộ 530 đầu sách (`scripts/import_open_library.py --tiers tier1_textbook,tier2_monograph`) → **exit `0`**: `scanned=530, imported=505, skipped=25, failed=0, totalChunks=613584` (cộng `27.072` chunks Pilot = **`640.656` chunks sạch** trong `rag.document_chunks`, dung lượng kể cả `HNSW` + `GIN` = **`3.860 MB`**).
+    - Phân bổ thực tế trong `core.sources`: `otl` (`157`, `78` commercial), `openstax` (`60`, `7` commercial), `official_docs` (`10`, `9` commercial), `archive` (`208`, `135` commercial), `doab` (`57`, `43` commercial), `curated_classics` (`38`).
+  - Kiểm chứng Idempotent lần 2 (`--tiers tier1_textbook,tier2_monograph`) → **exit `0` (`scanned=530, imported=0, skipped=530, failed=0`)**.
+  - Kiểm chứng live authenticated `GET /v1/sources/discover` (xóa sạch user smoke sau test) & `RagRepository.search` (`hybrid_rrf`) trên cả 3 trụ cột:
+    - `lập trình python` → `otl:2131`, `openstax:775`, `otl:80` (3/3 giáo trình Python);
+    - `Next.js App Router React` → `official_docs:nextjs-docs`, `official_docs:react-docs`, `official_docs:mdn-web-docs`;
+    - `cơ sở dữ liệu PostgreSQL` → `official_docs:postgresql-docs` (`p.103 [indexes-multicolumn-indexes]`, `p.13 [planner-optimizer]`), `official_docs:fastapi-docs`, `otl:354`;
+    - `hệ phân tán Raft MapReduce` & `trí tuệ nhân tạo Transformer Attention` (`advanced/deep`) → tìm đúng `curated_classics:raft-consensus`, `curated_classics:mapreduce`, `curated_classics:vit`, `curated_classics:attention-is-all-you-need` (`p.4 [scaled-dot-product-attention]`);
+    - `official_docs:rust-book` → `p.49 [ch10-03-lifetime-syntax-summary]`, `p.22 [ch04-02-references-and-borrowing]`.
+- **NOT TESTED:**
+  - Sinh khóa học thực tế trên `530` sách bằng LLM/Embedding trả phí (`LLM_PROVIDER=deepseek`, `EMBEDDING_PROVIDER=openai_compatible`).
+- **ROLLBACK:** Thuần code xếp hạng trong `SourcesAndResearchController.java`; dữ liệu sách public nằm tách biệt ở `visibility='public'` / `owner_id='system:public_library'`.
+
+## 2026-11-27 — Cầu nối Manifest sạch (`Phase C6 → L3`), Batch Insert & Nạp Live Đợt 1 (Pilot 25 Giáo trình Tier-1)
+
+- Repository / branch: SopiSkill · nhánh `feat/library-foundation` (nối sau commit `0a5bc65`), kết nối trực tiếp gói bàn giao sạch `/home/nguyenhuu/Hoc Tap/Cào sách/library/sopiskill_manifest.jsonl` (`453` sách / `590.141` chunks `clean-v1`).
+- **IMPLEMENTED:**
+  - **Manifest-first Importer (`ai-engine/scripts/import_open_library.py`):** Ưu tiên đọc trực tiếp `sopiskill_manifest.jsonl` (`chunks.jsonl` + `brief.json`, `pipelineVersion = cleanerVersion`), tự lọc `curation_status = 'active'` khi fallback `catalog.db`, bổ sung `_strip_nul` lọc sạch byte NUL `\x00` / lone surrogates từ PDF toán/lập trình, và lọc Python tĩnh sạch 0 cảnh báo `bandit B608`.
+  - **Batch Insert & PostgreSQL UTF-8 Guard (`ai-engine/app/rag/repository.py`):** Chuyển `replace_document_chunks` sang `executemany` theo lô `500` chunks (và embed theo lô `512`) kèm `_sanitize_pg_text` và khóa độ dài `source_title <= 300`, `section_anchor <= 200`.
+  - **Sửa lỗi thực tế phát hiện qua live PostgreSQL 16:**
+    - `core-api/.../InternalCallbackController.java`: đổi `CASE WHEN :brief IS NOT NULL THEN CAST(:brief AS jsonb)` sang `COALESCE(CAST(:brief AS jsonb), brief)` / `CAST(:brief AS jsonb)` kèm kiểu tường minh `java.sql.Types.VARCHAR` (hết lỗi `BadSqlGrammarException` khi `brief = null`), lọc `\u0000` khỏi JSONB và khóa độ dài mọi cột (`suggested_topic <= 200`, `external_key <= 160`, `domain_slug <= 64`, `isbn <= 64`, `doi <= 128`).
+    - `ai-engine/app/agents/planner_agent.py`: `_normalize_proposal` đọc cả `lessons` lẫn `lessonTitles` (khắc phục lỗi đề cương rơi về 1 bài trên `Phase3IntegrationTest`).
+    - Cập nhật `PhaseLibraryFoundationTest.java` (tên cookie `csrf_token`, đọc `id` top-level từ `/v1/auth/register`, assertion `attributions` bền vững khi DB đã có sách thật) & `test_live_pgvector_redis.py` (kỳ vọng revision `0002_public_library_scope_index`) & thêm `test_phase_l3_importer_manifest_and_batch_insert` (`550` chunks đa lô).
+- **TESTED (live 8-container Docker polyglot stack `deploy/docker-compose.yml`, 0đ chi phí):**
+  - `docker compose -f deploy/docker-compose.yml up -d --build --wait` → **8/8 container UP & HEALTHY** (`Flyway V7` trên `core`, `Alembic 0002` trên `rag`).
+  - `cd core-api && ./mvnw -B test -q` → **exit `0` (`14/14` tests PASS, gồm `PhaseLibraryFoundationTest` & `Phase3IntegrationTest`)**.
+  - `cd ai-engine && PGVECTOR_TEST_URL=...@127.0.0.1:5439/sopiskill REDIS_TEST_URL=redis://127.0.0.1:6380/0 AI_API_LIVE_URL=http://127.0.0.1:8010 ../backend/.venv/bin/python -m pytest -v` → **exit `0` (`58/58` passed, gồm 3 live tests)**; sau bản vá `\x00`: `pytest -q -k "not test_live_"` → **exit `0` (`55 passed`)**; `bandit -r app scripts -q` → **exit `0` (`0` findings, `0` `#nosec`)**.
+  - Nạp live Pilot Đợt 1 (`scripts/import_open_library.py --tiers tier1_textbook --limit 25 --force`) → **exit `0` (`scanned=25, imported=25, skipped=0, failed=0, totalChunks=27072`)**.
+  - Kiểm chứng Idempotent lần 2 (`--tiers tier1_textbook --limit 25`) → **exit `0` (`scanned=25, imported=0, skipped=25, failed=0`)**.
+  - Kiểm chứng Live Hybrid RAG (`hybrid_rrf`) trên PostgreSQL `pgvector`: `public_library_sources = 25`, `public_library_chunks = 27072`; truy vấn tiếng Việt `"lập trình python vòng lặp và hàm"` tìm khớp trực tiếp vào *Introduction to Python Programming* (OpenStax, `p.48`, `p.72`).
+- **NOT TESTED:**
+  - Nạp mở rộng toàn bộ `185` cuốn `tier1_textbook` và `453` cuốn trong `sopiskill_manifest.jsonl` (mới nạp Pilot 25 cuốn đầu tiên theo kế hoạch Đợt 1).
+  - Sinh bài học thực tế bằng LLM/Embedding trả phí (`LLM_PROVIDER=deepseek`, `EMBEDDING_PROVIDER=openai_compatible`) trên 25 cuốn Pilot (hiện chạy chế độ 0đ `mock` + `hashing-ngram-v1`).
+- **ROLLBACK:** Không đổi schema DB; chỉ sửa code cầu nối trên nhánh `feat/library-foundation`.
+
 ## 2026-11-27 — Open Library Knowledge Foundation (`PLAN-LIB-001`: Phase L0 → Phase L6)
 
 - Repository / branch: SopiSkill · nhánh `feat/library-foundation` (tách từ `feat/polyglot-phase9` commit `c859bce`); cập nhật song song kho nguồn `/home/nguyenhuu/Hoc Tap/Cào sách` cho Phase L0.

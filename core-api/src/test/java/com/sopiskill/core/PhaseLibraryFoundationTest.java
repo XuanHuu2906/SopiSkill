@@ -220,7 +220,12 @@ class PhaseLibraryFoundationTest {
 
             List<Map<String, Object>> attrs = (List<Map<String, Object>>) lessonMap.get("attributions");
             assertThat(attrs).isNotEmpty();
-            assertThat(String.valueOf(attrs.get(0).get("attributionText"))).contains("OpenStax").contains("CC BY 4.0").contains("openstax.org");
+            assertThat(attrs).anyMatch(a ->
+                    pubT1Id.equals(a.get("sourceId"))
+                            && String.valueOf(a.get("attributionText")).contains("OpenStax")
+                            && String.valueOf(a.get("attributionText")).contains("CC BY 4.0")
+                            && String.valueOf(a.get("attributionText")).contains("openstax.org")
+            );
         } finally {
             if (userAUuid != null) jdbc.sql("DELETE FROM core.users WHERE id = :id").param("id", userAUuid).update();
             if (userBUuid != null) jdbc.sql("DELETE FROM core.users WHERE id = :id").param("id", userBUuid).update();
@@ -255,13 +260,14 @@ class PhaseLibraryFoundationTest {
         String cookieHeader = setCookies.stream().map(c -> c.split(";", 2)[0]).reduce((a, b) -> a + "; " + b).orElse("");
         String csrf = setCookies.stream()
                 .map(c -> c.split(";", 2)[0])
-                .filter(c -> c.startsWith("sopiskill_csrf="))
-                .map(c -> c.substring("sopiskill_csrf=".length()))
+                .filter(c -> c.startsWith("csrf_token="))
+                .map(c -> c.substring("csrf_token=".length()))
                 .findFirst().orElse("");
         Map<String, Object> json = parseJson(resp.body());
         @SuppressWarnings("unchecked")
         Map<String, Object> user = (Map<String, Object>) json.get("user");
-        return Map.of("userId", String.valueOf(user.get("id")), "cookie", cookieHeader, "csrf", csrf);
+        String userId = String.valueOf(user != null ? user.get("id") : json.get("id"));
+        return Map.of("userId", userId, "cookie", cookieHeader, "csrf", csrf);
     }
 
     private HttpResponse<String> getAuthed(String path, String cookie) throws Exception {

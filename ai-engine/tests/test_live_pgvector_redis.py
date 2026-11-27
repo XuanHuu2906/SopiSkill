@@ -60,7 +60,7 @@ async def test_live_pgvector_alembic_schema_and_hybrid_rag_rrf():
             ext = (await db.execute(text("SELECT extname FROM pg_extension WHERE extname = 'vector'"))).scalar()
             assert ext == "vector"
             ver = (await db.execute(text("SELECT version_num FROM rag.alembic_version"))).scalar()
-            assert ver == "0001_init_rag_schema"
+            assert ver == "0002_public_library_scope_index"
             indexes = {
                 row[0]
                 for row in (

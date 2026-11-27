@@ -42,7 +42,11 @@ def _normalize_proposal(raw: dict[str, Any], *, topic: str, language: str) -> di
         if not isinstance(unit, dict):
             continue
         u_title = str(unit.get("title") or f"Unit {u_idx}").strip()[:180]
-        raw_lessons = unit.get("lessons") if isinstance(unit.get("lessons"), list) else []
+        raw_lessons = (
+            unit.get("lessons")
+            if isinstance(unit.get("lessons"), list)
+            else (unit.get("lessonTitles") if isinstance(unit.get("lessonTitles"), list) else [])
+        )
         lessons: list[dict[str, Any]] = []
         for l_idx, lsn in enumerate(raw_lessons[:8], start=1):
             if isinstance(lsn, dict):

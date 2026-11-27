@@ -361,6 +361,123 @@ async def test_phase_l3_heading_markdown_chunker_full_toc_and_idempotent_importe
     assert run2.imported == 0 and run2.skipped == 3
 
 
+async def test_phase_l3_importer_manifest_and_batch_insert(ai_client, tmp_path: Path):
+    """Verify manifest-first (`sopiskill_manifest.jsonl`) import, 600+ multi-batch chunk inserts, and topic clamping."""
+    import importlib.util
+
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "import_open_library.py"
+    spec = importlib.util.spec_from_file_location("import_open_library_manifest", script_path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["import_open_library_manifest"] = mod
+    spec.loader.exec_module(mod)
+
+    lib_dir = tmp_path / "library"
+    bdir = lib_dir / "computer-science" / "python-openstax"
+    bdir.mkdir(parents=True)
+
+    chunks_path = bdir / "chunks.jsonl"
+    with chunks_path.open("w", encoding="utf-8") as fh:
+        for idx in range(550):  # > 500 to exercise multi-batch executemany in RagRepository
+            fh.write(
+                json.dumps(
+                    {
+                        "chunk_index": idx,
+                        "page_number": (idx // 3) + 1,
+                        "section_anchor": f"ch-{(idx // 50) + 1}-sec-{idx % 10}",
+                        "text": f"[Book: Python OpenStax] Chunk {idx}: functions, loops, and data structures in Python.",
+                    }
+                )
+                + "\n"
+            )
+
+    brief_path = bdir / "brief.json"
+    long_topic = "Very Long Textbook Topic Title " * 12  # > 200 chars -> must be clamped to <= 200
+    brief_path.write_text(
+        json.dumps(
+            {
+                "what": "Introductory Python textbook.",
+                "suggestedTopic": long_topic,
+                "sections": [{"anchor": "ch-1-sec-0", "heading": "Chapter 1", "gist": "Basics"}],
+                "claims": ["Python uses indentation for blocks."],
+                "notation": ["O(n)"],
+                "assumes": ["Basic algebra"],
+                "wordCount": 55000,
+                "durationMinutes": 240,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest_path = lib_dir / "sopiskill_manifest.jsonl"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "externalKey": "openstax:775",
+                "title": "Introduction to Python Programming",
+                "authors": ["Udayan Das"],
+                "publisher": "OpenStax",
+                "year": 2024,
+                "language": "en",
+                "primaryDomain": "computer-science",
+                "domains": ["computer-science"],
+                "pedagogyTier": "tier1_textbook",
+                "commercialSafe": True,
+                "license": "CC BY 4.0",
+                "landingUrl": "https://openstax.org/details/books/introduction-python-programming",
+                "sha256": "sha_py_775",
+                "usableChunkCount": 550,
+                "cleanerVersion": "clean-v1",
+                "briefPath": str(brief_path),
+                "chunksPath": str(chunks_path),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    captured_payloads: list[dict[str, Any]] = []
+
+    class _MockUpsert:
+        def __init__(self) -> None:
+            self.seen: dict[str, tuple[str, str, str, str]] = {}
+
+        async def post_callback(self, path: str, payload: dict[str, Any], *, correlation_id: str) -> dict[str, Any]:
+            captured_payloads.append(payload)
+            key = payload["externalKey"]
+            sig = (payload["contentHash"], payload["pipelineVersion"])
+            if key in self.seen and self.seen[key][2:] == sig:
+                return {"sourceId": self.seen[key][0], "documentId": self.seen[key][1], "skipped": True}
+            self.seen[key] = ("src_py_775", "doc_py_775", sig[0], sig[1])
+            return {"sourceId": "src_py_775", "documentId": "doc_py_775", "skipped": False}
+
+    cb = _MockUpsert()
+    repo = RagRepository()
+    factory = get_session_factory()
+    async with factory() as db:
+        run1 = await mod.import_open_library_books(
+            library_dir=lib_dir,
+            tiers=["tier1_textbook"],
+            commercial_only=True,
+            callback_client=cb,  # type: ignore[arg-type]
+            rag_repo=repo,
+            db=db,
+        )
+        run2 = await mod.import_open_library_books(
+            library_dir=lib_dir,
+            tiers=["tier1_textbook"],
+            commercial_only=True,
+            callback_client=cb,  # type: ignore[arg-type]
+            rag_repo=repo,
+            db=db,
+        )
+
+    assert run1.imported == 1 and run1.total_chunks == 550 and run1.failed == 0
+    assert run2.imported == 0 and run2.skipped == 1
+    assert captured_payloads[0]["pipelineVersion"] == "clean-v1"
+    assert len(captured_payloads[0]["suggestedTopic"]) <= 200
+
+
 async def test_phase_l4_cross_lingual_vi_to_en_query_bridge(ai_client):
     expanded = expand_cross_lingual_query(
         "Học cấu trúc dữ liệu cây tìm kiếm nhị phân bằng lập trình Python",
