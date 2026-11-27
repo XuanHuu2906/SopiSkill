@@ -110,6 +110,8 @@ public class LessonController {
                 SELECT lc.id, lc.source_id, lc.source_version, lc.chunk_id, lc.page_number,
                        lc.section_anchor, lc.evidence_text, lc.validation_status,
                        s.title AS source_title, s.canonical_url AS source_url,
+                       s.author AS source_author, s.publisher AS source_publisher,
+                       s.license_info AS source_license, s.pedagogy_tier AS source_tier,
                        s.verification_status AS source_verification_status
                 FROM core.lesson_citations lc
                 JOIN core.sources s ON s.id = lc.source_id
@@ -119,6 +121,10 @@ public class LessonController {
                 .query((rs, rowNum) -> {
                     String canonicalUrl = rs.getString("source_url");
                     String anchor = rs.getString("section_anchor");
+                    String title = rs.getString("source_title");
+                    String author = rs.getString("source_author");
+                    String publisher = rs.getString("source_publisher");
+                    String licenseInfo = rs.getString("source_license");
                     Map<String, Object> c = new LinkedHashMap<>();
                     c.put("citationId", IdCodec.format("cit", rs.getObject("id", UUID.class)));
                     c.put("sourceId", IdCodec.format("src", rs.getObject("source_id", UUID.class)));
@@ -128,16 +134,50 @@ public class LessonController {
                     c.put("sectionAnchor", anchor);
                     c.put("evidenceText", rs.getString("evidence_text"));
                     c.put("validationStatus", rs.getString("validation_status"));
-                    c.put("sourceTitle", rs.getString("source_title"));
+                    c.put("sourceTitle", title);
                     c.put("sourceUrl", CitationLinkResolver.resolveDeepLink(canonicalUrl, anchor));
+                    c.put("author", author);
+                    c.put("publisher", publisher);
+                    c.put("licenseInfo", licenseInfo);
+                    c.put("attributionText", formatAttributionText(title, author, publisher, licenseInfo, canonicalUrl));
                     c.put("sourceVerificationStatus", rs.getString("source_verification_status"));
                     return c;
                 })
                 .list();
 
+        UUID courseUuid = (UUID) lesson.get("courseUuid");
+        List<Map<String, Object>> attributions = jdbc.sql("""
+                SELECT DISTINCT s.id, s.title, s.author, s.publisher, s.license_info,
+                       s.canonical_url, s.pedagogy_tier, s.commercial_safe
+                FROM core.course_sources cs
+                JOIN core.sources s ON s.id = cs.source_id
+                WHERE cs.course_id = :cid
+                ORDER BY s.title ASC
+                """)
+                .param("cid", courseUuid)
+                .query((rs, rowNum) -> {
+                    String title = rs.getString("title");
+                    String author = rs.getString("author");
+                    String publisher = rs.getString("publisher");
+                    String licenseInfo = rs.getString("license_info");
+                    String canonicalUrl = rs.getString("canonical_url");
+                    Map<String, Object> a = new LinkedHashMap<>();
+                    a.put("sourceId", IdCodec.format("src", rs.getObject("id", UUID.class)));
+                    a.put("title", title);
+                    a.put("author", author);
+                    a.put("publisher", publisher);
+                    a.put("licenseInfo", licenseInfo);
+                    a.put("canonicalUrl", canonicalUrl);
+                    a.put("pedagogyTier", rs.getString("pedagogy_tier"));
+                    a.put("commercialSafe", rs.getBoolean("commercial_safe"));
+                    a.put("attributionText", formatAttributionText(title, author, publisher, licenseInfo, canonicalUrl));
+                    return a;
+                })
+                .list();
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("id", IdCodec.format("lsn", lid));
-        out.put("courseId", IdCodec.format("crs", (UUID) lesson.get("courseUuid")));
+        out.put("courseId", IdCodec.format("crs", courseUuid));
         out.put("title", lesson.get("title"));
         out.put("orderIndex", lesson.get("orderIndex"));
         out.put("contentVersion", contentVersion);
@@ -148,8 +188,27 @@ public class LessonController {
         out.put("blocks", projector.toPublicBlocks(lid, contentVersion, privateBlocks, clientCaps));
         out.put("grounding", lesson.get("grounding"));
         out.put("citations", citations);
+        out.put("attributions", attributions);
         out.put("evidenceNotice", lesson.get("evidenceNotice"));
         return out;
+    }
+
+    private static String formatAttributionText(
+            String title,
+            String author,
+            String publisher,
+            String licenseInfo,
+            String canonicalUrl
+    ) {
+        StringBuilder sb = new StringBuilder();
+        if (title != null && !title.isBlank()) sb.append(title.trim());
+        if (author != null && !author.isBlank()) sb.append(" — ").append(author.trim());
+        if (publisher != null && !publisher.isBlank()) sb.append(" (").append(publisher.trim()).append(")");
+        if (licenseInfo != null && !licenseInfo.isBlank()) sb.append(" · ").append(licenseInfo.trim());
+        if (canonicalUrl != null && canonicalUrl.toLowerCase().contains("openstax.org")) {
+            sb.append(" · Access for free at openstax.org");
+        }
+        return sb.toString();
     }
 
     @PostMapping("/{lessonId}/retry")

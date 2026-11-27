@@ -10,12 +10,14 @@ from typing import Any
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.providers import LLMProvider, ProviderConfigError, get_llm_provider
 from app.core.callback_client import CoreApiCallbackClient
 from app.core.config import Settings, get_settings
 from app.db.session import dispose_engine, ensure_sqlite_tables, get_session_factory
-from app.rag.brief_builder import build_source_brief
+from app.rag.brief_builder import build_source_brief_with_agent
 from app.rag.extractor import (
     ExtractionError,
+    chunk_markdown_by_headings,
     chunk_text_with_provenance,
     extract_arxiv_atom_text,
     extract_html_text,
@@ -37,12 +39,19 @@ async def handle_ingest_job(
     callback_client: CoreApiCallbackClient | None = None,
     settings: Settings | None = None,
     storage=None,
+    provider: LLMProvider | None = None,
 ) -> dict[str, Any]:
     """Extract, chunk, embed into `rag.document_chunks`, and notify `core-api` via signed callback."""
     cfg = settings or get_settings()
     repo = rag_repo or RagRepository(settings=cfg)
     cb = callback_client or CoreApiCallbackClient(settings=cfg)
     store = storage or get_source_storage(cfg)
+    llm_provider = provider
+    if llm_provider is None:
+        try:
+            llm_provider = get_llm_provider(cfg)
+        except ProviderConfigError:
+            llm_provider = None
 
     source_id = str(message["sourceId"])
     document_id = str(message["documentId"])
@@ -56,6 +65,8 @@ async def handle_ingest_job(
     async def _run_with_session(session: AsyncSession) -> dict[str, Any]:
         try:
             pages: list[tuple[int | None, str | None, str]] = []
+            chunks = None
+            heading_levels: list[tuple[str, str, int]] | None = None
             pipeline_version = "pypdf-v1"
             resolved_title = source_title
 
@@ -65,6 +76,15 @@ async def handle_ingest_job(
                     raise ExtractionError("SOURCE_EMPTY", "Raw text source is empty.")
                 pages = [(1, "section-1", raw_text)]
                 pipeline_version = "raw-text-v1"
+            elif source_kind == "markdown_library":
+                raw_md = str(message.get("rawMarkdown") or "").strip()
+                if not raw_md:
+                    raise ExtractionError("SOURCE_EMPTY", "Markdown library source is empty.")
+                chunks, heading_levels = chunk_markdown_by_headings(
+                    raw_md,
+                    source_title=resolved_title or "",
+                )
+                pipeline_version = "md-heading-v1"
             elif source_kind == "pdf_s3":
                 storage_key = str(message.get("storageKey") or "")
                 if not storage_key:
@@ -92,7 +112,8 @@ async def handle_ingest_job(
             else:
                 raise ExtractionError("UNSUPPORTED_SOURCE_KIND", f"Unsupported sourceKind: {source_kind!r}")
 
-            chunks = chunk_text_with_provenance(pages)
+            if chunks is None:
+                chunks = chunk_text_with_provenance(pages)
             if not chunks:
                 raise ExtractionError("NO_EXTRACTABLE_TEXT", "Document produced 0 text chunks.")
 
@@ -105,7 +126,12 @@ async def handle_ingest_job(
                 source_title=resolved_title,
                 chunks=chunks,
             )
-            brief_bundle = build_source_brief(title=resolved_title, chunks=chunks)
+            brief_bundle = await build_source_brief_with_agent(
+                title=resolved_title,
+                chunks=chunks,
+                headings=[(a, h) for a, h, _ in (heading_levels or [])] or None,
+                provider=llm_provider,
+            )
             callback_payload = {
                 "sourceId": source_id,
                 "documentId": document_id,

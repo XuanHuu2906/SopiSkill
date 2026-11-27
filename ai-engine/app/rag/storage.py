@@ -1,8 +1,9 @@
-"""Object storage reader for `ai-worker-ingest` (memory backend for tests, MinIO/S3 for runtime)."""
+"""Object storage reader & writer for `ai-engine` (memory backend for tests, MinIO/S3 for runtime)."""
 
 from __future__ import annotations
 
 import asyncio
+import io
 from urllib.parse import urlsplit
 
 from minio import Minio
@@ -11,15 +12,22 @@ from app.core.config import Settings, get_settings
 
 
 class SourceStorageError(RuntimeError):
-    """Raised when a source object cannot be read from storage."""
+    """Raised when a source object cannot be read or written in storage."""
 
 
 class MemorySourceStorage:
     def __init__(self) -> None:
         self._objects: dict[str, bytes] = {}
+        self._content_types: dict[str, str] = {}
 
-    def put_bytes(self, key: str, data: bytes) -> None:
+    def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
         self._objects[key] = data
+        self._content_types[key] = content_type
+
+    async def put_bytes_async(
+        self, key: str, data: bytes, content_type: str = "application/octet-stream"
+    ) -> None:
+        self.put_bytes(key, data, content_type=content_type)
 
     async def get_bytes(self, key: str) -> bytes:
         if key not in self._objects:
@@ -33,11 +41,29 @@ class MinioSourceStorage:
         endpoint = parsed.netloc or parsed.path
         secure = settings.s3_secure or parsed.scheme == "https"
         self._bucket = settings.s3_bucket
+        self._bucket_ready = False
         self._client = Minio(
             endpoint,
             access_key=settings.s3_access_key,
             secret_key=settings.s3_secret_key,
             secure=secure,
+        )
+
+    def _ensure_bucket_sync(self) -> None:
+        if self._bucket_ready:
+            return
+        if not self._client.bucket_exists(self._bucket):
+            self._client.make_bucket(self._bucket)
+        self._bucket_ready = True
+
+    def _put_sync(self, key: str, data: bytes, content_type: str) -> None:
+        self._ensure_bucket_sync()
+        self._client.put_object(
+            self._bucket,
+            key,
+            io.BytesIO(data),
+            length=len(data),
+            content_type=content_type,
         )
 
     def _read_sync(self, key: str) -> bytes:
@@ -47,6 +73,20 @@ class MinioSourceStorage:
         finally:
             resp.close()
             resp.release_conn()
+
+    def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        try:
+            self._put_sync(key, data, content_type)
+        except Exception as exc:
+            raise SourceStorageError(f"Failed to upload object to S3 ({type(exc).__name__}).") from exc
+
+    async def put_bytes_async(
+        self, key: str, data: bytes, content_type: str = "application/octet-stream"
+    ) -> None:
+        try:
+            await asyncio.to_thread(self._put_sync, key, data, content_type)
+        except Exception as exc:
+            raise SourceStorageError(f"Failed to upload object to S3 ({type(exc).__name__}).") from exc
 
     async def get_bytes(self, key: str) -> bytes:
         try:

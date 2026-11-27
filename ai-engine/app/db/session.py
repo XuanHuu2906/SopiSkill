@@ -66,6 +66,30 @@ async def ensure_sqlite_tables() -> None:
                 """
             )
         )
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS source_figures (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    figure_id TEXT NOT NULL,
+                    section_anchor TEXT,
+                    page_number INTEGER,
+                    label TEXT,
+                    caption TEXT,
+                    alt_text TEXT,
+                    minio_key TEXT NOT NULL,
+                    content_type TEXT NOT NULL DEFAULT 'image/webp',
+                    sha256 TEXT,
+                    width INTEGER,
+                    height INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (owner_id, source_id, figure_id)
+                )
+                """
+            )
+        )
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

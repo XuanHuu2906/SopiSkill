@@ -87,6 +87,62 @@ public class SourcesAndResearchController {
 
     public record ResearchRequest(Integer maxSources, String learningGoals, String learnerLevel) {}
 
+    private static final java.util.regex.Pattern SAFE_FIGURE_ID =
+            java.util.regex.Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
+    private static final java.util.Set<String> ALLOWED_FIGURE_MIME = java.util.Set.of(
+            "image/webp", "image/png", "image/jpeg", "image/gif", "image/svg+xml"
+    );
+
+    @GetMapping("/v1/library/figures/{sourceId}/{figureId}")
+    public ResponseEntity<byte[]> getLibraryFigure(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String sourceId,
+            @PathVariable String figureId
+    ) {
+        if (!SAFE_FIGURE_ID.matcher(figureId).matches()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_FIGURE_ID", "Mã hình minh họa không hợp lệ.");
+        }
+        UUID srcUuid = IdCodec.parse(sourceId, "src");
+        var row = jdbc.sql("""
+                        SELECT owner_id, visibility
+                        FROM core.sources
+                        WHERE id = :id
+                        """)
+                .param("id", srcUuid)
+                .query((rs, rowNum) -> Map.of(
+                        "ownerId", rs.getObject("owner_id") == null ? "" : rs.getObject("owner_id").toString(),
+                        "visibility", rs.getString("visibility") == null ? "private" : rs.getString("visibility")
+                ))
+                .optional()
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "SOURCE_NOT_FOUND", "Không tìm thấy nguồn tài liệu."));
+
+        boolean isPublic = "public".equalsIgnoreCase(row.get("visibility"));
+        boolean isOwner = principal != null && principal.userId().toString().equals(row.get("ownerId"));
+        if (!isPublic && !isOwner) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "FORBIDDEN", "Bạn không có quyền truy cập hình minh họa của nguồn này.");
+        }
+
+        String ownerParam = principal != null ? IdCodec.format("usr", principal.userId()) : "";
+        String internalPath = "/internal/library/figures/" + sourceId + "/" + figureId
+                + (ownerParam.isBlank() ? "" : "?ownerId=" + java.net.URLEncoder.encode(ownerParam, java.nio.charset.StandardCharsets.UTF_8));
+        var upstream = aiEngine.getBinary(internalPath, "fig_" + figureId);
+        if (upstream.statusCode() == 404) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "FIGURE_NOT_FOUND", "Không tìm thấy hình minh họa.");
+        }
+        if (upstream.statusCode() < 200 || upstream.statusCode() >= 300) {
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "FIGURE_UPSTREAM_ERROR", "Không thể tải hình minh họa.");
+        }
+
+        String rawType = upstream.headers().firstValue("content-type").orElse("image/webp").split(";")[0].trim().toLowerCase();
+        String safeType = ALLOWED_FIGURE_MIME.contains(rawType) ? rawType : "application/octet-stream";
+
+        return ResponseEntity.ok()
+                .header("Content-Type", safeType)
+                .header("Cache-Control", "public, max-age=86400")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(upstream.body());
+    }
+
     @GetMapping("/v1/sources/ingest-config")
     public Map<String, Object> ingestConfig() {
         Map<String, Object> cfg = new LinkedHashMap<>();
@@ -132,7 +188,8 @@ public class SourcesAndResearchController {
                 SELECT id, source_type, title, canonical_url, author, publisher, publication_date,
                        source_updated_at, retrieved_at, language, version, visibility, license_info,
                        content_hash, verification_status, owner_id, created_at,
-                       brief, word_count, duration_minutes, suggested_topic, reject_reason
+                       brief, word_count, duration_minutes, suggested_topic, reject_reason,
+                       external_key, domain_slug, pedagogy_tier, commercial_safe, isbn, doi
                 FROM core.sources
                 WHERE owner_id = :uid OR visibility = 'public'
                 ORDER BY created_at DESC
@@ -154,8 +211,16 @@ public class SourcesAndResearchController {
     }
 
     @GetMapping("/v1/sources/discover")
-    public Map<String, Object> discoverSources(@RequestParam(defaultValue = "") String q) {
-        return Map.of("query", q, "items", List.of(), "total", 0);
+    public Map<String, Object> discoverSources(
+            @RequestParam(defaultValue = "") String q,
+            @RequestParam(required = false) String domain,
+            @RequestParam(defaultValue = "beginner") String level,
+            @RequestParam(defaultValue = "practical") String depth,
+            @RequestParam(defaultValue = "10") int limit
+    ) {
+        int safeLimit = Math.max(1, Math.min(limit, 30));
+        List<Map<String, Object>> ranked = rankPublicLibrarySources(q, domain, level, depth, safeLimit);
+        return Map.of("query", q, "items", ranked, "total", ranked.size());
     }
 
     @PostMapping("/v1/sources")
@@ -517,21 +582,23 @@ public class SourcesAndResearchController {
         verifyOwnedCourse(principal.userId(), cid);
 
         List<Map<String, Object>> links = jdbc.sql("""
-                SELECT cs.course_id, cs.evaluation_json, cs.linked_at,
+                SELECT cs.course_id, cs.role, cs.evaluation_json, cs.linked_at,
                        s.id, s.source_type, s.title, s.canonical_url, s.author, s.publisher,
                        s.publication_date, s.source_updated_at, s.retrieved_at, s.language,
                        s.version, s.visibility, s.license_info, s.content_hash,
                        s.verification_status, s.owner_id, s.created_at,
-                       s.brief, s.word_count, s.duration_minutes, s.suggested_topic, s.reject_reason
+                       s.brief, s.word_count, s.duration_minutes, s.suggested_topic, s.reject_reason,
+                       s.external_key, s.domain_slug, s.pedagogy_tier, s.commercial_safe, s.isbn, s.doi
                 FROM core.course_sources cs
                 JOIN core.sources s ON s.id = cs.source_id
                 WHERE cs.course_id = :cid
-                ORDER BY cs.linked_at DESC
+                ORDER BY CASE WHEN cs.role = 'primary' THEN 0 ELSE 1 END ASC, cs.linked_at DESC
                 """)
                 .param("cid", cid)
                 .query((rs, rowNum) -> {
                     Map<String, Object> item = new LinkedHashMap<>();
                     item.put("courseId", IdCodec.format("crs", rs.getObject("course_id", UUID.class)));
+                    item.put("role", rs.getString("role"));
                     item.put("source", mapSourceRow(rs, rowNum));
                     String ev = rs.getString("evaluation_json");
                     item.put("evaluation", ev == null ? null : json.fromJson(ev, new TypeReference<Map<String, Object>>() {}));
@@ -564,15 +631,29 @@ public class SourcesAndResearchController {
         verifyOwnedCourse(principal.userId(), cid);
         loadOwnedOrPublicSource(principal.userId(), sid);
 
-        jdbc.sql("""
-                INSERT INTO core.course_sources (id, course_id, source_id)
-                VALUES (:id, :cid, :sid)
-                ON CONFLICT (course_id, source_id) DO NOTHING
-                """)
-                .param("id", UUID.randomUUID())
-                .param("cid", cid)
-                .param("sid", sid)
-                .update();
+        Integer existingLink = jdbc.sql("SELECT COUNT(*) FROM core.course_sources WHERE course_id = :cid AND source_id = :sid")
+                .param("cid", cid).param("sid", sid).query(Integer.class).single();
+        if (existingLink == null || existingLink == 0) {
+            Integer currentCount = jdbc.sql("SELECT COUNT(*) FROM core.course_sources WHERE course_id = :cid")
+                    .param("cid", cid).query(Integer.class).single();
+            if (currentCount != null && currentCount >= 3) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "COURSE_SOURCE_LIMIT_REACHED", "Mỗi khóa học liên kết tối đa 3 tài liệu nguồn để tránh loãng kiến thức.");
+            }
+            Integer primaryCount = jdbc.sql("SELECT COUNT(*) FROM core.course_sources WHERE course_id = :cid AND role = 'primary'")
+                    .param("cid", cid).query(Integer.class).single();
+            String assignedRole = (primaryCount == null || primaryCount == 0) ? "primary" : "reference";
+
+            jdbc.sql("""
+                    INSERT INTO core.course_sources (id, course_id, source_id, role)
+                    VALUES (:id, :cid, :sid, :role)
+                    ON CONFLICT (course_id, source_id) DO NOTHING
+                    """)
+                    .param("id", UUID.randomUUID())
+                    .param("cid", cid)
+                    .param("sid", sid)
+                    .param("role", assignedRole)
+                    .update();
+        }
 
         return ResponseEntity.status(HttpStatus.CREATED).body(listCourseSources(principal, courseId));
     }
@@ -589,12 +670,57 @@ public class SourcesAndResearchController {
         UUID cid = IdCodec.parse(courseId, "crs");
         verifyOwnedCourse(principal.userId(), cid);
 
+        // Server-authoritative sourceIds filtering: ONLY allow sources owned by current user OR visibility='public'
+        List<String> authorizedSourceIds = new java.util.ArrayList<>();
+        if (body.sourceIds() != null && !body.sourceIds().isEmpty()) {
+            for (String rawSid : body.sourceIds()) {
+                UUID parsedSid = IdCodec.parse(rawSid, "src");
+                Integer allowed = jdbc.sql("""
+                        SELECT COUNT(*) FROM core.sources
+                        WHERE id = :sid AND (owner_id = :uid OR visibility = 'public')
+                        """)
+                        .param("sid", parsedSid)
+                        .param("uid", principal.userId())
+                        .query(Integer.class)
+                        .single();
+                if (allowed != null && allowed > 0) {
+                    authorizedSourceIds.add(IdCodec.format("src", parsedSid));
+                }
+            }
+            if (authorizedSourceIds.isEmpty()) {
+                return Map.of(
+                        "query", body.query(),
+                        "embeddingSpec", "hashing/hashing-ngram-v1/d256/v1",
+                        "items", List.of(),
+                        "total", 0,
+                        "insufficientEvidence", true,
+                        "notice", "Không tìm thấy đoạn tài liệu phù hợp."
+                );
+            }
+        } else {
+            authorizedSourceIds = jdbc.sql("""
+                    SELECT cs.source_id
+                    FROM core.course_sources cs
+                    JOIN core.sources s ON s.id = cs.source_id
+                    WHERE cs.course_id = :cid AND (s.owner_id = :uid OR s.visibility = 'public')
+                    ORDER BY CASE WHEN cs.role = 'primary' THEN 0 ELSE 1 END ASC
+                    LIMIT 3
+                    """)
+                    .param("cid", cid)
+                    .param("uid", principal.userId())
+                    .query(UUID.class)
+                    .list()
+                    .stream()
+                    .map(id -> IdCodec.format("src", id))
+                    .toList();
+        }
+
         Map<String, Object> aiReq = new LinkedHashMap<>();
         aiReq.put("ownerId", IdCodec.format("usr", principal.userId()));
         aiReq.put("courseId", IdCodec.format("crs", cid));
         aiReq.put("query", body.query());
-        if (body.sourceIds() != null && !body.sourceIds().isEmpty()) {
-            aiReq.put("sourceIds", body.sourceIds());
+        if (!authorizedSourceIds.isEmpty()) {
+            aiReq.put("sourceIds", authorizedSourceIds);
         }
         aiReq.put("topK", 5);
 
@@ -646,15 +772,32 @@ public class SourcesAndResearchController {
         UUID cid = IdCodec.parse(courseId, "crs");
         verifyOwnedCourse(principal.userId(), cid);
 
+        String topic = jdbc.sql("SELECT topic FROM core.courses WHERE id = :cid")
+                .param("cid", cid).query(String.class).single();
+        int maxSources = (body != null && body.maxSources() != null)
+                ? Math.max(1, Math.min(body.maxSources(), 3))
+                : 3;
+        String level = (body != null && body.learnerLevel() != null && !body.learnerLevel().isBlank())
+                ? body.learnerLevel().trim().toLowerCase()
+                : "beginner";
+        String goals = (body != null && body.learningGoals() != null) ? body.learningGoals().trim() : "";
+        String depth = (goals.toLowerCase().contains("deep") || goals.toLowerCase().contains("chuyên sâu") || "advanced".equals(level))
+                ? "deep"
+                : "practical";
+
+        String effectiveQuery = (topic + " " + goals).trim();
+        List<Map<String, Object>> candidates = rankPublicLibrarySources(effectiveQuery, null, level, depth, maxSources);
+
         UUID runId = UUID.randomUUID();
         jdbc.sql("""
                 INSERT INTO core.source_research_runs (id, course_id, user_id, status, query_json, candidates_json)
-                VALUES (:id, :cid, :uid, 'completed', CAST(:q AS jsonb), '[]'::jsonb)
+                VALUES (:id, :cid, :uid, 'completed', CAST(:q AS jsonb), CAST(:cands AS jsonb))
                 """)
                 .param("id", runId)
                 .param("cid", cid)
                 .param("uid", principal.userId())
-                .param("q", json.toJson(body == null ? Map.of() : body))
+                .param("q", json.toJson(body == null ? Map.of("topic", topic) : body))
+                .param("cands", json.toJson(candidates))
                 .update();
 
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
@@ -662,7 +805,7 @@ public class SourcesAndResearchController {
                 "courseId", IdCodec.format("crs", cid),
                 "status", "completed",
                 "reused", false,
-                "candidates", List.of()
+                "candidates", candidates
         ));
     }
 
@@ -702,23 +845,31 @@ public class SourcesAndResearchController {
         UUID rid = IdCodec.parse(runId, "run");
         verifyOwnedCourse(principal.userId(), cid);
         return jdbc.sql("""
-                SELECT id, status, accepted FROM core.source_research_runs
+                SELECT id, status, accepted, candidates_json::text AS cands
+                FROM core.source_research_runs
                 WHERE id = :rid AND course_id = :cid AND user_id = :uid
                 """)
                 .param("rid", rid).param("cid", cid).param("uid", principal.userId())
-                .query((rs, rowNum) -> Map.<String, Object>of(
-                        "id", IdCodec.format("run", rs.getObject("id", UUID.class)),
-                        "courseId", IdCodec.format("crs", cid),
-                        "status", rs.getString("status"),
-                        "accepted", rs.getBoolean("accepted"),
-                        "candidates", List.of()
-                ))
+                .query((rs, rowNum) -> {
+                    String candsStr = rs.getString("cands");
+                    List<Map<String, Object>> cands = (candsStr == null || candsStr.isBlank())
+                            ? List.of()
+                            : json.fromJson(candsStr, new TypeReference<List<Map<String, Object>>>() {});
+                    return Map.<String, Object>of(
+                            "id", IdCodec.format("run", rs.getObject("id", UUID.class)),
+                            "courseId", IdCodec.format("crs", cid),
+                            "status", rs.getString("status"),
+                            "accepted", rs.getBoolean("accepted"),
+                            "candidates", cands
+                    );
+                })
                 .optional()
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "RESEARCH_RUN_NOT_FOUND", "Không tìm thấy phiên nghiên cứu."));
     }
 
     @PostMapping("/v1/courses/{courseId}/research-runs/{runId}/accept")
     @Transactional
+    @SuppressWarnings("unchecked")
     public Map<String, Object> acceptResearchRun(
             @AuthenticationPrincipal AuthPrincipal principal,
             @PathVariable String courseId,
@@ -737,7 +888,232 @@ public class SourcesAndResearchController {
         if (updated == 0) {
             throw new ApiException(HttpStatus.NOT_FOUND, "RESEARCH_RUN_NOT_FOUND", "Không tìm thấy phiên nghiên cứu.");
         }
-        return getResearchRun(principal, courseId, runId);
+        Map<String, Object> run = getResearchRun(principal, courseId, runId);
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>) run.getOrDefault("candidates", List.of());
+        int linkedCount = jdbc.sql("SELECT COUNT(*) FROM core.course_sources WHERE course_id = :cid")
+                .param("cid", cid).query(Integer.class).single();
+        int primaryCount = jdbc.sql("SELECT COUNT(*) FROM core.course_sources WHERE course_id = :cid AND role = 'primary'")
+                .param("cid", cid).query(Integer.class).single();
+
+        for (Map<String, Object> cand : candidates) {
+            if (linkedCount >= 3) break;
+            Object sidObj = cand.get("id");
+            if (sidObj == null) continue;
+            UUID sid;
+            try {
+                sid = IdCodec.parse(String.valueOf(sidObj), "src");
+            } catch (Exception ex) {
+                continue;
+            }
+            String role = (primaryCount == 0 && "primary".equals(cand.get("recommendedRole"))) ? "primary"
+                    : (primaryCount == 0 ? "primary" : "reference");
+            int ins = jdbc.sql("""
+                    INSERT INTO core.course_sources (id, course_id, source_id, role)
+                    VALUES (:id, :cid, :sid, :role)
+                    ON CONFLICT (course_id, source_id) DO NOTHING
+                    """)
+                    .param("id", UUID.randomUUID())
+                    .param("cid", cid)
+                    .param("sid", sid)
+                    .param("role", role)
+                    .update();
+            if (ins > 0) {
+                linkedCount++;
+                if ("primary".equals(role)) primaryCount++;
+            }
+        }
+        return run;
+    }
+
+    private static final List<String[]> VI_TO_EN_DISCOVER_TERMS = List.of(
+            new String[]{"lập trình", "programming"},
+            new String[]{"khoa học máy tính", "computer science"},
+            new String[]{"cấu trúc dữ liệu", "data structures"},
+            new String[]{"thuật toán", "algorithms"},
+            new String[]{"giải thuật", "algorithms"},
+            new String[]{"cơ sở dữ liệu", "databases sql"},
+            new String[]{"học máy", "machine learning"},
+            new String[]{"học sâu", "deep learning neural"},
+            new String[]{"trí tuệ nhân tạo", "artificial intelligence"},
+            new String[]{"mô hình ngôn ngữ", "language model llm transformer"},
+            new String[]{"hệ phân tán", "distributed consensus"},
+            new String[]{"giao diện", "react nextjs frontend"},
+            new String[]{"web", "mdn web http"},
+            new String[]{"container", "kubernetes docker"},
+            new String[]{"đám mây", "kubernetes cloud"},
+            new String[]{"tối ưu hóa", "convex optimization"},
+            new String[]{"giải tích", "calculus"},
+            new String[]{"đại số tuyến tính", "linear algebra"},
+            new String[]{"xác suất", "probability"},
+            new String[]{"thống kê", "statistics"},
+            new String[]{"toán rời rạc", "discrete mathematics"},
+            new String[]{"vật lý", "physics"},
+            new String[]{"hóa học", "chemistry"},
+            new String[]{"sinh học", "biology"},
+            new String[]{"giải phẫu", "anatomy physiology"},
+            new String[]{"môi trường", "environmental climate"},
+            new String[]{"thiết kế", "design architecture"},
+            new String[]{"kiến trúc", "architecture design"},
+            new String[]{"giao tiếp", "communication writing"},
+            new String[]{"ngoại ngữ", "language english"},
+            new String[]{"kinh tế vi mô", "microeconomics"},
+            new String[]{"kinh tế vĩ mô", "macroeconomics"},
+            new String[]{"kinh tế", "economics"},
+            new String[]{"tài chính", "finance"},
+            new String[]{"tâm lý", "psychology"},
+            new String[]{"xã hội học", "sociology"},
+            new String[]{"triết học", "philosophy"},
+            new String[]{"lịch sử", "history"}
+    );
+
+    private static java.util.Set<String> tokenizeDiscoveryText(String text) {
+        if (text == null || text.isBlank()) return java.util.Set.of();
+        java.util.Set<String> set = new java.util.HashSet<>();
+        for (String t : text.toLowerCase().split("[^\\p{L}\\p{Nd}+#]+")) {
+            if (t.length() >= 2) {
+                set.add(t);
+            }
+        }
+        return set;
+    }
+
+    private List<Map<String, Object>> rankPublicLibrarySources(
+            String rawQuery,
+            String domainFilter,
+            String learnerLevel,
+            String depth,
+            int limit
+    ) {
+        String qLower = rawQuery == null ? "" : rawQuery.trim().toLowerCase();
+        List<String> rawTokens = java.util.Arrays.stream(qLower.split("[^\\p{L}\\p{Nd}+#]+"))
+                .map(String::trim)
+                .filter(t -> t.length() >= 2)
+                .distinct()
+                .toList();
+        java.util.Set<String> rawTokenSet = new java.util.HashSet<>(rawTokens);
+        java.util.Set<String> synonymTokens = new java.util.LinkedHashSet<>();
+        for (String[] pair : VI_TO_EN_DISCOVER_TERMS) {
+            if (qLower.contains(pair[0])) {
+                for (String st : pair[1].split("\\s+")) {
+                    if (st.length() >= 2 && !rawTokenSet.contains(st)) {
+                        synonymTokens.add(st);
+                    }
+                }
+            }
+        }
+
+        boolean strictCommercial = props.billingCommercialStrictSources();
+        boolean deepMode = "advanced".equalsIgnoreCase(learnerLevel) || "deep".equalsIgnoreCase(depth);
+
+        StringBuilder sql = new StringBuilder("""
+                SELECT id, source_type, title, canonical_url, author, publisher, publication_date,
+                       source_updated_at, retrieved_at, language, version, visibility, license_info,
+                       content_hash, verification_status, owner_id, created_at,
+                       brief, word_count, duration_minutes, suggested_topic, reject_reason,
+                       external_key, domain_slug, pedagogy_tier, commercial_safe, isbn, doi
+                FROM core.sources
+                WHERE visibility = 'public'
+                """);
+        if (strictCommercial) {
+            sql.append(" AND commercial_safe = TRUE ");
+        }
+        if (domainFilter != null && !domainFilter.isBlank()) {
+            sql.append(" AND domain_slug = :domain ");
+        }
+        sql.append("""
+                 ORDER BY CASE
+                     WHEN pedagogy_tier = 'tier1_textbook' THEN 0
+                     WHEN pedagogy_tier = 'official_docs' THEN 1
+                     WHEN pedagogy_tier = 'tier2_monograph' THEN 2
+                     ELSE 3
+                 END ASC, created_at DESC LIMIT 2000
+                """);
+
+        var stmt = jdbc.sql(sql.toString());
+        if (domainFilter != null && !domainFilter.isBlank()) {
+            stmt = stmt.param("domain", domainFilter.trim().toLowerCase());
+        }
+        List<Map<String, Object>> allPublic = stmt.query(this::mapSourceRow).list();
+
+        record Scored(Map<String, Object> row, int score, String tier) {}
+        List<Scored> scored = new java.util.ArrayList<>();
+
+        for (Map<String, Object> row : allPublic) {
+            String tier = String.valueOf(row.getOrDefault("pedagogyTier", "tier2_monograph"));
+            // Phase L4 Pedagogical Guard: exclude narrow `tier3_paper` (arXiv) for beginner/intermediate learners
+            if (!deepMode && "tier3_paper".equals(tier)) {
+                continue;
+            }
+            String title = String.valueOf(row.getOrDefault("title", "")).toLowerCase();
+            String domainSlug = String.valueOf(row.getOrDefault("domainSlug", "")).toLowerCase();
+            String suggested = String.valueOf(row.getOrDefault("suggestedTopic", "")).toLowerCase();
+            String briefTxt = row.get("brief") == null ? "" : String.valueOf(row.get("brief")).toLowerCase();
+
+            var titleWords = tokenizeDiscoveryText(title);
+            var metaWords = tokenizeDiscoveryText(domainSlug + " " + suggested);
+            var briefWords = tokenizeDiscoveryText(briefTxt);
+
+            int relevance = 0;
+            if (rawTokens.isEmpty() && synonymTokens.isEmpty()) {
+                relevance = 10;
+            } else {
+                for (String tok : rawTokens) {
+                    if (titleWords.contains(tok) || (tok.length() >= 4 && title.contains(tok))) relevance += 35;
+                    else if (metaWords.contains(tok)) relevance += 16;
+                    else if (briefWords.contains(tok)) relevance += 6;
+                }
+                for (String tok : synonymTokens) {
+                    if (titleWords.contains(tok)) relevance += 14;
+                    else if (metaWords.contains(tok)) relevance += 10;
+                    else if (briefWords.contains(tok)) relevance += 3;
+                }
+            }
+            if ((!rawTokens.isEmpty() || !synonymTokens.isEmpty()) && relevance == 0) {
+                continue;
+            }
+            int tierBonus = switch (tier) {
+                case "tier1_textbook" -> deepMode ? 22 : 45;
+                case "official_docs" -> 30;
+                case "tier2_monograph" -> deepMode ? 20 : 15;
+                case "tier3_paper" -> deepMode ? 12 : -100;
+                default -> 5;
+            };
+            scored.add(new Scored(row, relevance + tierBonus, tier));
+        }
+
+        scored.sort((a, b) -> Integer.compare(b.score(), a.score()));
+
+        List<Map<String, Object>> selected = new java.util.ArrayList<>();
+        if (deepMode) {
+            // 1 tier1_textbook primary backbone + up to (limit - 1) deep monograph/paper references
+            scored.stream()
+                    .filter(s -> "tier1_textbook".equals(s.tier()))
+                    .findFirst()
+                    .ifPresent(primary -> {
+                        Map<String, Object> copy = new LinkedHashMap<>(primary.row());
+                        copy.put("recommendedRole", "primary");
+                        copy.put("rankScore", primary.score());
+                        selected.add(copy);
+                    });
+            for (Scored s : scored) {
+                if (selected.size() >= limit) break;
+                boolean already = selected.stream().anyMatch(x -> x.get("id").equals(s.row().get("id")));
+                if (already) continue;
+                Map<String, Object> copy = new LinkedHashMap<>(s.row());
+                copy.put("recommendedRole", selected.isEmpty() ? "primary" : "reference");
+                copy.put("rankScore", s.score());
+                selected.add(copy);
+            }
+        } else {
+            for (Scored s : scored) {
+                if (selected.size() >= limit) break;
+                Map<String, Object> copy = new LinkedHashMap<>(s.row());
+                copy.put("recommendedRole", selected.isEmpty() ? "primary" : "reference");
+                copy.put("rankScore", s.score());
+                selected.add(copy);
+            }
+        }
+        return selected;
     }
 
     private void verifyOwnedCourse(UUID userId, UUID courseId) {
@@ -761,7 +1137,8 @@ public class SourcesAndResearchController {
                 SELECT id, source_type, title, canonical_url, author, publisher, publication_date,
                        source_updated_at, retrieved_at, language, version, visibility, license_info,
                        content_hash, verification_status, owner_id, created_at,
-                       brief, word_count, duration_minutes, suggested_topic, reject_reason
+                       brief, word_count, duration_minutes, suggested_topic, reject_reason,
+                       external_key, domain_slug, pedagogy_tier, commercial_safe, isbn, doi
                 FROM core.sources
                 WHERE id = :sid AND (owner_id = :uid OR visibility = 'public')
                 """)
@@ -790,7 +1167,8 @@ public class SourcesAndResearchController {
         m.put("licenseInfo", rs.getString("license_info"));
         m.put("contentHash", rs.getString("content_hash"));
         m.put("verificationStatus", rs.getString("verification_status"));
-        m.put("ownerId", IdCodec.format("usr", rs.getObject("owner_id", UUID.class)));
+        UUID ownerUuid = rs.getObject("owner_id", UUID.class);
+        m.put("ownerId", ownerUuid == null ? "system:public_library" : IdCodec.format("usr", ownerUuid));
         var ca = rs.getTimestamp("created_at");
         m.put("createdAt", ca == null ? null : ca.toInstant().toString());
         String briefStr = rs.getString("brief");
@@ -799,6 +1177,12 @@ public class SourcesAndResearchController {
         m.put("durationMinutes", rs.getObject("duration_minutes"));
         m.put("suggestedTopic", rs.getString("suggested_topic"));
         m.put("rejectReason", rs.getString("reject_reason"));
+        m.put("externalKey", rs.getString("external_key"));
+        m.put("domainSlug", rs.getString("domain_slug"));
+        m.put("pedagogyTier", rs.getString("pedagogy_tier"));
+        m.put("commercialSafe", rs.getBoolean("commercial_safe"));
+        m.put("isbn", rs.getString("isbn"));
+        m.put("doi", rs.getString("doi"));
         return m;
     }
 

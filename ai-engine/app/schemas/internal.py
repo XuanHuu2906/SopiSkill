@@ -137,6 +137,7 @@ class TutorStreamInternalRequest(BaseModel):
     unitContext: dict[str, Any] | None = None
     proposalContext: dict[str, Any] | None = None
     sourceBrief: dict[str, Any] | None = None
+    sourceIds: list[str] | None = None
     delayMs: int = Field(default=0, ge=0, le=2000)
     history: list[TutorHistoryItem] = Field(default_factory=list, max_length=40)
     ragEnabled: bool = False
@@ -189,3 +190,45 @@ class RagSearchResponse(BaseModel):
 
 class RagDeleteResponse(BaseModel):
     deletedChunks: int = Field(ge=0)
+
+
+class SourceResearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = Field(min_length=1, max_length=300)
+    language: Literal["vi", "en"] = "vi"
+    maxTurns: int = Field(default=6, ge=1, le=10)
+
+
+class ResearchedSourceOut(BaseModel):
+    url: str
+    title: str
+    sourceKind: Literal["arxiv_url", "web_url"]
+    domain: str
+    rationale: str = ""
+    excerpt: str = ""
+
+
+class SourceResearchResponse(BaseModel):
+    sources: list[ResearchedSourceOut] = Field(default_factory=list)
+    toolsCalled: list[str] = Field(default_factory=list)
+    rejectedUrls: list[str] = Field(default_factory=list)
+    turnsUsed: int = Field(default=0, ge=0)
+    usage: LlmUsageOut = Field(default_factory=LlmUsageOut)
+
+
+class ProposalGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    courseId: str = Field(min_length=1, max_length=128)
+    topic: str = Field(min_length=1, max_length=300)
+    language: Literal["vi", "en"] = "vi"
+    learnerProfile: dict[str, Any] = Field(default_factory=dict)
+    sourceBrief: dict[str, Any] | None = None
+
+
+class ProposalGenerateResponse(BaseModel):
+    proposal: dict[str, Any]
+    toolsCalled: list[str] = Field(default_factory=list)
+    turnsUsed: int = Field(default=0, ge=0)
+    usage: LlmUsageOut = Field(default_factory=LlmUsageOut)

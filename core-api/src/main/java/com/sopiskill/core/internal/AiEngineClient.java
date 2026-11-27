@@ -105,6 +105,24 @@ public class AiEngineClient {
         }
     }
 
+    public HttpResponse<byte[]> getBinary(String path, String correlationId) {
+        byte[] empty = new byte[0];
+        Map<String, String> signed = signer.signHeaders("GET", path, empty, correlationId);
+        String url = props.aiEngineUrl().replaceAll("/+$", "") + path;
+
+        HttpRequest.Builder req = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(15))
+                .GET();
+        signed.forEach(req::header);
+
+        try {
+            return httpClient.send(req.build(), HttpResponse.BodyHandlers.ofByteArray());
+        } catch (Exception ex) {
+            throw new RuntimeException("Failed fetching binary from ai-engine " + path + ": " + ex.getMessage(), ex);
+        }
+    }
+
     public void deleteRagResourceBestEffort(String path, String correlationId) {
         try {
             byte[] empty = new byte[0];
@@ -220,5 +238,34 @@ public class AiEngineClient {
                 "goal", topic,
                 "warnings", List.of()
         );
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> generateProposal(
+            String courseId,
+            String topic,
+            String language,
+            Map<String, Object> learnerProfile,
+            Map<String, Object> sourceBrief,
+            String correlationId
+    ) {
+        try {
+            Map<String, Object> reqBody = new java.util.LinkedHashMap<>();
+            reqBody.put("courseId", courseId);
+            reqBody.put("topic", topic);
+            reqBody.put("language", language);
+            reqBody.put("learnerProfile", learnerProfile == null ? Map.of() : learnerProfile);
+            if (sourceBrief != null) {
+                reqBody.put("sourceBrief", sourceBrief);
+            }
+            Map<String, Object> resp = postJson("/internal/proposal/generate", reqBody, correlationId);
+            Object prop = resp.get("proposal");
+            if (prop instanceof Map<?, ?> map) {
+                return (Map<String, Object>) map;
+            }
+        } catch (Exception ex) {
+            log.warn("ai_engine_proposal_generate_fallback errorType={}", ex.getClass().getSimpleName());
+        }
+        return null;
     }
 }

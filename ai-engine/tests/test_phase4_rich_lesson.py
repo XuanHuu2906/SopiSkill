@@ -63,6 +63,25 @@ from app.agents.validation import validate_lesson_payload
             "center": {"id": "hub", "label": "Core API"},
             "spokes": [{"id": "sp1", "label": "Postgres"}, {"id": "sp2", "label": "Redis"}, {"id": "sp3", "label": "AI Engine"}],
         },
+        {
+            "kind": "code",
+            "language": "python",
+            "title": "Scaled Dot-Product Attention",
+            "code": "def attention(q, k, v):\n    return softmax(q @ k.T / sqrt(d_k)) @ v\n",
+            "highlightLines": [2],
+        },
+        {
+            "kind": "plot",
+            "title": "Quadratic & Sine Explorer",
+            "xRange": [-5, 5],
+            "yRange": [-4, 6],
+            "params": [{"name": "a", "label": "Amplitude", "min": 0.5, "max": 3.0, "step": 0.1, "value": 1.0}],
+            "functions": [
+                {"expr": "a * sin(x)", "label": "a*sin(x)"},
+                {"expr": "0.2 * x^2 - 1", "label": "0.2x^2 - 1"},
+            ],
+            "points": [{"x": 0, "y": -1, "label": "Vertex (0, -1)"}],
+        },
     ],
 )
 def test_all_four_figure_kinds_and_seven_svg_layouts_validate_cleanly(figure: dict):
@@ -133,6 +152,68 @@ def test_figure_validator_rejects_orphans_odd_split_long_cycle_and_media_conflic
         0,
     )
     assert any("mutually exclusive" in e.lower() for e in conflict_errs)
+
+
+def test_figure_validator_rejects_unsafe_plot_expressions_and_bad_code():
+    # 1. AST injection / arbitrary call in plot expression must be blocked
+    inject_errs = validate_teach_media_and_figure(
+        {
+            "type": "teach",
+            "figure": {
+                "kind": "plot",
+                "xRange": [-5, 5],
+                "yRange": [-5, 5],
+                "functions": [{"expr": "__import__('os').system('id')"}],
+            },
+        },
+        0,
+    )
+    assert inject_errs and any("invalid expr" in e.lower() for e in inject_errs)
+
+    # 2. Unknown undeclared variable in plot expression must be blocked
+    var_errs = validate_teach_media_and_figure(
+        {
+            "type": "teach",
+            "figure": {
+                "kind": "plot",
+                "xRange": [-5, 5],
+                "yRange": [-5, 5],
+                "functions": [{"expr": "secret * x + 1"}],
+            },
+        },
+        0,
+    )
+    assert any("unknown identifier" in e.lower() for e in var_errs)
+
+    # 3. Inverted plot range must be rejected
+    range_errs = validate_teach_media_and_figure(
+        {
+            "type": "teach",
+            "figure": {
+                "kind": "plot",
+                "xRange": [5, -5],
+                "yRange": [-2, 2],
+                "functions": [{"expr": "x^2"}],
+            },
+        },
+        0,
+    )
+    assert any("xrange" in e.lower() for e in range_errs)
+
+    # 4. Out-of-range highlightLines and empty code rejected
+    code_errs = validate_teach_media_and_figure(
+        {
+            "type": "teach",
+            "figure": {
+                "kind": "code",
+                "language": "python",
+                "code": "x = 1\ny = 2",
+                "highlightLines": [5],
+            },
+        },
+        0,
+    )
+    assert any("out of range" in e.lower() for e in code_errs)
 
 
 def test_multi_blank_and_legacy_single_blank_validation():

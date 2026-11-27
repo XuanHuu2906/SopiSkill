@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.pedagogy import extract_learner_profile
+from app.agents.planner_agent import PlannerMaxTurnsError, generate_proposal_with_tools
 from app.agents.providers import ProviderConfigError, get_llm_provider
 from app.agents.short_grader import grade_short_answer
+from app.agents.source_research_agent import SourceResearchMaxTurnsError, research_sources_with_agent
 from app.agents.tutor_agent import stream_tutor_turn
 from app.core.sse import SSE_HEADERS
 from app.db.session import get_db
 from app.rag.embedding import EmbeddingConfigError
 from app.rag.repository import RagRepository
+from app.rag.storage import SourceStorageError, get_source_storage
 from app.schemas.internal import (
     GradeShortRequest,
     GradeShortResponse,
@@ -21,9 +24,14 @@ from app.schemas.internal import (
     InterviewEvaluateResponse,
     InterviewQuestionsRequest,
     InterviewQuestionsResponse,
+    ProposalGenerateRequest,
+    ProposalGenerateResponse,
     RagDeleteResponse,
     RagSearchRequest,
     RagSearchResponse,
+    ResearchedSourceOut,
+    SourceResearchRequest,
+    SourceResearchResponse,
     TutorStreamInternalRequest,
 )
 
@@ -50,6 +58,30 @@ def _get_rag_repo_or_503() -> RagRepository:
         ) from exc
 
 
+@router.post("/sources/research", response_model=SourceResearchResponse)
+async def sources_research(body: SourceResearchRequest) -> SourceResearchResponse:
+    provider = _get_provider_or_503()
+    try:
+        res = await research_sources_with_agent(
+            topic=body.topic,
+            language=body.language,
+            provider=provider,
+            max_turns=body.maxTurns,
+        )
+    except SourceResearchMaxTurnsError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "max_turns", "message": str(exc)},
+        ) from exc
+    return SourceResearchResponse(
+        sources=[ResearchedSourceOut(**s.to_dict()) for s in res.sources],
+        toolsCalled=res.tools_called,
+        rejectedUrls=res.rejected_urls,
+        turnsUsed=res.turns_used,
+        usage=res.usage,
+    )
+
+
 @router.post("/interview/questions", response_model=InterviewQuestionsResponse)
 async def interview_questions(body: InterviewQuestionsRequest) -> InterviewQuestionsResponse:
     provider = _get_provider_or_503()
@@ -61,6 +93,30 @@ async def interview_questions(body: InterviewQuestionsRequest) -> InterviewQuest
 async def interview_evaluate(body: InterviewEvaluateRequest) -> InterviewEvaluateResponse:
     profile = extract_learner_profile(body.answers, onboarding_profile=body.onboardingProfile)
     return InterviewEvaluateResponse(learnerProfile=profile)
+
+
+@router.post("/proposal/generate", response_model=ProposalGenerateResponse)
+async def proposal_generate(body: ProposalGenerateRequest) -> ProposalGenerateResponse:
+    provider = _get_provider_or_503()
+    try:
+        res = await generate_proposal_with_tools(
+            topic=body.topic,
+            language=body.language,
+            learner_profile=body.learnerProfile or {"currentLevel": "beginner", "depth": "practical"},
+            provider=provider,
+            source_brief=body.sourceBrief,
+        )
+    except PlannerMaxTurnsError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "max_turns", "message": str(exc)},
+        ) from exc
+    return ProposalGenerateResponse(
+        proposal=res.proposal,
+        toolsCalled=res.tools_called,
+        turnsUsed=res.turns_used,
+        usage=res.usage,
+    )
 
 
 @router.post("/lessons/grade-short", response_model=GradeShortResponse)
@@ -125,3 +181,43 @@ async def rag_delete_source(
     rag_repo = _get_rag_repo_or_503()
     deleted = await rag_repo.delete_by_source(db, source_id)
     return RagDeleteResponse(deletedChunks=deleted)
+
+
+_SAFE_FIGURE_CONTENT_TYPES = frozenset(
+    {"image/webp", "image/png", "image/jpeg", "image/gif", "image/svg+xml"}
+)
+
+
+@router.get("/library/figures/{source_id}/{figure_id}")
+async def get_library_figure_bytes(
+    source_id: str,
+    figure_id: str,
+    ownerId: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Serve verified figure bytes from MinIO/S3 strictly after `core-api` enforces source authorization."""
+    rag_repo = _get_rag_repo_or_503()
+    fig = await rag_repo.get_figure(db, source_id=source_id, figure_id=figure_id, owner_id=ownerId)
+    if fig is None:
+        raise HTTPException(status_code=404, detail={"code": "FIGURE_NOT_FOUND", "message": "Figure not found."})
+
+    ctype = str(fig.get("content_type") or "image/webp").lower()
+    if ctype not in _SAFE_FIGURE_CONTENT_TYPES:
+        ctype = "application/octet-stream"
+
+    storage = get_source_storage()
+    try:
+        data = await storage.get_bytes(str(fig["minio_key"]))
+    except SourceStorageError as exc:
+        raise HTTPException(
+            status_code=404, detail={"code": "FIGURE_OBJECT_MISSING", "message": str(exc)}
+        ) from exc
+
+    return Response(
+        content=data,
+        media_type=ctype,
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

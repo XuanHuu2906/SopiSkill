@@ -7,11 +7,16 @@ export interface InlineCite {
   url?: string | null;
   anchor?: string | null;
   pageNumber?: number | null;
+  author?: string | null;
+  licenseInfo?: string | null;
+  attributionText?: string | null;
 }
 
 export default function CitationChip({ cite }: { cite: InlineCite }) {
   const text = cite.label || cite.sourceTitle || "Nguồn tham khảo";
   const pageSuffix = cite.pageNumber != null ? ` · tr. ${cite.pageNumber}` : "";
+  const licenseBadge = cite.licenseInfo ? ` (${cite.licenseInfo})` : "";
+  const titleTooltip = cite.attributionText || [cite.sourceTitle, cite.author, cite.licenseInfo].filter(Boolean).join(" · ") || undefined;
   const style = {
     display: "inline-flex",
     alignItems: "center",
@@ -33,16 +38,17 @@ export default function CitationChip({ cite }: { cite: InlineCite }) {
         target="_blank"
         rel="noopener noreferrer nofollow"
         className="citation-chip"
+        title={titleTooltip}
         style={style}
       >
-        <span>{text}{pageSuffix}</span>
+        <span>{text}{pageSuffix}{licenseBadge}</span>
       </a>
     );
   }
 
   return (
-    <span className="citation-chip" style={style}>
-      {text}{pageSuffix}
+    <span className="citation-chip" title={titleTooltip} style={style}>
+      {text}{pageSuffix}{licenseBadge}
     </span>
   );
 }

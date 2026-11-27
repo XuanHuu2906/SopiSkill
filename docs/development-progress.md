@@ -2,6 +2,171 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-27 — Multimodal Knowledge & Rich Lesson Engine (`Phase M0–M3`: Code, LaTeX, Interactive Plots & Grounded MinIO Figures)
+
+- Repository / branch: SopiSkill · nhánh `feat/library-foundation` + đồng bộ pipeline nguồn tại `/home/nguyenhuu/Hoc Tap/Cào sách` (`docs/multimodal-formulas-code-figures-plan.md`).
+- **IMPLEMENTED:**
+  - **Phase M0 (P0 — Rich Code, Diagram & Interactive Function Plot GenUI):**
+    - `frontend/src/components/lesson/MathText.tsx`: bổ sung `CodeBlockCard` (tokenizer tô màu cú pháp deterministic zero-`eval`, đánh số dòng, highlight dòng, nút Sao chép) cùng parser khối ```` ```lang ... ``` ```` và `` `inline code` `` song song KaTeX `$...$` / `$$...$$` và chip `{termKey}`.
+    - `frontend/src/components/lesson/FigureRenderer.tsx`: bỏ cắt cụt nhãn SVG `.slice(0, 18)` bằng `WrappedSvgText` tự xuống dòng tiếng Việt + hiển thị `edge.label` trên `flow`/`branch`/`hub`; bổ sung `kind: "code"` và `kind: "plot"` (`FunctionPlotSvg` dùng parser toán học recursive-descent zero-`eval`, crosshair `(x, y)` và thanh trượt tham số `params`).
+    - `ai-engine/app/agents/figure_validator.py` & `providers.py`: mở rộng `ALLOWED_FIGURE_KINDS` thành 6 loại (`formula`, `table`, `visual`, `diagram`, `code`, `plot`), kiểm định `plot` bằng Python `ast` whitelist chặn mọi injection, cập nhật prompt Lesson Writer.
+  - **Phase M1 (P1 — Source-First Lossless LaTeX & Original Figures, 0 GPU):**
+    - `/home/nguyenhuu/Hoc Tap/Cào sách/src/book_harvester/rich_sources.py` & lệnh `book-harvester enrich-rich`: trích xuất LaTeX gốc `<annotation encoding="application/x-tex">` từ arXiv HTML5/ar5iv (`29` bài `curated_classics`) và chuyển `<m:math>` MathML → LaTeX + ảnh `media/` + `<glossary>` từ 9 bộ OpenStax GitHub CNXML (*Calculus 1–3*, *University Physics 1–3*, *Chemistry 2e*, *Introductory Statistics 2e*, *Precalculus 2e*).
+  - **Phase M2 (P2 — Grounded Figure Registry trên MinIO + RAG `read_source` → `sourceFigureId`):**
+    - `ai-engine/alembic/versions/0003_source_figures_registry.py` & `app/db/session.py`: tạo bảng `rag.source_figures` (`UNIQUE(owner_id, source_id, figure_id)`).
+    - `ai-engine/app/rag/storage.py`, `repository.py`, `scripts/import_open_library.py`: bổ sung ghi/đọc MinIO WebP (`<= 1200px`, `quality=82`), `replace_source_figures`, `list_figures_for_sources`, `get_figure` khóa cứng theo `owner_id`/`PUBLIC_LIBRARY_OWNER_ID`.
+    - `ai-engine/app/api/internal.py`, `core-api/.../AiEngineClient.java` & `SourcesAndResearchController.java`: bổ sung `GET /v1/library/figures/{sourceId}/{figureId}` kiểm tra quyền sở hữu / `visibility='public'` trên `core.sources` trước khi proxy byte ảnh có chữ ký HMAC từ `ai-api` → MinIO (`X-Content-Type-Options: nosniff`, allowlist MIME).
+    - `ai-engine/app/workers/worker_llm.py` & `app/agents/lesson_generator.py`: `read_source` trả kèm `availableFigures`, `resolve_source_figure_ids` chỉ ánh xạ `sourceFigureId` đã xác thực sang `/v1/library/figures/...` (tự động loại bỏ ID bịa/SSRF và bảo toàn loại trừ lẫn nhau `figure` vs `image`).
+  - **Phase M3 (P3 — Selective CPU PDF Vector Figure BBox 200-DPI Extractor):**
+    - `/home/nguyenhuu/Hoc Tap/Cào sách/src/book_harvester/pdf_rich_router.py` & lệnh `book-harvester extract-pdf-figures`: trích xuất hình vẽ vector thuần & hybrid trong PDF bằng Caption + Union-BBox 200 DPI → WebP (giải quyết điểm mù của `page.get_images()`).
+  - **Làm sạch chất lượng dữ liệu kho live:** vá 4 lỗi `section_pruner.py` & `chunker.py` (cắt `Pre-Lab`/`Post-Lab`/`Chapter Review Questions`/phiếu trống `A, B, C, D` + chặn OCR vỡ chữ `garbled_ocr` + mục lục 20 trang đầu `is_front_toc_page`); gỡ có sao lưu 39 nguồn `archive:*` danh bạ/catalog/báo giấy scan cổ & trùng bản cũ khỏi PostgreSQL.
+- **TESTED (live 8-container Docker stack + MinIO + PostgreSQL 16, 0đ chi phí):**
+  - `cd frontend && npm run typecheck && npm run lint && npm run build` → **exit `0`** (`0` errors, `0` warnings, `16/16` pages).
+  - `cd ai-engine && pytest -v -k "not test_live_pgvector_redis" && bandit -r app scripts -q` → **exit `0`** (**`61/61` PASSED**, `0` Bandit findings, `0` `#nosec`).
+  - `cd core-api && ./mvnw -B test -q` → **exit `0`** (**`14/14` JUnit PASS**).
+  - `cd "/home/nguyenhuu/Hoc Tap/Cào sách" && uv run pytest -v` → **exit `0`** (**`31/31` PASSED**).
+  - Live PostgreSQL (`alembic upgrade head` → `0003_source_figures_registry`) & MinIO (`sopiskill-sources`): **`491` sách** (`20/20` lĩnh vực), **`545,425` chunks** (`10,871` code blocks · `4,465` display LaTeX `$$` · `11,538` inline LaTeX `$`), **`3,202` ảnh WebP** trên `32` đầu sách (`2,945` P1 + `257` P3 gồm `157` hình vector thuần).
+  - Live Docker rebuild (`ai-api`, `ai-worker-llm`, `core-api`, `frontend`) & authenticated E2E `GET /v1/library/figures/{sourceId}/{figureId}` verified (`401` unauthenticated, `200 image/webp` RIFF/WEBP authenticated).
+- **NOT TESTED:**
+  - Sinh bài học thật chọn `sourceFigureId` bằng real LLM trả phí (`LLM_PROVIDER=deepseek`); mở rộng P1/P3 sang các sách STEM còn lại ngoài 32 đầu sách đã nạp ảnh.
+- **ROLLBACK:** Thuần Git + Alembic `0003 → 0002` (chỉ thêm bảng mới `rag.source_figures`, không sửa bảng cũ).
+
+## 2026-11-27 — Nạp Toàn Bộ Kho Tri Thức 530 Đầu Sách (`640.656` Chunks · 3 Trụ Cột) & Tối Ưu Discovery `LIMIT 2000`
+
+- Repository / branch: SopiSkill · nhánh `feat/library-foundation` (tiếp nối bản Pilot 25 cuốn bên dưới), kết nối đầy đủ 3 trụ cột từ `/home/nguyenhuu/Hoc Tap/Cào sách/library/sopiskill_manifest.jsonl`.
+- **IMPLEMENTED:**
+  - `core-api/src/main/java/com/sopiskill/core/sources/SourcesAndResearchController.java`: nâng trần quét nguồn công cộng từ `LIMIT 250` lên `LIMIT 2000` (sắp ưu tiên theo `pedagogy_tier`), tách trọng số từ khóa gốc người dùng gõ (`+35` tiêu đề) vs từ đồng nghĩa song ngữ `VI → EN` (`+14`), khớp theo ranh giới từ (`tokenizeDiscoveryText`) và cân bằng `tierBonus` trong chế độ `deepMode` để `curated_classics` (*Attention Is All You Need*, *Raft*, *MapReduce*) và `official_docs` xếp hạng chính xác.
+- **TESTED (live 8-container Docker polyglot stack `deploy/docker-compose.yml`, 0đ chi phí):**
+  - `docker compose -f deploy/docker-compose.yml up -d --build --wait core-api && (cd core-api && ./mvnw -B test -q)` → **exit `0` (`14/14` JUnit PASS)**.
+  - Nạp toàn bộ 530 đầu sách (`scripts/import_open_library.py --tiers tier1_textbook,tier2_monograph`) → **exit `0`**: `scanned=530, imported=505, skipped=25, failed=0, totalChunks=613584` (cộng `27.072` chunks Pilot = **`640.656` chunks sạch** trong `rag.document_chunks`, dung lượng kể cả `HNSW` + `GIN` = **`3.860 MB`**).
+    - Phân bổ thực tế trong `core.sources`: `otl` (`157`, `78` commercial), `openstax` (`60`, `7` commercial), `official_docs` (`10`, `9` commercial), `archive` (`208`, `135` commercial), `doab` (`57`, `43` commercial), `curated_classics` (`38`).
+  - Kiểm chứng Idempotent lần 2 (`--tiers tier1_textbook,tier2_monograph`) → **exit `0` (`scanned=530, imported=0, skipped=530, failed=0`)**.
+  - Kiểm chứng live authenticated `GET /v1/sources/discover` (xóa sạch user smoke sau test) & `RagRepository.search` (`hybrid_rrf`) trên cả 3 trụ cột:
+    - `lập trình python` → `otl:2131`, `openstax:775`, `otl:80` (3/3 giáo trình Python);
+    - `Next.js App Router React` → `official_docs:nextjs-docs`, `official_docs:react-docs`, `official_docs:mdn-web-docs`;
+    - `cơ sở dữ liệu PostgreSQL` → `official_docs:postgresql-docs` (`p.103 [indexes-multicolumn-indexes]`, `p.13 [planner-optimizer]`), `official_docs:fastapi-docs`, `otl:354`;
+    - `hệ phân tán Raft MapReduce` & `trí tuệ nhân tạo Transformer Attention` (`advanced/deep`) → tìm đúng `curated_classics:raft-consensus`, `curated_classics:mapreduce`, `curated_classics:vit`, `curated_classics:attention-is-all-you-need` (`p.4 [scaled-dot-product-attention]`);
+    - `official_docs:rust-book` → `p.49 [ch10-03-lifetime-syntax-summary]`, `p.22 [ch04-02-references-and-borrowing]`.
+- **NOT TESTED:**
+  - Sinh khóa học thực tế trên `530` sách bằng LLM/Embedding trả phí (`LLM_PROVIDER=deepseek`, `EMBEDDING_PROVIDER=openai_compatible`).
+- **ROLLBACK:** Thuần code xếp hạng trong `SourcesAndResearchController.java`; dữ liệu sách public nằm tách biệt ở `visibility='public'` / `owner_id='system:public_library'`.
+
+## 2026-11-27 — Cầu nối Manifest sạch (`Phase C6 → L3`), Batch Insert & Nạp Live Đợt 1 (Pilot 25 Giáo trình Tier-1)
+
+- Repository / branch: SopiSkill · nhánh `feat/library-foundation` (nối sau commit `0a5bc65`), kết nối trực tiếp gói bàn giao sạch `/home/nguyenhuu/Hoc Tap/Cào sách/library/sopiskill_manifest.jsonl` (`453` sách / `590.141` chunks `clean-v1`).
+- **IMPLEMENTED:**
+  - **Manifest-first Importer (`ai-engine/scripts/import_open_library.py`):** Ưu tiên đọc trực tiếp `sopiskill_manifest.jsonl` (`chunks.jsonl` + `brief.json`, `pipelineVersion = cleanerVersion`), tự lọc `curation_status = 'active'` khi fallback `catalog.db`, bổ sung `_strip_nul` lọc sạch byte NUL `\x00` / lone surrogates từ PDF toán/lập trình, và lọc Python tĩnh sạch 0 cảnh báo `bandit B608`.
+  - **Batch Insert & PostgreSQL UTF-8 Guard (`ai-engine/app/rag/repository.py`):** Chuyển `replace_document_chunks` sang `executemany` theo lô `500` chunks (và embed theo lô `512`) kèm `_sanitize_pg_text` và khóa độ dài `source_title <= 300`, `section_anchor <= 200`.
+  - **Sửa lỗi thực tế phát hiện qua live PostgreSQL 16:**
+    - `core-api/.../InternalCallbackController.java`: đổi `CASE WHEN :brief IS NOT NULL THEN CAST(:brief AS jsonb)` sang `COALESCE(CAST(:brief AS jsonb), brief)` / `CAST(:brief AS jsonb)` kèm kiểu tường minh `java.sql.Types.VARCHAR` (hết lỗi `BadSqlGrammarException` khi `brief = null`), lọc `\u0000` khỏi JSONB và khóa độ dài mọi cột (`suggested_topic <= 200`, `external_key <= 160`, `domain_slug <= 64`, `isbn <= 64`, `doi <= 128`).
+    - `ai-engine/app/agents/planner_agent.py`: `_normalize_proposal` đọc cả `lessons` lẫn `lessonTitles` (khắc phục lỗi đề cương rơi về 1 bài trên `Phase3IntegrationTest`).
+    - Cập nhật `PhaseLibraryFoundationTest.java` (tên cookie `csrf_token`, đọc `id` top-level từ `/v1/auth/register`, assertion `attributions` bền vững khi DB đã có sách thật) & `test_live_pgvector_redis.py` (kỳ vọng revision `0002_public_library_scope_index`) & thêm `test_phase_l3_importer_manifest_and_batch_insert` (`550` chunks đa lô).
+- **TESTED (live 8-container Docker polyglot stack `deploy/docker-compose.yml`, 0đ chi phí):**
+  - `docker compose -f deploy/docker-compose.yml up -d --build --wait` → **8/8 container UP & HEALTHY** (`Flyway V7` trên `core`, `Alembic 0002` trên `rag`).
+  - `cd core-api && ./mvnw -B test -q` → **exit `0` (`14/14` tests PASS, gồm `PhaseLibraryFoundationTest` & `Phase3IntegrationTest`)**.
+  - `cd ai-engine && PGVECTOR_TEST_URL=...@127.0.0.1:5439/sopiskill REDIS_TEST_URL=redis://127.0.0.1:6380/0 AI_API_LIVE_URL=http://127.0.0.1:8010 ../backend/.venv/bin/python -m pytest -v` → **exit `0` (`58/58` passed, gồm 3 live tests)**; sau bản vá `\x00`: `pytest -q -k "not test_live_"` → **exit `0` (`55 passed`)**; `bandit -r app scripts -q` → **exit `0` (`0` findings, `0` `#nosec`)**.
+  - Nạp live Pilot Đợt 1 (`scripts/import_open_library.py --tiers tier1_textbook --limit 25 --force`) → **exit `0` (`scanned=25, imported=25, skipped=0, failed=0, totalChunks=27072`)**.
+  - Kiểm chứng Idempotent lần 2 (`--tiers tier1_textbook --limit 25`) → **exit `0` (`scanned=25, imported=0, skipped=25, failed=0`)**.
+  - Kiểm chứng Live Hybrid RAG (`hybrid_rrf`) trên PostgreSQL `pgvector`: `public_library_sources = 25`, `public_library_chunks = 27072`; truy vấn tiếng Việt `"lập trình python vòng lặp và hàm"` tìm khớp trực tiếp vào *Introduction to Python Programming* (OpenStax, `p.48`, `p.72`).
+- **NOT TESTED:**
+  - Nạp mở rộng toàn bộ `185` cuốn `tier1_textbook` và `453` cuốn trong `sopiskill_manifest.jsonl` (mới nạp Pilot 25 cuốn đầu tiên theo kế hoạch Đợt 1).
+  - Sinh bài học thực tế bằng LLM/Embedding trả phí (`LLM_PROVIDER=deepseek`, `EMBEDDING_PROVIDER=openai_compatible`) trên 25 cuốn Pilot (hiện chạy chế độ 0đ `mock` + `hashing-ngram-v1`).
+- **ROLLBACK:** Không đổi schema DB; chỉ sửa code cầu nối trên nhánh `feat/library-foundation`.
+
+## 2026-11-27 — Open Library Knowledge Foundation (`PLAN-LIB-001`: Phase L0 → Phase L6)
+
+- Repository / branch: SopiSkill · nhánh `feat/library-foundation` (tách từ `feat/polyglot-phase9` commit `c859bce`); cập nhật song song kho nguồn `/home/nguyenhuu/Hoc Tap/Cào sách` cho Phase L0.
+- **IMPLEMENTED:**
+  - **Phase L0 (Harvester Cleanup & Structured Markdown):**
+    - Sửa phân loại `subject` trong `/home/nguyenhuu/Hoc Tap/Cào sách/src/book_harvester/config.py` (map trực tiếp danh mục gốc OpenStax/OTL, không ép `hint` lên vị trí 0), thêm `infer_pedagogy_tier` (`tier1_textbook | tier2_monograph | tier3_paper`) & `is_commercial_safe_license` (`CC BY`, `CC BY-SA`, `CC0`, `Public Domain`, loại `NC`/`ND`/`arXiv`).
+    - Nâng cấp `catalog.py`, `storage.py`, `cli.py` (`reclassify` cập nhật cả `subject`, `domains_json`, `pedagogy_tier`, `commercial_safe` + `books_fts`; `extract --sources openstax,otl --workers 8`), và nâng cấp `extractor.py` ánh xạ bookmark `reader.outline` vào đúng số trang `<!-- page: N -->` với tiêu đề `## / ### / ####`.
+  - **Phase L1 (Source → Proposal → Lesson Generator Pipeline):**
+    - `contracts/internal-ai.yaml`, `ai-engine/app/schemas/internal.py`, `ai-engine/app/api/internal.py`: thêm `POST /internal/proposal/generate` (Agent #3 `planner_agent.py`), bổ sung `sourceIds` vào `TutorStreamInternalRequest`.
+    - `core-api`: nối `AiEngineClient.generateProposal`, `CourseController.createInitialProposalIfAbsent` (sinh Proposal bám `primarySourceBrief`), `CourseController.approveCourse` (truyền `sourceIds`, `sourceBrief`, `sourceLanguages`), `TutorController` (truyền `sourceIds` + `sourceBrief`), và `InternalCallbackController.lessonReady` (lưu `grounding` + ghi idempotent `core.lesson_citations` chỉ chấp nhận `sourceId` thực sự thuộc `core.course_sources`).
+    - `ai-engine`: nối `worker_llm.py` & `lesson_generator.py` vào `RagRepository.search`, bọc đoạn trích sách bằng delimiter chống prompt injection `<<<SOURCE_EVIDENCE_START>>> ... <<<SOURCE_EVIDENCE_END>>>`, thu thập `citations[]` (`locator_verified`) và `grounding="source_grounded"`.
+  - **Phase L2 (Public Library Scope & Multi-Tenant Isolation):**
+    - Flyway additive `core-api/src/main/resources/db/migration/V7__public_library_catalog_and_course_source_roles.sql` (`external_key`, `domain_slug`, `pedagogy_tier`, `commercial_safe`, `isbn`, `doi` trên `core.sources`; `role` + unique partial index `primary` trên `core.course_sources`; `grounding` trên `core.lessons`).
+    - Alembic additive `ai-engine/alembic/versions/0002_public_library_scope_index.py` (partial index cho `owner_id = 'system:public_library'`).
+    - `ai-engine/app/rag/repository.py`: định nghĩa `PUBLIC_LIBRARY_OWNER_ID = "system:public_library"`, chỉ cho phép đọc chung khi `source_ids` được truyền tường minh (đã kiểm quyền bởi `core-api`), tuyệt đối khóa 0% rò rỉ nguồn `private` giữa user A và B.
+    - `core-api/src/main/java/com/sopiskill/core/sources/SourcesAndResearchController.java`: giới hạn tối đa 3 nguồn/khóa học (`primary` + `reference`), kiểm quyền server cho `sourceIds` khi search, fix `owner_id IS NULL` (`system:public_library`), và giữ chặn `404` khi user cố xóa nguồn `public`.
+  - **Phase L3 (Heading-Aware Markdown Chunker & System Importer CLI):**
+    - `ai-engine/app/rag/extractor.py`: thêm `chunk_markdown_by_headings` (bóc frontmatter, bỏ qua TOC lặp, bảo toàn 100% khối code ```` ``` ```` & LaTeX `$$...$$` / `\begin{...}`, chèn breadcrumb `[Source: ... | Section: ...]`, giữ `page_number` & `section_anchor`).
+    - `ai-engine/app/rag/brief_builder.py`: mở rộng `build_source_brief` ưu tiên toàn bộ tiêu đề cấp Chương xuyên suốt từ đầu đến cuối sách (tối đa `60` mục).
+    - `ai-engine/scripts/import_open_library.py` + `POST /internal/library/sources/upsert` (HMAC trên `core-api`): CLI nạp thư viện đọc `catalog.db?mode=ro`, idempotent theo `(external_key, content_hash, pipeline_version="md-heading-v1")`, tuân thủ tuyệt đối ranh giới schema `core.*` / `rag.*`.
+  - **Phase L4 (Cross-Lingual `VI ↔ EN` Query Bridge & Pedagogical Ranking):**
+    - `ai-engine/app/rag/query_bridge.py` + `tool_schemas.py` (`englishQuery`): cầu nối thuật ngữ song ngữ phủ 20 lĩnh vực cho `read_source` & `search_sources`.
+    - `SourcesAndResearchController.java` + `SopiProperties.java` (`billingCommercialStrictSources`): triển khai `GET /v1/sources/discover` và `POST/GET/accept /v1/courses/{id}/research-runs` với xếp hạng sư phạm (`tier1_textbook` đứng đầu, loại bỏ `tier3_paper` `arxiv` khỏi khóa `beginner`/`intermediate`).
+  - **Phase L5 (Strict Citation QA & Open-License Attribution):**
+    - `ai-engine/app/agents/validator_qa.py`: kiểm chứng locator tất định Tầng 1 (`verify_and_strip_ungrounded_block_citations`) tước sạch mọi `block.cite` ảo; truyền `source_excerpts` vào Tầng 2 (`review_lesson_with_tools`) để đối chiếu đáp án quiz với sách gốc.
+    - `core-api/.../LessonController.java` & `frontend/src/components/lesson/CitationChip.tsx`: trả về `attributions[]` chuẩn Creative Commons (`Access for free at openstax.org`), giữ nguyên 0 byte answer key trên `GET /v1/lessons/{id}`.
+  - **Phase L6 (Quantitative Evaluation Benchmark):**
+    - `ai-engine/tests/eval/fixtures_12_topics.json` (`12` chủ đề song ngữ: `9` có sách + `3` âm/adversarial prompt injection) & `ai-engine/tests/eval/eval_library_course_quality.py` (so sánh Chế độ A / B / C).
+- **TESTED (offline/mock, 0đ chi phí):**
+  - Harvester (`/home/nguyenhuu/Hoc Tap/Cào sách`): `.venv/bin/pytest -v` → **exit `0` (`20 passed in 0.35s`)**; `reclassify` trên `718` sách → sửa `141` sách sai `subject` (`0` sách Xã hội học/Chính trị/Giải phẫu/Nông nghiệp còn trong `computer-science`), `126` sách `commercial_safe=true`.
+  - `ai-engine`: `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_"` → **exit `0` (`54 passed, 3 deselected in 0.82s`)**; `bandit -r app -q` → **exit `0` (0 findings)**.
+  - Phase L6 Benchmark: `cd ai-engine && ../backend/.venv/bin/python tests/eval/eval_library_course_quality.py` → **exit `0`**: `Citation Locator Precision = 1.0`, `Cross-Tenant Private Leakage = 0`, `Schema & QA Pass Rate = 1.0`, `promptInjectionDelimited = true`, **`modeScores: A=0.4167, B=0.65, C=1.0`**.
+  - CLI Importer Dry-Run trên sách thật: `scripts/import_open_library.py --tiers tier1_textbook --domains computer-science,mathematics --limit 5 --dry-run` → **exit `0` (`scanned=5, imported=5, failed=0, totalChunks=9534`)**.
+  - `core-api`: `cd core-api && ./mvnw -B test-compile -q` → **exit `0`** (bao gồm `PhaseLibraryFoundationTest.java`).
+  - `frontend`: `cd frontend && npm run lint && npm run typecheck` → **exit `0`** (`0` warnings).
+- **NOT TESTED (do 8 container Docker SopiSkill đang tạm dừng theo yêu cầu trước đó):**
+  - Chạy live `cd core-api && ./mvnw -B test` (gồm `PhaseLibraryFoundationTest`) trên PostgreSQL 16 (Flyway `V7`) + Redis 7.
+  - Chạy live `alembic upgrade head` (`0002_public_library_scope_index`) & nạp thực tế Đợt 1 (`~25` cuốn Pilot) vào PostgreSQL/pgvector.
+  - Trích xuất nền `extracted.md` cho toàn bộ 199 sách Tier-1 (`openstax` + `otl`) đang chạy song song.
+- **ROLLBACK:** Thuần nhánh `feat/library-foundation` + các migration Flyway `V7` & Alembic `0002` đều thuần additive (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`).
+
+## 2026-11-26 — Chuẩn hóa Hệ thống 8 Agent & Bộ Tool Calling đầy đủ trên Official `openai` SDK (DeepSeek)
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase9` (nối sau commit `be351ba`; giữ nguyên ranh giới **không dùng LLM Agent** cho FSRS/BKT, chấm `mc/blank/order/match`, XP, Streak, Hearts, Billing, Quota).
+- **IMPLEMENTED:**
+  - **Khóa thiết kế 8 Agent trong Master Plan (`plans/sopiskill_master_parity_plan.md`):** cập nhật `DEC-023` và bổ sung Mục `1.1 Bảng đầy đủ 8 Agent & Bộ Tool của từng Agent` (giữ `#6 Reel Script Agent` đúng lộ trình Phase 10).
+  - **Mở rộng bộ JSON Schema Function Calling (`ai-engine/app/agents/tool_schemas.py` & `ai-engine/app/agents/providers.py`):**
+    - **#1 Source Research Agent (`ai-engine/app/agents/source_research_agent.py`, `POST /internal/sources/research`):** 3 tools `search_sources`, `inspect_source`, `commit_sources` (trần `SOURCE_RESEARCH_MAX_TURNS=6`, trả `max_turns` khi vượt trần; chốt 1–3 nguồn uy tín; lớp lọc code tất định `is_reputable_source_url` chặn domain rác như Quora/Pinterest/Medium và chặn SSRF/IP nội bộ/userinfo).
+    - **#2 Source Brief Agent (`ai-engine/app/rag/brief_builder.py`, `worker_ingest.py`):** 1-turn forced tool call `save_brief` (`build_source_brief_with_agent`) kèm kiểm soát cứng giới hạn schema và chỉ giữ các `anchor` có thật trong chunks (fallback tất định khi `mock`).
+    - **#3 Interview & Planner Agent (`ai-engine/app/agents/planner_agent.py`, `worker_llm.py`):** vòng bounded `read_source_brief` + `save_proposal` (trần `PLANNER_MAX_TURNS=4`, lỗi `max_turns` khi vượt trần) nối trực tiếp vào `handle_llm_job(jobType="generate_proposal")`.
+    - **#4 Lesson Generator Agent (`ai-engine/app/agents/lesson_generator.py`):** giữ `read_source` + `save_lesson` (`max_turns=6`) và bổ sung tool tùy chọn `generate_image` chỉ mở khi `LESSON_IMAGES_ENABLED=true` (từ chối `LESSON_IMAGES_DISABLED` khi tắt).
+    - **#5 Validator / QA Agent (`ai-engine/app/agents/validator_qa.py`):** chạy code lint tất định trước, sau đó Tier-2 LLM dùng 2 native tools **`flag_question`** (đúng 6 mã chuẩn `figure_mismatch | unanswerable | ambiguous | weak_distractors | wrong_answer | other`) và **`approve_lesson`** rồi chuyển sang Refiner tối đa 2 lượt.
+    - **#7 Short-Answer Grader (`short_grader.py`) & #8 AI Tutor "Sopi" (`tutor_agent.py` — 6 tools):** giữ nguyên đạt chuẩn 100%, không hồi quy.
+- **TESTED (100% offline qua `httpx.MockTransport` trên `openai.AsyncOpenAI` thật, 0đ chi phí):**
+  - `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_"` → **exit `0` (`49 passed, 3 deselected in 0.70s`)**:
+    - `tests/test_eight_agents_sdk.py` (`6/6`): kiểm chứng bộ lọc domain/SSRF của Agent #1, luồng 3-turn `search_sources → inspect_source → commit_sources` lọc sạch URL rác/SSRF mà LLM lén chèn, `max_turns` + endpoint ký HMAC `POST /internal/sources/research`; Agent #2 `save_brief` 1 lượt loại bỏ anchor bịa đặt; Agent #3 `read_source_brief → save_proposal` + `worker_llm` trả `errorCode="max_turns"`; Agent #4 `generate_image` gated + Agent #5 `flag_question(wrong_answer)` → Refiner sửa → `approve_lesson`.
+    - Toàn bộ 43 test trước đó (bao gồm `test_deepseek_tool_calling.py`, `test_lesson_generator_loop.py`, `test_phase5_tutor_six_tools.py`, `test_ai_api.py`) đều PASS.
+  - `cd ai-engine && ../backend/.venv/bin/python -m bandit -r app -q` → **exit `0` (0 findings)**.
+- **NOT TESTED:**
+  - Gọi trực tiếp mạng ngoài tới `https://api.deepseek.com/v1` hoặc `export.arxiv.org` thật (0đ chi phí / `WEB_INGEST_ENABLED=false` mặc định).
+  - 3 bài test live container (`test_live_pgvector_redis.py`) do Docker SopiSkill đang tạm dừng.
+- **ROLLBACK:** Thuần `ai-engine/` + docs (không đổi DB schema hay hợp đồng public của `core-api`/`frontend`).
+
+## 2026-11-25 — Nâng cấp Lesson Generator (`max_turns`), Refiner (6 mã `content_flags`) & Official `openai` SDK (`AsyncOpenAI`) Native Tool Calling cho DeepSeek
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase9` (chưa commit, vẫn giữ nguyên kiến trúc **Specialized Pipeline + Single Tool-Using Agent**, không thêm Router/Supervisor cho Sopi Tutor).
+- **IMPLEMENTED:**
+  - **Chuẩn hóa 6 mã lỗi `content_flags` (`ai-engine/app/agents/validator_qa.py`):** chuẩn hóa toàn bộ cảnh báo/lỗi kiểm định về đúng 6 mã chuẩn (`figure_mismatch`, `unanswerable`, `ambiguous`, `weak_distractors`, `wrong_answer`, `other`) kèm `rule` chi tiết (tích hợp `validate_teach_media_and_figure` cho `figure_mismatch`, kiểm tra `teach` quá ngắn/`blank` rỗng cho `unanswerable`, trùng đáp án MC/`short` thiếu tiêu chí cho `ambiguous`, lộ đáp án trong câu `blank`/thiếu distractor cho `weak_distractors`, lệch `answerIndex` cho `wrong_answer`).
+  - **Bounded Lesson Generator Tool Loop & Refiner (`ai-engine/app/agents/lesson_generator.py`, `ai-engine/app/core/config.py`):**
+    - Thêm cấu hình `LESSON_GEN_MAX_TURNS=6` và `LESSON_REFINE_MAX_ROUNDS=2`.
+    - `generate_lesson_with_qa_loop`: chạy vòng gọi tool có trần `max_turns` với 2 tool **`read_source`** (đọc đoạn trích từ `sourceBrief.sections` theo `anchor`/`query`) và **`save_lesson`** (chốt bản nháp bài học; truyền lịch sử `tool_history` gồm `id`, `tool`, `arguments`, `result` giữa các lượt; nếu chạm trần `max_turns` mà chưa gọi `save_lesson` sẽ ném `MaxTurnsExceededError` → `errorCode="max_turns"`).
+    - Vòng **`Writer → Validator QA → Refiner`** tối đa **2 lượt** (`apply_targeted_refinement` xử lý đích danh cả 6 mã `content_flags` + gọi `provider.refine_lesson` cho provider LLM thật).
+  - **Official `openai` SDK (`AsyncOpenAI`) & Bộ JSON Schema Tools chuẩn cho DeepSeek (`ai-engine/app/agents/tool_schemas.py`, `ai-engine/app/agents/providers.py`, `ai-engine/app/agents/tutor_agent.py`, `ai-engine/requirements.txt`):**
+    - Thêm dependency `openai>=1.55` (đã cài `openai==3.59.0` vào `backend/.venv`).
+    - Định nghĩa đầy đủ OpenAI/DeepSeek Function Calling JSON Schemas trong `tool_schemas.py`:
+      - **`TUTOR_TOOL_SCHEMAS` (đủ 6 tool Sopi Tutor):** `read_lesson`, `explain_deeper`, `read_source`, `flag_question` (enum đúng 6 mã `content_flags`), `revise_proposal`, `regenerate_unit`.
+      - **`LESSON_GENERATOR_TOOL_SCHEMAS` (2 tool sinh bài):** `read_source`, `save_lesson`.
+    - Nâng cấp `OpenAICompatibleProvider` chạy trên **`AsyncOpenAI`** chính thức với preset **`LLM_PROVIDER=deepseek`** (tự mặc định `base_url="https://api.deepseek.com/v1"`, `model="deepseek-chat"`, fail-fast nếu thiếu `LLM_API_KEY`):
+      - `next_lesson_generator_turn(...)`: gọi native `tools=LESSON_GENERATOR_TOOL_SCHEMAS`, tự phát lại hội thoại `assistant.tool_calls` + `role="tool"` đúng `tool_call_id`.
+      - `refine_lesson(...)`: gọi Refiner với `response_format={"type": "json_object"}` kèm 6 mã `content_flags` & `source_excerpts`.
+      - `plan_tutor_tool_call(...)`: chọn tool native từ tập `req.allowedTools`, kiểm tra chặt trên server (`chosen in req.allowedTools` và `chosen in REGISTERED_TOOLS`), truyền `tool_args` vào handler và fallback an toàn khi model gọi tool ngoài quyền.
+      - `stream_tutor_reply(...)`: dùng SDK streaming `client.chat.completions.create(..., stream=True)`.
+  - **Tích hợp `ai-worker-llm` (`ai-engine/app/workers/worker_llm.py`):** nối trực tiếp `generate_lesson_with_qa_loop` vào `handle_llm_job` (giữ nguyên callback cuốn chiếu Lesson-1-First `/internal/jobs/{jobId}/lesson-ready` và trả `errorCode="max_turns"` khi vượt trần vòng gọi tool).
+  - Cập nhật `DEC-023` trong `plans/sopiskill_master_parity_plan.md`.
+- **TESTED (100% offline/mock qua `httpx.MockTransport`, 0đ chi phí):**
+  - `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_"` → **exit `0` (`43 passed, 3 deselected in 0.66s`)**:
+    - `tests/test_lesson_generator_loop.py` (`4/4`): kiểm chứng `read_source → save_lesson`, chạm trần `max_turns` → `errorCode="max_turns"`, sửa sạch 6 mã `content_flags` trong `<= 2` lượt Refiner, dừng cứng ở lượt `2`.
+    - `tests/test_deepseek_tool_calling.py` (`4/4`): kiểm chứng `AsyncOpenAI` SDK thật qua `httpx.MockTransport` tới `https://api.deepseek.com/v1/chat/completions` (`model="deepseek-chat"`): preset mặc định & fail-fast thiếu key; Lesson Generator multi-turn `read_source → save_lesson` (đúng `assistant.tool_calls` + `role=tool` `tool_call_id`) → Tier-2 LLM QA → `refine_lesson`; Sopi Tutor native `regenerate_unit` + SSE streaming; từ chối tool trái phép ngoài `allowedTools` và fallback an toàn.
+  - `cd ai-engine && ../backend/.venv/bin/python -m bandit -r app -q` → **exit `0` (0 findings)**.
+- **NOT TESTED:**
+  - Gọi trực tiếp tới `https://api.deepseek.com/v1` bằng API key thật (chưa chạy theo nguyên tắc 0đ chi phí khi chưa có yêu cầu smoke test thật).
+  - 3 bài test live container (`test_live_pgvector_redis.py`) & rebuild container `ai-api` / `ai-worker-llm` (các container Docker SopiSkill đang được tạm dừng theo yêu cầu trước đó).
+- **ROLLBACK:** Thuần `ai-engine/` (không thay đổi schema DB hay API public của `core-api`/`frontend`).
+
 ## 2026-11-25 — Phase 8 — Offline-First IndexedDB Cache (6 Stores), Raw-Answer Outbox & Smart Prefetch
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase8` (tách từ `feat/polyglot-phase7` `72c7340`, đã push `origin/feat/polyglot-phase7`); giữ nguyên `backend/` cũ và `docker-compose.yml` gốc.
