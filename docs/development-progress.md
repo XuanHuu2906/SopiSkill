@@ -2,6 +2,35 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-27 — Multimodal Knowledge & Rich Lesson Engine (`Phase M0–M3`: Code, LaTeX, Interactive Plots & Grounded MinIO Figures)
+
+- Repository / branch: SopiSkill · nhánh `feat/library-foundation` + đồng bộ pipeline nguồn tại `/home/nguyenhuu/Hoc Tap/Cào sách` (`docs/multimodal-formulas-code-figures-plan.md`).
+- **IMPLEMENTED:**
+  - **Phase M0 (P0 — Rich Code, Diagram & Interactive Function Plot GenUI):**
+    - `frontend/src/components/lesson/MathText.tsx`: bổ sung `CodeBlockCard` (tokenizer tô màu cú pháp deterministic zero-`eval`, đánh số dòng, highlight dòng, nút Sao chép) cùng parser khối ```` ```lang ... ``` ```` và `` `inline code` `` song song KaTeX `$...$` / `$$...$$` và chip `{termKey}`.
+    - `frontend/src/components/lesson/FigureRenderer.tsx`: bỏ cắt cụt nhãn SVG `.slice(0, 18)` bằng `WrappedSvgText` tự xuống dòng tiếng Việt + hiển thị `edge.label` trên `flow`/`branch`/`hub`; bổ sung `kind: "code"` và `kind: "plot"` (`FunctionPlotSvg` dùng parser toán học recursive-descent zero-`eval`, crosshair `(x, y)` và thanh trượt tham số `params`).
+    - `ai-engine/app/agents/figure_validator.py` & `providers.py`: mở rộng `ALLOWED_FIGURE_KINDS` thành 6 loại (`formula`, `table`, `visual`, `diagram`, `code`, `plot`), kiểm định `plot` bằng Python `ast` whitelist chặn mọi injection, cập nhật prompt Lesson Writer.
+  - **Phase M1 (P1 — Source-First Lossless LaTeX & Original Figures, 0 GPU):**
+    - `/home/nguyenhuu/Hoc Tap/Cào sách/src/book_harvester/rich_sources.py` & lệnh `book-harvester enrich-rich`: trích xuất LaTeX gốc `<annotation encoding="application/x-tex">` từ arXiv HTML5/ar5iv (`29` bài `curated_classics`) và chuyển `<m:math>` MathML → LaTeX + ảnh `media/` + `<glossary>` từ 9 bộ OpenStax GitHub CNXML (*Calculus 1–3*, *University Physics 1–3*, *Chemistry 2e*, *Introductory Statistics 2e*, *Precalculus 2e*).
+  - **Phase M2 (P2 — Grounded Figure Registry trên MinIO + RAG `read_source` → `sourceFigureId`):**
+    - `ai-engine/alembic/versions/0003_source_figures_registry.py` & `app/db/session.py`: tạo bảng `rag.source_figures` (`UNIQUE(owner_id, source_id, figure_id)`).
+    - `ai-engine/app/rag/storage.py`, `repository.py`, `scripts/import_open_library.py`: bổ sung ghi/đọc MinIO WebP (`<= 1200px`, `quality=82`), `replace_source_figures`, `list_figures_for_sources`, `get_figure` khóa cứng theo `owner_id`/`PUBLIC_LIBRARY_OWNER_ID`.
+    - `ai-engine/app/api/internal.py`, `core-api/.../AiEngineClient.java` & `SourcesAndResearchController.java`: bổ sung `GET /v1/library/figures/{sourceId}/{figureId}` kiểm tra quyền sở hữu / `visibility='public'` trên `core.sources` trước khi proxy byte ảnh có chữ ký HMAC từ `ai-api` → MinIO (`X-Content-Type-Options: nosniff`, allowlist MIME).
+    - `ai-engine/app/workers/worker_llm.py` & `app/agents/lesson_generator.py`: `read_source` trả kèm `availableFigures`, `resolve_source_figure_ids` chỉ ánh xạ `sourceFigureId` đã xác thực sang `/v1/library/figures/...` (tự động loại bỏ ID bịa/SSRF và bảo toàn loại trừ lẫn nhau `figure` vs `image`).
+  - **Phase M3 (P3 — Selective CPU PDF Vector Figure BBox 200-DPI Extractor):**
+    - `/home/nguyenhuu/Hoc Tap/Cào sách/src/book_harvester/pdf_rich_router.py` & lệnh `book-harvester extract-pdf-figures`: trích xuất hình vẽ vector thuần & hybrid trong PDF bằng Caption + Union-BBox 200 DPI → WebP (giải quyết điểm mù của `page.get_images()`).
+  - **Làm sạch chất lượng dữ liệu kho live:** vá 4 lỗi `section_pruner.py` & `chunker.py` (cắt `Pre-Lab`/`Post-Lab`/`Chapter Review Questions`/phiếu trống `A, B, C, D` + chặn OCR vỡ chữ `garbled_ocr` + mục lục 20 trang đầu `is_front_toc_page`); gỡ có sao lưu 39 nguồn `archive:*` danh bạ/catalog/báo giấy scan cổ & trùng bản cũ khỏi PostgreSQL.
+- **TESTED (live 8-container Docker stack + MinIO + PostgreSQL 16, 0đ chi phí):**
+  - `cd frontend && npm run typecheck && npm run lint && npm run build` → **exit `0`** (`0` errors, `0` warnings, `16/16` pages).
+  - `cd ai-engine && pytest -v -k "not test_live_pgvector_redis" && bandit -r app scripts -q` → **exit `0`** (**`61/61` PASSED**, `0` Bandit findings, `0` `#nosec`).
+  - `cd core-api && ./mvnw -B test -q` → **exit `0`** (**`14/14` JUnit PASS**).
+  - `cd "/home/nguyenhuu/Hoc Tap/Cào sách" && uv run pytest -v` → **exit `0`** (**`31/31` PASSED**).
+  - Live PostgreSQL (`alembic upgrade head` → `0003_source_figures_registry`) & MinIO (`sopiskill-sources`): **`491` sách** (`20/20` lĩnh vực), **`545,425` chunks** (`10,871` code blocks · `4,465` display LaTeX `$$` · `11,538` inline LaTeX `$`), **`3,202` ảnh WebP** trên `32` đầu sách (`2,945` P1 + `257` P3 gồm `157` hình vector thuần).
+  - Live Docker rebuild (`ai-api`, `ai-worker-llm`, `core-api`, `frontend`) & authenticated E2E `GET /v1/library/figures/{sourceId}/{figureId}` verified (`401` unauthenticated, `200 image/webp` RIFF/WEBP authenticated).
+- **NOT TESTED:**
+  - Sinh bài học thật chọn `sourceFigureId` bằng real LLM trả phí (`LLM_PROVIDER=deepseek`); mở rộng P1/P3 sang các sách STEM còn lại ngoài 32 đầu sách đã nạp ảnh.
+- **ROLLBACK:** Thuần Git + Alembic `0003 → 0002` (chỉ thêm bảng mới `rag.source_figures`, không sửa bảng cũ).
+
 ## 2026-11-27 — Nạp Toàn Bộ Kho Tri Thức 530 Đầu Sách (`640.656` Chunks · 3 Trụ Cột) & Tối Ưu Discovery `LIMIT 2000`
 
 - Repository / branch: SopiSkill · nhánh `feat/library-foundation` (tiếp nối bản Pilot 25 cuốn bên dưới), kết nối đầy đủ 3 trụ cột từ `/home/nguyenhuu/Hoc Tap/Cào sách/library/sopiskill_manifest.jsonl`.

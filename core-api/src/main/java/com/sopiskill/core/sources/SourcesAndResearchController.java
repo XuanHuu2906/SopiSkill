@@ -87,6 +87,62 @@ public class SourcesAndResearchController {
 
     public record ResearchRequest(Integer maxSources, String learningGoals, String learnerLevel) {}
 
+    private static final java.util.regex.Pattern SAFE_FIGURE_ID =
+            java.util.regex.Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
+    private static final java.util.Set<String> ALLOWED_FIGURE_MIME = java.util.Set.of(
+            "image/webp", "image/png", "image/jpeg", "image/gif", "image/svg+xml"
+    );
+
+    @GetMapping("/v1/library/figures/{sourceId}/{figureId}")
+    public ResponseEntity<byte[]> getLibraryFigure(
+            @AuthenticationPrincipal AuthPrincipal principal,
+            @PathVariable String sourceId,
+            @PathVariable String figureId
+    ) {
+        if (!SAFE_FIGURE_ID.matcher(figureId).matches()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_FIGURE_ID", "Mã hình minh họa không hợp lệ.");
+        }
+        UUID srcUuid = IdCodec.parse(sourceId, "src");
+        var row = jdbc.sql("""
+                        SELECT owner_id, visibility
+                        FROM core.sources
+                        WHERE id = :id
+                        """)
+                .param("id", srcUuid)
+                .query((rs, rowNum) -> Map.of(
+                        "ownerId", rs.getObject("owner_id") == null ? "" : rs.getObject("owner_id").toString(),
+                        "visibility", rs.getString("visibility") == null ? "private" : rs.getString("visibility")
+                ))
+                .optional()
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "SOURCE_NOT_FOUND", "Không tìm thấy nguồn tài liệu."));
+
+        boolean isPublic = "public".equalsIgnoreCase(row.get("visibility"));
+        boolean isOwner = principal != null && principal.userId().toString().equals(row.get("ownerId"));
+        if (!isPublic && !isOwner) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "FORBIDDEN", "Bạn không có quyền truy cập hình minh họa của nguồn này.");
+        }
+
+        String ownerParam = principal != null ? IdCodec.format("usr", principal.userId()) : "";
+        String internalPath = "/internal/library/figures/" + sourceId + "/" + figureId
+                + (ownerParam.isBlank() ? "" : "?ownerId=" + java.net.URLEncoder.encode(ownerParam, java.nio.charset.StandardCharsets.UTF_8));
+        var upstream = aiEngine.getBinary(internalPath, "fig_" + figureId);
+        if (upstream.statusCode() == 404) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "FIGURE_NOT_FOUND", "Không tìm thấy hình minh họa.");
+        }
+        if (upstream.statusCode() < 200 || upstream.statusCode() >= 300) {
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "FIGURE_UPSTREAM_ERROR", "Không thể tải hình minh họa.");
+        }
+
+        String rawType = upstream.headers().firstValue("content-type").orElse("image/webp").split(";")[0].trim().toLowerCase();
+        String safeType = ALLOWED_FIGURE_MIME.contains(rawType) ? rawType : "application/octet-stream";
+
+        return ResponseEntity.ok()
+                .header("Content-Type", safeType)
+                .header("Cache-Control", "public, max-age=86400")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(upstream.body());
+    }
+
     @GetMapping("/v1/sources/ingest-config")
     public Map<String, Object> ingestConfig() {
         Map<String, Object> cfg = new LinkedHashMap<>();

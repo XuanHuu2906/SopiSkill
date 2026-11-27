@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import io
 import json
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -33,7 +36,8 @@ from app.core.config import Settings, get_settings
 from app.db.session import dispose_engine, ensure_sqlite_tables, get_session_factory
 from app.rag.brief_builder import build_source_brief
 from app.rag.extractor import chunk_markdown_by_headings
-from app.rag.repository import ChunkInput, PUBLIC_LIBRARY_OWNER_ID, RagRepository
+from app.rag.repository import ChunkInput, FigureInput, PUBLIC_LIBRARY_OWNER_ID, RagRepository
+from app.rag.storage import get_source_storage
 
 PIPELINE_VERSION = "md-heading-v1"
 CLEAN_MANIFEST_FILENAME = "sopiskill_manifest.jsonl"
@@ -58,6 +62,102 @@ class ImportSummary:
     missing_markdown: int = 0
     failed: int = 0
     total_chunks: int = 0
+    total_figures: int = 0
+
+
+def _normalize_figure_bytes(src_file: Path) -> tuple[bytes, str, str, int | None, int | None] | None:
+    """Normalize local figure image to compressed <=1200px WebP (preserving SVG as image/svg+xml)."""
+    if not src_file.exists() or not src_file.is_file():
+        return None
+    raw = src_file.read_bytes()
+    if not raw or len(raw) > 15 * 1024 * 1024:
+        return None
+    ext = src_file.suffix.lower()
+    if ext == ".svg" or raw[:300].lstrip().lower().startswith((b"<svg", b"<?xml")):
+        return raw, ".svg", "image/svg+xml", None, None
+
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(raw)) as img:
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
+            max_dim = 1200
+            if max(img.width, img.height) > max_dim:
+                img.thumbnail((max_dim, max_dim))
+            buf = io.BytesIO()
+            img.save(buf, format="WEBP", quality=82, method=4)
+            return buf.getvalue(), ".webp", "image/webp", img.width, img.height
+    except Exception:
+        mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+        if ext in mime_map:
+            return raw, ext, mime_map[ext], None, None
+        return None
+
+
+async def _upload_and_prepare_figures(
+    book: dict[str, Any],
+    *,
+    external_key: str,
+    cfg: Settings,
+    upload_figures: bool,
+) -> list[FigureInput]:
+    """Load `figures_manifest.json` next to `chunks.jsonl`, upload images to MinIO, and return FigureInputs."""
+    chunks_path_raw = book.get("chunks_path")
+    file_path_raw = book.get("file_path")
+    book_dir = (
+        Path(str(chunks_path_raw)).parent
+        if chunks_path_raw
+        else (Path(str(file_path_raw)).parent if file_path_raw else None)
+    )
+    if book_dir is None:
+        return []
+    manifest_file = book_dir / "figures_manifest.json"
+    if not manifest_file.exists():
+        return []
+
+    try:
+        raw_manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    raw_figs = raw_manifest.get("figures") or []
+    if not isinstance(raw_figs, list) or not raw_figs:
+        return []
+
+    safe_book_key = re.sub(r"[^a-zA-Z0-9._-]+", "_", external_key).strip("_")[:120] or "book"
+    storage = get_source_storage(cfg) if upload_figures else None
+    out: list[FigureInput] = []
+    for fg in raw_figs:
+        if not isinstance(fg, dict):
+            continue
+        fig_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(fg.get("figureId") or "")).strip("_")[:64]
+        local_raw = fg.get("localPath")
+        if not fig_id or not local_raw:
+            continue
+        norm = _normalize_figure_bytes(Path(str(local_raw)))
+        if norm is None:
+            continue
+        data, ext, ctype, width, height = norm
+        sha = hashlib.sha256(data).hexdigest()
+        minio_key = f"library-figures/{safe_book_key}/{fig_id}{ext}"
+        if storage is not None:
+            await storage.put_bytes_async(minio_key, data, content_type=ctype)
+        out.append(
+            FigureInput(
+                figure_id=fig_id,
+                minio_key=minio_key,
+                content_type=ctype,
+                section_anchor=str(fg.get("sectionAnchor") or "")[:200] or None,
+                page_number=int(fg["pageNumber"]) if fg.get("pageNumber") is not None else None,
+                label=str(fg.get("label") or fig_id)[:120],
+                caption=str(fg.get("caption") or "")[:1200],
+                alt_text=str(fg.get("alt") or fg.get("caption") or fig_id)[:800],
+                sha256=sha,
+                width=width,
+                height=height,
+            )
+        )
+    return out
 
 
 def load_manifest_candidates(
@@ -256,6 +356,7 @@ async def import_open_library_books(
     limit: int | None = None,
     dry_run: bool = False,
     force: bool = False,
+    upload_figures: bool = False,
     settings: Settings | None = None,
     callback_client: CoreApiCallbackClient | None = None,
     rag_repo: RagRepository | None = None,
@@ -380,6 +481,14 @@ async def import_open_library_books(
             source_id = str(resp["sourceId"])
             document_id = str(resp["documentId"])
 
+            should_upload_figs = upload_figures or (cfg.source_storage_backend or "").strip().lower() == "s3"
+            fig_inputs = await _upload_and_prepare_figures(
+                book,
+                external_key=external_key,
+                cfg=cfg,
+                upload_figures=should_upload_figs,
+            )
+
             if db is not None:
                 inserted = await repo.replace_document_chunks(
                     db,
@@ -390,6 +499,13 @@ async def import_open_library_books(
                     source_title=str(book["title"])[:300],
                     chunks=chunks,
                 )
+                if fig_inputs:
+                    summary.total_figures += await repo.replace_source_figures(
+                        db,
+                        owner_id=PUBLIC_LIBRARY_OWNER_ID,
+                        source_id=source_id,
+                        figures=fig_inputs,
+                    )
             else:
                 factory = get_session_factory()
                 async with factory() as session:
@@ -402,12 +518,19 @@ async def import_open_library_books(
                         source_title=str(book["title"])[:300],
                         chunks=chunks,
                     )
+                    if fig_inputs:
+                        summary.total_figures += await repo.replace_source_figures(
+                            session,
+                            owner_id=PUBLIC_LIBRARY_OWNER_ID,
+                            source_id=source_id,
+                            figures=fig_inputs,
+                        )
 
             summary.imported += 1
             summary.total_chunks += inserted
             if idx % 10 == 0 or idx == summary.scanned:
                 print(
-                    f"[{idx}/{summary.scanned}] imported={summary.imported} skipped={summary.skipped} chunks={summary.total_chunks}",
+                    f"[{idx}/{summary.scanned}] imported={summary.imported} skipped={summary.skipped} chunks={summary.total_chunks} figures={summary.total_figures}",
                     file=sys.stderr,
                 )
         except Exception as exc:  # noqa: BLE001
@@ -449,6 +572,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of books to process")
     parser.add_argument("--dry-run", action="store_true", help="Validate & load without writing to core-api or rag DB")
     parser.add_argument("--force", action="store_true", help="Force re-indexing even if content hash matches")
+    parser.add_argument("--upload-figures", action="store_true", help="Upload figures_manifest.json images to MinIO/S3")
     args = parser.parse_args()
 
     async def _run() -> ImportSummary:
@@ -463,6 +587,7 @@ def main() -> None:
                 limit=args.limit,
                 dry_run=args.dry_run,
                 force=args.force,
+                upload_figures=args.upload_figures,
             )
         finally:
             await dispose_engine()

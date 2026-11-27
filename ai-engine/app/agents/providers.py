@@ -1056,7 +1056,15 @@ class OpenAICompatibleProvider:
             f"You are SopiSkill's Lesson Writer. Write a rich structured lesson in {language}. "
             "If a course source_brief is provided and you need grounded details, call `read_source` first. "
             "Once ready, call `save_lesson` with a valid lesson object containing `title` and `blocks` "
-            f"(teach, mc, blank, order, match, short, speed, recap).{img_note}"
+            "(teach, mc, blank, order, match, short, speed, recap). "
+            "Inside `teach.paragraphs`, use KaTeX `$...$` / `$$...$$` for math and backticks `` `code` `` for code tokens. "
+            "For `teach.figure`, choose the best pedagogical kind: `formula` (KaTeX `latex`), `code` (`language`, `code`, optional `highlightLines`), "
+            "`plot` (safe math `functions: [{expr, label}]`, `xRange`, `yRange`, optional `params` sliders and `points`), "
+            "`diagram` (layout in `flow|timeline|branch|cycle|stack|split|hub` with `nodes` and optional labeled `edges`), "
+            "`table` (`headers`, `rows`), or `visual` (`items`). "
+            "If `read_source` returns `availableFigures` from the textbook, you may attach a verified figure "
+            "on a `teach` block using `sourceFigureId` (only when `figure` is omitted; never invent external image URLs)."
+            f"{img_note}"
         )
         user_ctx: dict[str, Any] = {
             "topic": topic,

@@ -32,6 +32,21 @@ class ChunkInput:
     section_anchor: str | None = None
 
 
+@dataclass(frozen=True)
+class FigureInput:
+    figure_id: str
+    minio_key: str
+    content_type: str = "image/webp"
+    section_anchor: str | None = None
+    page_number: int | None = None
+    label: str | None = None
+    caption: str | None = None
+    alt_text: str | None = None
+    sha256: str | None = None
+    width: int | None = None
+    height: int | None = None
+
+
 def _pgvector_literal(vec: list[float]) -> str:
     return "[" + ",".join(f"{float(v):.6f}" for v in vec) + "]"
 
@@ -424,5 +439,218 @@ class RagRepository:
             else text("DELETE FROM document_chunks WHERE source_id = :source_id")
         )
         res = await db.execute(stmt, {"source_id": source_id})
+        fig_stmt = (
+            text("DELETE FROM rag.source_figures WHERE source_id = :source_id")
+            if dialect == "postgresql"
+            else text("DELETE FROM source_figures WHERE source_id = :source_id")
+        )
+        await db.execute(fig_stmt, {"source_id": source_id})
         await db.commit()
         return int(res.rowcount or 0)
+
+    async def replace_source_figures(
+        self,
+        db: AsyncSession,
+        *,
+        owner_id: str,
+        source_id: str,
+        figures: list[FigureInput],
+    ) -> int:
+        """Replace all indexed figures for `(owner_id, source_id)` transactionally."""
+        dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+        if dialect == "postgresql":
+            await db.execute(
+                text("DELETE FROM rag.source_figures WHERE owner_id = :owner_id AND source_id = :source_id"),
+                {"owner_id": owner_id, "source_id": source_id},
+            )
+            insert_sql = text(
+                """
+                INSERT INTO rag.source_figures (
+                    id, owner_id, source_id, figure_id, section_anchor, page_number,
+                    label, caption, alt_text, minio_key, content_type, sha256, width, height
+                ) VALUES (
+                    :id, :owner_id, :source_id, :figure_id, :section_anchor, :page_number,
+                    :label, :caption, :alt_text, :minio_key, :content_type, :sha256, :width, :height
+                )
+                """
+            )
+        else:
+            await db.execute(
+                text("DELETE FROM source_figures WHERE owner_id = :owner_id AND source_id = :source_id"),
+                {"owner_id": owner_id, "source_id": source_id},
+            )
+            insert_sql = text(
+                """
+                INSERT INTO source_figures (
+                    id, owner_id, source_id, figure_id, section_anchor, page_number,
+                    label, caption, alt_text, minio_key, content_type, sha256, width, height
+                ) VALUES (
+                    :id, :owner_id, :source_id, :figure_id, :section_anchor, :page_number,
+                    :label, :caption, :alt_text, :minio_key, :content_type, :sha256, :width, :height
+                )
+                """
+            )
+        if not figures:
+            await db.commit()
+            return 0
+        rows = []
+        seen_fig_ids: set[str] = set()
+        for fig in figures:
+            fid = _sanitize_pg_text(fig.figure_id)[:64].strip()
+            if not fid or fid in seen_fig_ids:
+                continue
+            seen_fig_ids.add(fid)
+            rows.append(
+                {
+                    "id": f"{source_id}:{fid}"[:128],
+                    "owner_id": owner_id,
+                    "source_id": source_id,
+                    "figure_id": fid,
+                    "section_anchor": (_sanitize_pg_text(fig.section_anchor)[:200] or None)
+                    if fig.section_anchor
+                    else None,
+                    "page_number": fig.page_number,
+                    "label": (_sanitize_pg_text(fig.label)[:120] or None) if fig.label else None,
+                    "caption": _sanitize_pg_text(fig.caption)[:1200] if fig.caption else None,
+                    "alt_text": _sanitize_pg_text(fig.alt_text)[:800] if fig.alt_text else None,
+                    "minio_key": _sanitize_pg_text(fig.minio_key)[:512],
+                    "content_type": (_sanitize_pg_text(fig.content_type)[:64] or "image/webp"),
+                    "sha256": (_sanitize_pg_text(fig.sha256)[:64] or None) if fig.sha256 else None,
+                    "width": fig.width,
+                    "height": fig.height,
+                }
+            )
+        if rows:
+            for start in range(0, len(rows), 200):
+                await db.execute(insert_sql, rows[start : start + 200])
+        await db.commit()
+        return len(rows)
+
+    async def list_figures_for_sources(
+        self,
+        db: AsyncSession,
+        *,
+        owner_id: str,
+        source_ids: list[str],
+        section_anchors: list[str] | None = None,
+        query: str | None = None,
+        limit: int = 4,
+    ) -> list[dict]:
+        """Return strictly scoped figures for authorized `source_ids`, ranked by anchor & query overlap."""
+        if not source_ids:
+            return []
+        dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+        if dialect == "postgresql":
+            res = await db.execute(
+                text(
+                    """
+                    SELECT source_id, figure_id, section_anchor, page_number,
+                           label, caption, alt_text, minio_key, content_type, width, height
+                    FROM rag.source_figures
+                    WHERE owner_id IN (:owner_id, :public_owner_id)
+                      AND source_id = ANY(:source_ids)
+                    ORDER BY page_number ASC NULLS LAST, figure_id ASC
+                    LIMIT 120
+                    """
+                ),
+                {
+                    "owner_id": owner_id,
+                    "public_owner_id": PUBLIC_LIBRARY_OWNER_ID,
+                    "source_ids": list(source_ids),
+                },
+            )
+            candidates = [dict(r) for r in res.mappings().all()]
+        else:
+            res = await db.execute(
+                text(
+                    """
+                    SELECT source_id, figure_id, section_anchor, page_number,
+                           label, caption, alt_text, minio_key, content_type, width, height
+                    FROM source_figures
+                    WHERE owner_id IN (:owner_id, :public_owner_id)
+                    ORDER BY page_number ASC, figure_id ASC
+                    """
+                ),
+                {"owner_id": owner_id, "public_owner_id": PUBLIC_LIBRARY_OWNER_ID},
+            )
+            allowed = set(source_ids)
+            candidates = [dict(r) for r in res.mappings().all() if r["source_id"] in allowed]
+
+        if not candidates:
+            return []
+
+        anchor_set = {a.strip().lower() for a in (section_anchors or []) if a and a.strip()}
+        q_tokens = set(tokenize(fold_diacritics(query or "")))
+
+        def _score(row: dict) -> tuple[float, int, str]:
+            score = 0.0
+            row_anchor = str(row.get("section_anchor") or "").strip().lower()
+            if row_anchor and row_anchor in anchor_set:
+                score += 10.0
+            elif row_anchor and any(a in row_anchor or row_anchor in a for a in anchor_set):
+                score += 4.0
+            if q_tokens:
+                text_blob = f"{row.get('label') or ''} {row.get('caption') or ''} {row.get('alt_text') or ''}"
+                f_tokens = set(tokenize(fold_diacritics(text_blob)))
+                score += float(len(q_tokens & f_tokens)) * 1.5
+            return (-score, int(row.get("page_number") or 999999), str(row.get("figure_id") or ""))
+
+        ranked = sorted(candidates, key=_score)[: max(1, min(limit, 8))]
+        return [
+            {
+                "figureId": str(r["figure_id"]),
+                "sourceId": str(r["source_id"]),
+                "sectionAnchor": r.get("section_anchor"),
+                "pageNumber": r.get("page_number"),
+                "label": r.get("label") or r["figure_id"],
+                "caption": r.get("caption") or "",
+                "alt": r.get("alt_text") or r.get("caption") or r.get("label") or "Textbook figure",
+                "contentType": r.get("content_type") or "image/webp",
+                "url": f"/v1/library/figures/{r['source_id']}/{r['figure_id']}",
+            }
+            for r in ranked
+        ]
+
+    async def get_figure(
+        self,
+        db: AsyncSession,
+        *,
+        source_id: str,
+        figure_id: str,
+        owner_id: str | None = None,
+    ) -> dict | None:
+        """Fetch a single figure registry record by `(source_id, figure_id)` scoped to owner or public library."""
+        dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+        owners = [PUBLIC_LIBRARY_OWNER_ID]
+        if owner_id and owner_id != PUBLIC_LIBRARY_OWNER_ID:
+            owners.append(owner_id)
+        if dialect == "postgresql":
+            res = await db.execute(
+                text(
+                    """
+                    SELECT source_id, figure_id, minio_key, content_type, label, caption, alt_text
+                    FROM rag.source_figures
+                    WHERE source_id = :source_id
+                      AND figure_id = :figure_id
+                      AND owner_id = ANY(:owners)
+                    LIMIT 1
+                    """
+                ),
+                {"source_id": source_id, "figure_id": figure_id, "owners": owners},
+            )
+            row = res.mappings().first()
+            return dict(row) if row else None
+        res = await db.execute(
+            text(
+                """
+                SELECT owner_id, source_id, figure_id, minio_key, content_type, label, caption, alt_text
+                FROM source_figures
+                WHERE source_id = :source_id AND figure_id = :figure_id
+                """
+            ),
+            {"source_id": source_id, "figure_id": figure_id},
+        )
+        for r in res.mappings().all():
+            if r["owner_id"] in owners:
+                return dict(r)
+        return None

@@ -105,6 +105,24 @@ public class AiEngineClient {
         }
     }
 
+    public HttpResponse<byte[]> getBinary(String path, String correlationId) {
+        byte[] empty = new byte[0];
+        Map<String, String> signed = signer.signHeaders("GET", path, empty, correlationId);
+        String url = props.aiEngineUrl().replaceAll("/+$", "") + path;
+
+        HttpRequest.Builder req = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(15))
+                .GET();
+        signed.forEach(req::header);
+
+        try {
+            return httpClient.send(req.build(), HttpResponse.BodyHandlers.ofByteArray());
+        } catch (Exception ex) {
+            throw new RuntimeException("Failed fetching binary from ai-engine " + path + ": " + ex.getMessage(), ex);
+        }
+    }
+
     public void deleteRagResourceBestEffort(String path, String correlationId) {
         try {
             byte[] empty = new byte[0];

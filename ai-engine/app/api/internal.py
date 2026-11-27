@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.pedagogy import extract_learner_profile
@@ -16,6 +16,7 @@ from app.core.sse import SSE_HEADERS
 from app.db.session import get_db
 from app.rag.embedding import EmbeddingConfigError
 from app.rag.repository import RagRepository
+from app.rag.storage import SourceStorageError, get_source_storage
 from app.schemas.internal import (
     GradeShortRequest,
     GradeShortResponse,
@@ -180,3 +181,43 @@ async def rag_delete_source(
     rag_repo = _get_rag_repo_or_503()
     deleted = await rag_repo.delete_by_source(db, source_id)
     return RagDeleteResponse(deletedChunks=deleted)
+
+
+_SAFE_FIGURE_CONTENT_TYPES = frozenset(
+    {"image/webp", "image/png", "image/jpeg", "image/gif", "image/svg+xml"}
+)
+
+
+@router.get("/library/figures/{source_id}/{figure_id}")
+async def get_library_figure_bytes(
+    source_id: str,
+    figure_id: str,
+    ownerId: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Serve verified figure bytes from MinIO/S3 strictly after `core-api` enforces source authorization."""
+    rag_repo = _get_rag_repo_or_503()
+    fig = await rag_repo.get_figure(db, source_id=source_id, figure_id=figure_id, owner_id=ownerId)
+    if fig is None:
+        raise HTTPException(status_code=404, detail={"code": "FIGURE_NOT_FOUND", "message": "Figure not found."})
+
+    ctype = str(fig.get("content_type") or "image/webp").lower()
+    if ctype not in _SAFE_FIGURE_CONTENT_TYPES:
+        ctype = "application/octet-stream"
+
+    storage = get_source_storage()
+    try:
+        data = await storage.get_bytes(str(fig["minio_key"]))
+    except SourceStorageError as exc:
+        raise HTTPException(
+            status_code=404, detail={"code": "FIGURE_OBJECT_MISSING", "message": str(exc)}
+        ) from exc
+
+    return Response(
+        content=data,
+        media_type=ctype,
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

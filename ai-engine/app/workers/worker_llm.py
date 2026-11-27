@@ -52,6 +52,7 @@ def _build_hybrid_rag_source_reader(
         raw_query = " ".join(p for p in [anchor or "", query or ""] if p).strip() or "overview"
         effective_query = expand_cross_lingual_query(raw_query, source_languages=source_languages)
         hits = []
+        figures: list[dict[str, Any]] = []
         try:
             if db is not None:
                 _, hits = await rag_repo.search(
@@ -61,6 +62,15 @@ def _build_hybrid_rag_source_reader(
                     query=effective_query,
                     source_ids=source_ids,
                     top_k=4,
+                )
+                anchors = [h.sectionAnchor for h in hits if h.sectionAnchor]
+                figures = await rag_repo.list_figures_for_sources(
+                    db,
+                    owner_id=owner_id,
+                    source_ids=source_ids,
+                    section_anchors=anchors,
+                    query=effective_query,
+                    limit=4,
                 )
             else:
                 factory = get_session_factory()
@@ -73,12 +83,22 @@ def _build_hybrid_rag_source_reader(
                         source_ids=source_ids,
                         top_k=4,
                     )
+                    anchors = [h.sectionAnchor for h in hits if h.sectionAnchor]
+                    figures = await rag_repo.list_figures_for_sources(
+                        session,
+                        owner_id=owner_id,
+                        source_ids=source_ids,
+                        section_anchors=anchors,
+                        query=effective_query,
+                        limit=4,
+                    )
         except Exception as exc:  # noqa: BLE001 — fallback cleanly to brief reader
             logger.warning("worker_llm_rag_read_fallback error_type=%s", type(exc).__name__)
             hits = []
+            figures = []
 
         if hits:
-            return [
+            excerpts = [
                 {
                     "chunkId": h.chunkId,
                     "sourceId": h.sourceId,
@@ -93,6 +113,9 @@ def _build_hybrid_rag_source_reader(
                 }
                 for h in hits
             ]
+            if figures:
+                excerpts[0]["availableFigures"] = figures
+            return excerpts
         return await brief_fallback(anchor, query)
 
     return _read
