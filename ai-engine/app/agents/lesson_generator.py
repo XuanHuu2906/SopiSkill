@@ -42,6 +42,7 @@ class LessonGenerationResult:
 
 
 SourceReaderFn = Callable[[str | None, str | None], Awaitable[list[dict[str, Any]]]]
+ImageGeneratorFn = Callable[[str, str, str], Awaitable[dict[str, Any]]]
 
 
 def _default_source_reader(source_brief: dict[str, Any] | None) -> SourceReaderFn:
@@ -238,12 +239,14 @@ async def generate_lesson_with_qa_loop(
     provider: LLMProvider,
     source_brief: dict[str, Any] | None = None,
     source_reader: SourceReaderFn | None = None,
+    image_generator: ImageGeneratorFn | None = None,
+    image_gen_enabled: bool = False,
     max_turns: int = 6,
     max_refine_rounds: int = 2,
     llm_qa_enabled: bool = False,
 ) -> LessonGenerationResult:
     """Runs:
-      1. Bounded Tool-Using Lesson Writer Loop (`read_source` + `save_lesson`, cap `max_turns`).
+      1. Bounded Tool-Using Lesson Writer Loop (`read_source`, `save_lesson`, optional `generate_image`, cap `max_turns`).
       2. `Writer -> Validator QA -> Refiner` loop (cap `max_refine_rounds = 2` on the 6 `content_flags`).
     """
     safe_max_turns = max(1, min(max_turns, 12))
@@ -259,23 +262,26 @@ async def generate_lesson_with_qa_loop(
     total_completion_tokens = 0
     last_usage = LlmUsageOut(provider=provider.name, model=provider.model)
 
-    # Phase A: Bounded tool-using Writer loop (`read_source` + `save_lesson`, capped by `max_turns`)
+    # Phase A: Bounded tool-using Writer loop (`read_source` + `save_lesson` [+ optional `generate_image`])
     turn_planner = getattr(provider, "next_lesson_generator_turn", None)
     for turn in range(1, safe_max_turns + 1):
         turns_used = turn
         call_id = f"call_turn_{turn}"
         if callable(turn_planner):
-            action = await turn_planner(
-                turn=turn,
-                topic=topic,
-                unit_title=unit_title,
-                lesson_title=lesson_title,
-                language=language,
-                learner_profile=learner_profile,
-                source_brief=source_brief,
-                source_excerpts=source_excerpts,
-                tool_history=tool_history,
-            )
+            planner_kwargs: dict[str, Any] = {
+                "turn": turn,
+                "topic": topic,
+                "unit_title": unit_title,
+                "lesson_title": lesson_title,
+                "language": language,
+                "learner_profile": learner_profile,
+                "source_brief": source_brief,
+                "source_excerpts": source_excerpts,
+                "tool_history": tool_history,
+            }
+            if image_gen_enabled:
+                planner_kwargs["image_gen_enabled"] = True
+            action = await turn_planner(**planner_kwargs)
             call_id = str(action.get("id") or call_id)
             tool_name = str(action.get("tool") or "")
             tool_args = action.get("arguments") or {}
@@ -319,6 +325,38 @@ async def generate_lesson_with_qa_loop(
                     "result": {"excerpts": excerpts},
                 }
             )
+        elif tool_name == "generate_image":
+            tools_called.append("generate_image")
+            if not image_gen_enabled:
+                tool_history.append(
+                    {
+                        "id": call_id,
+                        "tool": "generate_image",
+                        "arguments": tool_args if isinstance(tool_args, dict) else {},
+                        "result": {"error": "LESSON_IMAGES_DISABLED"},
+                    }
+                )
+            else:
+                prompt = str(tool_args.get("prompt") or lesson_title)[:400]
+                alt = str(tool_args.get("alt") or lesson_title)[:200]
+                aspect = str(tool_args.get("aspectRatio") or "16:9")
+                if callable(image_generator):
+                    img_res = await image_generator(prompt, alt, aspect)
+                else:
+                    img_res = {
+                        "url": f"/assets/generated/{turn}.png",
+                        "alt": alt,
+                        "aspectRatio": aspect,
+                        "note": "Attach ONLY on a teach block without `figure`.",
+                    }
+                tool_history.append(
+                    {
+                        "id": call_id,
+                        "tool": "generate_image",
+                        "arguments": {"prompt": prompt, "alt": alt, "aspectRatio": aspect},
+                        "result": img_res,
+                    }
+                )
         elif tool_name == "save_lesson":
             tools_called.append("save_lesson")
             candidate = tool_args.get("lesson") if isinstance(tool_args, dict) else None

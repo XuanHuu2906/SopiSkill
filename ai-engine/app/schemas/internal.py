@@ -189,3 +189,28 @@ class RagSearchResponse(BaseModel):
 
 class RagDeleteResponse(BaseModel):
     deletedChunks: int = Field(ge=0)
+
+
+class SourceResearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = Field(min_length=1, max_length=300)
+    language: Literal["vi", "en"] = "vi"
+    maxTurns: int = Field(default=6, ge=1, le=10)
+
+
+class ResearchedSourceOut(BaseModel):
+    url: str
+    title: str
+    sourceKind: Literal["arxiv_url", "web_url"]
+    domain: str
+    rationale: str = ""
+    excerpt: str = ""
+
+
+class SourceResearchResponse(BaseModel):
+    sources: list[ResearchedSourceOut] = Field(default_factory=list)
+    toolsCalled: list[str] = Field(default_factory=list)
+    rejectedUrls: list[str] = Field(default_factory=list)
+    turnsUsed: int = Field(default=0, ge=0)
+    usage: LlmUsageOut = Field(default_factory=LlmUsageOut)

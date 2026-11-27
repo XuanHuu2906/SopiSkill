@@ -258,27 +258,58 @@ async def run_two_tier_validator(
     if report.blocking_errors:
         return report
 
-    # Tier 2 LLM QA pass (opt-in flag or warning escalation on real provider; 0 cost in mock mode)
+    # Tier 2 LLM QA pass: native `flag_question` (6 codes) / `approve_lesson` tools on real provider (0 cost in mock mode)
     if (llm_qa_enabled or report.content_flags) and provider.name != "mock":
         try:
-            verdict, _usage = await provider.grade_short_dispute(
-                language="en",
-                prompt="Audit this lesson JSON for factual contradictions, wrong answers, or ambiguous quiz questions.",
-                learner_answer=str(lesson.get("title") or ""),
-                accepted_answers=["clear and accurate"],
-                rubric="Return got_it if no critical quality issues, else not_yet with concise feedback.",
-            )
-            if not verdict.get("correct", True):
-                fb = str(verdict.get("feedback") or "Flagged by Tier-2 LLM QA pass.")
-                inferred_code = "wrong_answer" if "wrong" in fb.lower() else "other"
-                report.content_flags.append(
-                    _flag(
-                        block_index=None,
-                        code=inferred_code,
-                        rule="LLM_QA_REVIEW_FLAG",
-                        details=fb,
-                    )
+            tool_reviewer = getattr(provider, "review_lesson_with_tools", None)
+            if callable(tool_reviewer):
+                raw_flags, approved, _usage = await tool_reviewer(
+                    lesson=lesson,
+                    static_flags=report.content_flags,
+                    language="en",
                 )
+                blocks = lesson.get("blocks") if isinstance(lesson.get("blocks"), list) else []
+                existing_keys = {(f.get("blockIndex"), f.get("code")) for f in report.content_flags}
+                for item in raw_flags:
+                    if not isinstance(item, dict):
+                        continue
+                    code = str(item.get("code") or "other")
+                    if code not in CONTENT_FLAG_CODES:
+                        code = "other"
+                    b_idx = item.get("blockIndex")
+                    safe_idx = b_idx if isinstance(b_idx, int) and 0 <= b_idx < len(blocks) else None
+                    details = str(item.get("details") or "Flagged by Validator QA Agent.")[:400]
+                    if (safe_idx, code) not in existing_keys:
+                        existing_keys.add((safe_idx, code))
+                        report.content_flags.append(
+                            _flag(
+                                block_index=safe_idx,
+                                code=code,
+                                rule="LLM_QA_FLAG_QUESTION",
+                                details=details,
+                            )
+                        )
+                if approved and not raw_flags:
+                    logger.debug("tier2_llm_qa_approved title=%s", str(lesson.get("title") or "")[:80])
+            else:
+                verdict, _usage = await provider.grade_short_dispute(
+                    language="en",
+                    prompt="Audit this lesson JSON for factual contradictions, wrong answers, or ambiguous quiz questions.",
+                    learner_answer=str(lesson.get("title") or ""),
+                    accepted_answers=["clear and accurate"],
+                    rubric="Return got_it if no critical quality issues, else not_yet with concise feedback.",
+                )
+                if not verdict.get("correct", True):
+                    fb = str(verdict.get("feedback") or "Flagged by Tier-2 LLM QA pass.")
+                    inferred_code = "wrong_answer" if "wrong" in fb.lower() else "other"
+                    report.content_flags.append(
+                        _flag(
+                            block_index=None,
+                            code=inferred_code,
+                            rule="LLM_QA_REVIEW_FLAG",
+                            details=fb,
+                        )
+                    )
         except Exception as exc:  # noqa: BLE001 — Tier 2 QA is advisory, never blocks valid lesson
             logger.warning("tier2_llm_qa_skipped error_type=%s", type(exc).__name__)
     return report

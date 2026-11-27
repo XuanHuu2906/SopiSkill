@@ -10,10 +10,11 @@ from typing import Any
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.providers import LLMProvider, ProviderConfigError, get_llm_provider
 from app.core.callback_client import CoreApiCallbackClient
 from app.core.config import Settings, get_settings
 from app.db.session import dispose_engine, ensure_sqlite_tables, get_session_factory
-from app.rag.brief_builder import build_source_brief
+from app.rag.brief_builder import build_source_brief_with_agent
 from app.rag.extractor import (
     ExtractionError,
     chunk_text_with_provenance,
@@ -37,12 +38,19 @@ async def handle_ingest_job(
     callback_client: CoreApiCallbackClient | None = None,
     settings: Settings | None = None,
     storage=None,
+    provider: LLMProvider | None = None,
 ) -> dict[str, Any]:
     """Extract, chunk, embed into `rag.document_chunks`, and notify `core-api` via signed callback."""
     cfg = settings or get_settings()
     repo = rag_repo or RagRepository(settings=cfg)
     cb = callback_client or CoreApiCallbackClient(settings=cfg)
     store = storage or get_source_storage(cfg)
+    llm_provider = provider
+    if llm_provider is None:
+        try:
+            llm_provider = get_llm_provider(cfg)
+        except ProviderConfigError:
+            llm_provider = None
 
     source_id = str(message["sourceId"])
     document_id = str(message["documentId"])
@@ -105,7 +113,11 @@ async def handle_ingest_job(
                 source_title=resolved_title,
                 chunks=chunks,
             )
-            brief_bundle = build_source_brief(title=resolved_title, chunks=chunks)
+            brief_bundle = await build_source_brief_with_agent(
+                title=resolved_title,
+                chunks=chunks,
+                provider=llm_provider,
+            )
             callback_payload = {
                 "sourceId": source_id,
                 "documentId": document_id,

@@ -11,7 +11,11 @@ from typing import Any, Protocol
 import httpx
 
 from app.agents.tool_schemas import (
-    LESSON_GENERATOR_TOOL_SCHEMAS,
+    PLANNER_TOOL_SCHEMAS,
+    SOURCE_BRIEF_TOOL_SCHEMAS,
+    SOURCE_RESEARCH_TOOL_SCHEMAS,
+    VALIDATOR_QA_TOOL_SCHEMAS,
+    get_lesson_generator_tool_schemas,
     get_tutor_tool_schemas,
 )
 from app.core.config import Settings, get_settings
@@ -876,42 +880,14 @@ class OpenAICompatibleProvider:
             "usage": usage,
         }
 
-    async def next_lesson_generator_turn(
-        self,
-        *,
-        turn: int,
-        topic: str,
-        unit_title: str,
-        lesson_title: str,
-        language: str,
-        learner_profile: dict[str, Any],
-        source_brief: dict[str, Any] | None,
-        source_excerpts: list[dict[str, Any]],
-        tool_history: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        """Executes 1 turn of DeepSeek/OpenAI native Function Calling (`read_source` / `save_lesson`)."""
-        sys_p = (
-            f"You are SopiSkill's Lesson Writer. Write a rich structured lesson in {language}. "
-            "If a course source_brief is provided and you need grounded details, call `read_source` first. "
-            "Once ready, call `save_lesson` with a valid lesson object containing `title` and `blocks` "
-            "(teach, mc, blank, order, match, short, speed, recap). Never put both `figure` and `image` on the same teach block."
-        )
-        user_ctx: dict[str, Any] = {
-            "topic": topic,
-            "unitTitle": unit_title,
-            "lessonTitle": lesson_title,
-            "language": language,
-            "learnerProfile": learner_profile,
-        }
-        if isinstance(source_brief, dict):
-            user_ctx["sourceBrief"] = source_brief
-
-        msgs: list[dict[str, Any]] = [
-            {"role": "system", "content": sys_p},
-            {"role": "user", "content": json.dumps(user_ctx, ensure_ascii=False)},
-        ]
-        for hist in tool_history or []:
-            call_id = str(hist.get("id") or f"call_{turn}")
+    @staticmethod
+    def _append_tool_history(
+        msgs: list[dict[str, Any]],
+        tool_history: list[dict[str, Any]] | None,
+        fallback_turn: int,
+    ) -> None:
+        for idx, hist in enumerate(tool_history or [], start=1):
+            call_id = str(hist.get("id") or f"call_{fallback_turn}_{idx}")
             msgs.append(
                 {
                     "role": "assistant",
@@ -936,9 +912,171 @@ class OpenAICompatibleProvider:
                 }
             )
 
+    async def next_source_research_turn(
+        self,
+        *,
+        turn: int,
+        topic: str,
+        language: str,
+        tool_history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Agent #1 (Source Research): 1 turn of native `search_sources` / `inspect_source` / `commit_sources`."""
+        sys_p = (
+            f"You are SopiSkill's Source Research Agent (language={language}). "
+            "Find and select 1 to 3 authoritative primary sources (arXiv papers, official docs, standards) "
+            "for the learner's topic. Call `search_sources` first, optionally `inspect_source` on promising URLs, "
+            "and finish by calling `commit_sources` with 1..3 vetted sources."
+        )
+        msgs: list[dict[str, Any]] = [
+            {"role": "system", "content": sys_p},
+            {"role": "user", "content": json.dumps({"topic": topic, "language": language}, ensure_ascii=False)},
+        ]
+        self._append_tool_history(msgs, tool_history, turn)
         tool_calls, _content, usage = await self._chat_with_tools(
             messages=msgs,
-            tools=LESSON_GENERATOR_TOOL_SCHEMAS,
+            tools=SOURCE_RESEARCH_TOOL_SCHEMAS,
+            tool_choice="required",
+            max_tokens=1200,
+            temperature=0.1,
+        )
+        if not tool_calls:
+            return {"id": f"call_src_{turn}", "tool": "", "arguments": {}, "usage": usage}
+        first = tool_calls[0]
+        return {
+            "id": first["id"],
+            "tool": first["name"],
+            "arguments": first["arguments"],
+            "usage": usage,
+        }
+
+    async def build_source_brief_with_tool(
+        self,
+        *,
+        title: str | None,
+        excerpt_payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], LlmUsageOut]:
+        """Agent #2 (`src_` Source Brief): single-turn forced `save_brief` tool call."""
+        sys_p = (
+            "You are SopiSkill's Source Brief Agent. Compress the provided extracted document chunks and headings "
+            "into a strict grounded `source.brief` by calling `save_brief` in a single turn. "
+            "Use ONLY anchors present in `availableAnchors`. Never fabricate claims not grounded in the excerpts."
+        )
+        msgs: list[dict[str, Any]] = [
+            {"role": "system", "content": sys_p},
+            {"role": "user", "content": json.dumps({"title": title, **excerpt_payload}, ensure_ascii=False)},
+        ]
+        tool_calls, _content, usage = await self._chat_with_tools(
+            messages=msgs,
+            tools=SOURCE_BRIEF_TOOL_SCHEMAS,
+            tool_choice={"type": "function", "function": {"name": "save_brief"}},
+            max_tokens=1600,
+            temperature=0.1,
+        )
+        if not tool_calls or tool_calls[0].get("name") != "save_brief":
+            return {}, usage
+        args = tool_calls[0].get("arguments")
+        return (args if isinstance(args, dict) else {}), usage
+
+    async def next_planner_turn(
+        self,
+        *,
+        turn: int,
+        topic: str,
+        language: str,
+        learner_profile: dict[str, Any],
+        has_source_brief: bool,
+        tool_history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Agent #3 (`itn_` Interview & Planner): 1 turn of `read_source_brief` / `save_proposal`."""
+        sys_p = (
+            f"You are SopiSkill's Course Planner Agent (language={language}). "
+            "If `hasSourceBrief` is true and you have not read it yet, call `read_source_brief` first so the "
+            "course units align with the attached document. Then call `save_proposal` with the tailored syllabus."
+        )
+        msgs: list[dict[str, Any]] = [
+            {"role": "system", "content": sys_p},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "topic": topic,
+                        "language": language,
+                        "learnerProfile": learner_profile,
+                        "hasSourceBrief": has_source_brief,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        self._append_tool_history(msgs, tool_history, turn)
+        schemas = (
+            PLANNER_TOOL_SCHEMAS
+            if has_source_brief
+            else [s for s in PLANNER_TOOL_SCHEMAS if s["function"]["name"] == "save_proposal"]
+        )
+        tool_calls, _content, usage = await self._chat_with_tools(
+            messages=msgs,
+            tools=schemas,
+            tool_choice="required",
+            max_tokens=2000,
+            temperature=0.2,
+        )
+        if not tool_calls:
+            return {"id": f"call_plan_{turn}", "tool": "", "arguments": {}, "usage": usage}
+        first = tool_calls[0]
+        return {
+            "id": first["id"],
+            "tool": first["name"],
+            "arguments": first["arguments"],
+            "usage": usage,
+        }
+
+    async def next_lesson_generator_turn(
+        self,
+        *,
+        turn: int,
+        topic: str,
+        unit_title: str,
+        lesson_title: str,
+        language: str,
+        learner_profile: dict[str, Any],
+        source_brief: dict[str, Any] | None,
+        source_excerpts: list[dict[str, Any]],
+        tool_history: list[dict[str, Any]] | None = None,
+        image_gen_enabled: bool = False,
+    ) -> dict[str, Any]:
+        """Agent #4 (`gen_` Lesson Generator): 1 turn of `read_source` / `save_lesson` (+ optional `generate_image`)."""
+        img_note = (
+            " You may optionally call `generate_image` for a visual illustration, "
+            "but NEVER attach both `figure` and `image` to the same teach block."
+            if image_gen_enabled
+            else " Never put both `figure` and `image` on the same teach block."
+        )
+        sys_p = (
+            f"You are SopiSkill's Lesson Writer. Write a rich structured lesson in {language}. "
+            "If a course source_brief is provided and you need grounded details, call `read_source` first. "
+            "Once ready, call `save_lesson` with a valid lesson object containing `title` and `blocks` "
+            f"(teach, mc, blank, order, match, short, speed, recap).{img_note}"
+        )
+        user_ctx: dict[str, Any] = {
+            "topic": topic,
+            "unitTitle": unit_title,
+            "lessonTitle": lesson_title,
+            "language": language,
+            "learnerProfile": learner_profile,
+        }
+        if isinstance(source_brief, dict):
+            user_ctx["sourceBrief"] = source_brief
+
+        msgs: list[dict[str, Any]] = [
+            {"role": "system", "content": sys_p},
+            {"role": "user", "content": json.dumps(user_ctx, ensure_ascii=False)},
+        ]
+        self._append_tool_history(msgs, tool_history, turn)
+
+        tool_calls, _content, usage = await self._chat_with_tools(
+            messages=msgs,
+            tools=get_lesson_generator_tool_schemas(image_gen_enabled=image_gen_enabled),
             tool_choice="required",
             max_tokens=4000,
             temperature=0.2,
@@ -952,6 +1090,50 @@ class OpenAICompatibleProvider:
             "arguments": first["arguments"],
             "usage": usage,
         }
+
+    async def review_lesson_with_tools(
+        self,
+        *,
+        lesson: dict[str, Any],
+        static_flags: list[dict[str, Any]],
+        language: str = "en",
+    ) -> tuple[list[dict[str, Any]], bool, LlmUsageOut]:
+        """Agent #5 (`fnd_` Validator / QA): native `flag_question` (6 codes) / `approve_lesson`."""
+        sys_p = (
+            f"You are SopiSkill's Validator QA Agent (language={language}). "
+            "Audit every block in the lesson for factual errors, wrong quiz answers, ambiguous wording, "
+            "unanswerable prompts, weak distractors, or figure mismatches. "
+            "For EACH defect found, call `flag_question` with the exact blockIndex and one of the 6 canonical codes "
+            "(figure_mismatch, unanswerable, ambiguous, weak_distractors, wrong_answer, other). "
+            "If the lesson is accurate and ready to publish, call `approve_lesson`."
+        )
+        msgs: list[dict[str, Any]] = [
+            {"role": "system", "content": sys_p},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"lesson": lesson, "existingStaticFlags": static_flags},
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        tool_calls, _content, usage = await self._chat_with_tools(
+            messages=msgs,
+            tools=VALIDATOR_QA_TOOL_SCHEMAS,
+            tool_choice="required",
+            max_tokens=1000,
+            temperature=0.1,
+        )
+        flagged: list[dict[str, Any]] = []
+        approved = False
+        for tc in tool_calls:
+            name = tc.get("name")
+            args = tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {}
+            if name == "flag_question":
+                flagged.append(args)
+            elif name == "approve_lesson":
+                approved = True
+        return flagged, approved, usage
 
     async def refine_lesson(
         self,

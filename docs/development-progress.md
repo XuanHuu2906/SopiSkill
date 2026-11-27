@@ -2,6 +2,28 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-26 — Chuẩn hóa Hệ thống 8 Agent & Bộ Tool Calling đầy đủ trên Official `openai` SDK (DeepSeek)
+
+- Repository / branch: SopiSkill · nhánh `feat/polyglot-phase9` (nối sau commit `be351ba`; giữ nguyên ranh giới **không dùng LLM Agent** cho FSRS/BKT, chấm `mc/blank/order/match`, XP, Streak, Hearts, Billing, Quota).
+- **IMPLEMENTED:**
+  - **Khóa thiết kế 8 Agent trong Master Plan (`plans/sopiskill_master_parity_plan.md`):** cập nhật `DEC-023` và bổ sung Mục `1.1 Bảng đầy đủ 8 Agent & Bộ Tool của từng Agent` (giữ `#6 Reel Script Agent` đúng lộ trình Phase 10).
+  - **Mở rộng bộ JSON Schema Function Calling (`ai-engine/app/agents/tool_schemas.py` & `ai-engine/app/agents/providers.py`):**
+    - **#1 Source Research Agent (`ai-engine/app/agents/source_research_agent.py`, `POST /internal/sources/research`):** 3 tools `search_sources`, `inspect_source`, `commit_sources` (trần `SOURCE_RESEARCH_MAX_TURNS=6`, trả `max_turns` khi vượt trần; chốt 1–3 nguồn uy tín; lớp lọc code tất định `is_reputable_source_url` chặn domain rác như Quora/Pinterest/Medium và chặn SSRF/IP nội bộ/userinfo).
+    - **#2 Source Brief Agent (`ai-engine/app/rag/brief_builder.py`, `worker_ingest.py`):** 1-turn forced tool call `save_brief` (`build_source_brief_with_agent`) kèm kiểm soát cứng giới hạn schema và chỉ giữ các `anchor` có thật trong chunks (fallback tất định khi `mock`).
+    - **#3 Interview & Planner Agent (`ai-engine/app/agents/planner_agent.py`, `worker_llm.py`):** vòng bounded `read_source_brief` + `save_proposal` (trần `PLANNER_MAX_TURNS=4`, lỗi `max_turns` khi vượt trần) nối trực tiếp vào `handle_llm_job(jobType="generate_proposal")`.
+    - **#4 Lesson Generator Agent (`ai-engine/app/agents/lesson_generator.py`):** giữ `read_source` + `save_lesson` (`max_turns=6`) và bổ sung tool tùy chọn `generate_image` chỉ mở khi `LESSON_IMAGES_ENABLED=true` (từ chối `LESSON_IMAGES_DISABLED` khi tắt).
+    - **#5 Validator / QA Agent (`ai-engine/app/agents/validator_qa.py`):** chạy code lint tất định trước, sau đó Tier-2 LLM dùng 2 native tools **`flag_question`** (đúng 6 mã chuẩn `figure_mismatch | unanswerable | ambiguous | weak_distractors | wrong_answer | other`) và **`approve_lesson`** rồi chuyển sang Refiner tối đa 2 lượt.
+    - **#7 Short-Answer Grader (`short_grader.py`) & #8 AI Tutor "Sopi" (`tutor_agent.py` — 6 tools):** giữ nguyên đạt chuẩn 100%, không hồi quy.
+- **TESTED (100% offline qua `httpx.MockTransport` trên `openai.AsyncOpenAI` thật, 0đ chi phí):**
+  - `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_"` → **exit `0` (`49 passed, 3 deselected in 0.70s`)**:
+    - `tests/test_eight_agents_sdk.py` (`6/6`): kiểm chứng bộ lọc domain/SSRF của Agent #1, luồng 3-turn `search_sources → inspect_source → commit_sources` lọc sạch URL rác/SSRF mà LLM lén chèn, `max_turns` + endpoint ký HMAC `POST /internal/sources/research`; Agent #2 `save_brief` 1 lượt loại bỏ anchor bịa đặt; Agent #3 `read_source_brief → save_proposal` + `worker_llm` trả `errorCode="max_turns"`; Agent #4 `generate_image` gated + Agent #5 `flag_question(wrong_answer)` → Refiner sửa → `approve_lesson`.
+    - Toàn bộ 43 test trước đó (bao gồm `test_deepseek_tool_calling.py`, `test_lesson_generator_loop.py`, `test_phase5_tutor_six_tools.py`, `test_ai_api.py`) đều PASS.
+  - `cd ai-engine && ../backend/.venv/bin/python -m bandit -r app -q` → **exit `0` (0 findings)**.
+- **NOT TESTED:**
+  - Gọi trực tiếp mạng ngoài tới `https://api.deepseek.com/v1` hoặc `export.arxiv.org` thật (0đ chi phí / `WEB_INGEST_ENABLED=false` mặc định).
+  - 3 bài test live container (`test_live_pgvector_redis.py`) do Docker SopiSkill đang tạm dừng.
+- **ROLLBACK:** Thuần `ai-engine/` + docs (không đổi DB schema hay hợp đồng public của `core-api`/`frontend`).
+
 ## 2026-11-25 — Nâng cấp Lesson Generator (`max_turns`), Refiner (6 mã `content_flags`) & Official `openai` SDK (`AsyncOpenAI`) Native Tool Calling cho DeepSeek
 
 - Repository / branch: SopiSkill · nhánh `feat/polyglot-phase9` (chưa commit, vẫn giữ nguyên kiến trúc **Specialized Pipeline + Single Tool-Using Agent**, không thêm Router/Supervisor cho Sopi Tutor).

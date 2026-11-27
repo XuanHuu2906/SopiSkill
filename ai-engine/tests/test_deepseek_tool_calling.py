@@ -154,12 +154,20 @@ async def test_deepseek_sdk_lesson_generator_multi_turn_tool_calls_and_refiner()
                 ),
             )
 
-        # Call 3: Tier-2 LLM QA escalation pass (triggered because static QA raised `ambiguous`)
+        # Call 3: Tier-2 Validator QA native tools (`flag_question` / `approve_lesson`)
         if call_idx == 3:
+            qa_tools = [t["function"]["name"] for t in body["tools"]]
+            assert qa_tools == ["flag_question", "approve_lesson"]
             return httpx.Response(
                 200,
-                json=_chat_completion_json_resp(
-                    {"correct": True, "score": 0.9, "feedback": "Static ambiguous flag already captured."}
+                json=_chat_completion_tool_resp(
+                    call_id="call_qa_3",
+                    tool_name="flag_question",
+                    arguments={
+                        "blockIndex": 1,
+                        "code": "ambiguous",
+                        "details": "Duplicate options in MC block 1 must be distinct.",
+                    },
                 ),
             )
 

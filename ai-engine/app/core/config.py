@@ -89,9 +89,11 @@ class Settings(BaseSettings):
     ocr_enabled: bool = False
     ocr_engine: str = "vietocr"
 
-    # Phase 3+: 2-Tier Validator QA, bounded Lesson Generator tool loop & Refiner
+    # Phase 3+: 8-Agent bounds (Source Research, Planner, Lesson Generator, 2-Tier Validator QA & Refiner)
     validator_llm_enabled: bool = False
     lesson_images_enabled: bool = False
+    source_research_max_turns: int = 6
+    planner_max_turns: int = 4
     lesson_gen_max_turns: int = 6
     lesson_refine_max_rounds: int = 2
 

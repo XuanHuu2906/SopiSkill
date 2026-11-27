@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from app.rag.repository import ChunkInput
+
+logger = logging.getLogger(__name__)
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _NOTATION_RE = re.compile(r"\b(?:O\([^)]+\)|[A-Z]{2,6}|[a-zA-Z]+_[a-zA-Z0-9]+)\b")
@@ -129,3 +132,98 @@ def build_source_brief(
         "durationMinutes": duration_minutes,
         "suggestedTopic": suggested_topic or "Khóa học từ tài liệu",
     }
+
+
+async def build_source_brief_with_agent(
+    *,
+    title: str | None,
+    chunks: list[ChunkInput],
+    headings: list[tuple[str, str]] | None = None,
+    provider: Any | None = None,
+) -> dict[str, Any]:
+    """Agent #2 (`src_` Source Brief): 1-turn `save_brief` SDK call with deterministic anchor clamping.
+
+    - In `mock` mode (or if `provider` has no `build_source_brief_with_tool`), returns deterministic `build_source_brief`.
+    - On real DeepSeek/OpenAI providers, invokes `save_brief` ONCE and clamps all fields to hard schema bounds
+      while keeping `sections[].anchor` grounded strictly in observed document anchors.
+    """
+    baseline = build_source_brief(title=title, chunks=chunks, headings=headings)
+    tool_fn = getattr(provider, "build_source_brief_with_tool", None) if provider is not None else None
+    if not callable(tool_fn) or getattr(provider, "name", "mock") == "mock":
+        return baseline
+
+    valid_anchors = [str(s["anchor"]) for s in baseline["brief"]["sections"] if s.get("anchor")]
+    valid_anchor_set = set(valid_anchors)
+    excerpt_payload = {
+        "availableAnchors": valid_anchors[:40],
+        "headings": [{"anchor": a, "heading": h} for a, h in (headings or [])[:40]],
+        "chunkExcerpts": [
+            {
+                "anchor": c.section_anchor or (f"p{c.page_number}" if c.page_number else f"c{c.chunk_index + 1}"),
+                "text": _clean_sentence(c.content, max_len=360),
+            }
+            for c in chunks[:24]
+        ],
+    }
+    try:
+        raw_brief, _usage = await tool_fn(title=title, excerpt_payload=excerpt_payload)
+        if not isinstance(raw_brief, dict) or not raw_brief:
+            return baseline
+
+        what = _clean_sentence(str(raw_brief.get("what") or ""), max_len=280) or baseline["brief"]["what"]
+        raw_claims = [
+            _clean_sentence(str(c), max_len=220)
+            for c in (raw_brief.get("claims") or [])
+            if str(c).strip()
+        ]
+        claims = raw_claims[:10] or baseline["brief"]["claims"]
+        raw_notation = [
+            str(n).strip()[:32]
+            for n in (raw_brief.get("notation") or [])
+            if str(n).strip()
+        ]
+        notation = raw_notation[:20] or baseline["brief"]["notation"]
+        raw_assumes = [
+            _clean_sentence(str(a), max_len=120)
+            for a in (raw_brief.get("assumes") or [])
+            if str(a).strip()
+        ]
+        assumes = raw_assumes[:10] or baseline["brief"]["assumes"]
+
+        grounded_sections: list[dict[str, str]] = []
+        seen_anchors: set[str] = set()
+        for sec in (raw_brief.get("sections") or [])[:40]:
+            if not isinstance(sec, dict):
+                continue
+            anchor = str(sec.get("anchor") or "").strip()
+            if valid_anchor_set and anchor not in valid_anchor_set:
+                continue
+            if not anchor or anchor in seen_anchors:
+                continue
+            seen_anchors.add(anchor)
+            grounded_sections.append(
+                {
+                    "anchor": anchor,
+                    "heading": str(sec.get("heading") or anchor).strip()[:120],
+                    "gist": _clean_sentence(str(sec.get("gist") or ""), max_len=160),
+                }
+            )
+        sections = grounded_sections or baseline["brief"]["sections"]
+        suggested_topic = (
+            str(raw_brief.get("suggestedTopic") or "").strip()[:200] or baseline["suggestedTopic"]
+        )
+        return {
+            "brief": {
+                "what": what,
+                "claims": claims,
+                "notation": notation,
+                "assumes": assumes,
+                "sections": sections,
+            },
+            "wordCount": baseline["wordCount"],
+            "durationMinutes": baseline["durationMinutes"],
+            "suggestedTopic": suggested_topic,
+        }
+    except Exception as exc:  # noqa: BLE001 — fallback cleanly to deterministic anchor brief
+        logger.warning("source_brief_agent_fallback error_type=%s", type(exc).__name__)
+        return baseline

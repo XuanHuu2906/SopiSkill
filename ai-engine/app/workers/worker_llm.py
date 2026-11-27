@@ -13,6 +13,10 @@ from app.agents.lesson_generator import (
     MaxTurnsExceededError,
     generate_lesson_with_qa_loop,
 )
+from app.agents.planner_agent import (
+    PlannerMaxTurnsError,
+    generate_proposal_with_tools,
+)
 from app.agents.providers import LLMProvider, get_llm_provider
 from app.core.callback_client import CoreApiCallbackClient
 from app.core.config import Settings, get_settings
@@ -45,14 +49,22 @@ async def handle_llm_job(
     callback_payload: dict[str, Any]
     try:
         if job_type == "generate_proposal":
-            proposal, usage = await llm.generate_proposal(topic, language, learner_profile)
+            source_brief = payload.get("sourceBrief") if isinstance(payload.get("sourceBrief"), dict) else None
+            plan_res = await generate_proposal_with_tools(
+                topic=topic,
+                language=language,
+                learner_profile=learner_profile,
+                provider=llm,
+                source_brief=source_brief,
+                max_turns=cfg.planner_max_turns,
+            )
             callback_payload = {
                 "jobId": job_id,
                 "idempotencyKey": idempotency_key,
                 "status": "completed",
-                "result": {"proposal": proposal},
+                "result": {"proposal": plan_res.proposal},
                 "contentFlags": [],
-                "usage": usage.model_dump(),
+                "usage": plan_res.usage.model_dump(),
             }
         elif job_type in {"generate_course", "generate_lesson", "regenerate_unit"}:
             course_id = str(message.get("courseId") or "")
@@ -82,6 +94,7 @@ async def handle_llm_job(
                         learner_profile=lesson_profile,
                         provider=llm,
                         source_brief=source_brief,
+                        image_gen_enabled=cfg.lesson_images_enabled,
                         max_turns=cfg.lesson_gen_max_turns,
                         max_refine_rounds=cfg.lesson_refine_max_rounds,
                         llm_qa_enabled=cfg.validator_llm_enabled,
@@ -127,7 +140,7 @@ async def handle_llm_job(
             }
         else:
             raise ValueError(f"Unsupported jobType: {job_type!r}")
-    except MaxTurnsExceededError as exc:
+    except (MaxTurnsExceededError, PlannerMaxTurnsError) as exc:
         callback_payload = {
             "jobId": job_id,
             "idempotencyKey": idempotency_key,

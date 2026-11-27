@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.pedagogy import extract_learner_profile
 from app.agents.providers import ProviderConfigError, get_llm_provider
 from app.agents.short_grader import grade_short_answer
+from app.agents.source_research_agent import SourceResearchMaxTurnsError, research_sources_with_agent
 from app.agents.tutor_agent import stream_tutor_turn
 from app.core.sse import SSE_HEADERS
 from app.db.session import get_db
@@ -24,6 +25,9 @@ from app.schemas.internal import (
     RagDeleteResponse,
     RagSearchRequest,
     RagSearchResponse,
+    ResearchedSourceOut,
+    SourceResearchRequest,
+    SourceResearchResponse,
     TutorStreamInternalRequest,
 )
 
@@ -48,6 +52,30 @@ def _get_rag_repo_or_503() -> RagRepository:
             status_code=503,
             detail={"code": "EMBEDDING_NOT_CONFIGURED", "message": str(exc)},
         ) from exc
+
+
+@router.post("/sources/research", response_model=SourceResearchResponse)
+async def sources_research(body: SourceResearchRequest) -> SourceResearchResponse:
+    provider = _get_provider_or_503()
+    try:
+        res = await research_sources_with_agent(
+            topic=body.topic,
+            language=body.language,
+            provider=provider,
+            max_turns=body.maxTurns,
+        )
+    except SourceResearchMaxTurnsError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "max_turns", "message": str(exc)},
+        ) from exc
+    return SourceResearchResponse(
+        sources=[ResearchedSourceOut(**s.to_dict()) for s in res.sources],
+        toolsCalled=res.tools_called,
+        rejectedUrls=res.rejected_urls,
+        turnsUsed=res.turns_used,
+        usage=res.usage,
+    )
 
 
 @router.post("/interview/questions", response_model=InterviewQuestionsResponse)
