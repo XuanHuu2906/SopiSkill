@@ -1,0 +1,68 @@
+{{- if .Values.frontend.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-frontend-hpa
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "sopiskill.fullname" . }}-frontend
+  minReplicas: {{ .Values.frontend.hpa.minReplicas }}
+  maxReplicas: {{ .Values.frontend.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.frontend.hpa.targetCPUUtilizationPercentage }}
+---
+{{- end }}
+{{- if .Values.coreApi.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-core-api-hpa
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "sopiskill.fullname" . }}-core-api
+  minReplicas: {{ .Values.coreApi.hpa.minReplicas }}
+  maxReplicas: {{ .Values.coreApi.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.coreApi.hpa.targetCPUUtilizationPercentage }}
+---
+{{- end }}
+{{- if .Values.aiApi.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-ai-api-hpa
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "sopiskill.fullname" . }}-ai-api
+  minReplicas: {{ .Values.aiApi.hpa.minReplicas }}
+  maxReplicas: {{ .Values.aiApi.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.aiApi.hpa.targetCPUUtilizationPercentage }}
+{{- end }}

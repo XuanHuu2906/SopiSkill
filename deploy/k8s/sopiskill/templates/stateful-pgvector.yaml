@@ -1,0 +1,84 @@
+{{- if .Values.pgvector.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "sopiskill.pgHost" . }}
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgvector-db
+spec:
+  serviceName: {{ include "sopiskill.pgHost" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: pgvector-db
+  template:
+    metadata:
+      labels:
+        {{- include "sopiskill.labels" . | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: pgvector-db
+    spec:
+      containers:
+        - name: pgvector
+          image: {{ printf "%s:%s" .Values.images.pgvector.repository .Values.images.pgvector.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args:
+            - "-c"
+            - {{ printf "shared_buffers=%s" .Values.pgvector.sharedBuffers | quote }}
+            - "-c"
+            - "max_connections=200"
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.pgvector.port }}
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          envFrom:
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.pgvector.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.pgvector.storageSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sopiskill.pgHost" . }}
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgvector-db
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: pgvector-db
+  ports:
+    - name: postgres
+      port: {{ .Values.pgvector.port }}
+      targetPort: {{ .Values.pgvector.port }}
+{{- end }}

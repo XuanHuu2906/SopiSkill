@@ -3,7 +3,7 @@
 > **Tài liệu tham chiếu gốc:**
 > - Báo cáo đối chiếu tính năng: [polyskill-analysis-report.md](file:///home/nguyenhuu/Hoc%20Tap/Reverse%20Engineer/polyskill-analysis-report.md)
 > - Kiến trúc mục tiêu: [spring-boot-python-k8s-architecture.md](file:///home/nguyenhuu/Hoc%20Tap/Reverse%20Engineer/docs/spring-boot-python-k8s-architecture.md)
-> - Trạng thái cập nhật (`2026-11-27`): Nhánh `feat/library-foundation` đã hoàn tất **Phase 0 → Phase 8**, chuẩn hóa **8-Agent SDK**, và mở rộng thêm **Thư viện Giáo trình Mở (`L0–L6`, Flyway `V7`, Alembic `0002`, `491` sách / `545k` chunks)** cùng **Đa phương thức Công thức · Code · Ảnh gốc (`P0–P3`, Alembic `0003`, 6 loại `figure`, `12,860` ảnh WebP trên MinIO)**. **Phase 9 (Billing) được lược bỏ** vì đây là dự án cá nhân phi thương mại; chỉ còn duy nhất chặng cuối **Phase 10 (`Flyway V8`: Narrated Reel Engine + Kubernetes)**.
+> - Trạng thái cập nhật (`2026-11-28`): Đã hoàn tất **toàn bộ lộ trình Phase 0 → Phase 10** (`Phase 0–8`, `8-Agent SDK`, Thư viện Mở `L0–L6` `491` sách / `545k` chunks, Đa phương thức `P0–P3` `12,860` ảnh WebP, **Phase 10A** `Flyway V8` 2-Phase Narrated Reel Engine, và **Phase 10B** Helm Chart + KEDA + Split Nginx Ingress + `kind` Multi-Pod Chaos E2E). **Phase 9 (Billing) được lược bỏ** theo `DEC-028` (dự án cá nhân phi thương mại).
 >
 > **Nguyên tắc bất biến (`AGENTS.md`):** Clean-room 100% (không sao chép mã nguồn, prompt, tài sản thương hiệu của PolySkill); **100% server-authoritative grading** (`0` answer key lộ xuống Frontend hay sang AI Tutor); tách bạch chủ sở hữu dữ liệu (`core.*` do Flyway của Spring Boot quản lý, `rag.*` do Alembic của Python quản lý); mọi tích hợp ngoài đều có `Mock*` để chạy CI/E2E offline **0 đồng chi phí**.
 

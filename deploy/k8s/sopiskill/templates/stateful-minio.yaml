@@ -1,0 +1,84 @@
+{{- if .Values.minio.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "sopiskill.minioHost" . }}
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  serviceName: {{ include "sopiskill.minioHost" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "sopiskill.labels" . | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: minio
+    spec:
+      containers:
+        - name: minio
+          image: {{ printf "%s:%s" .Values.images.minio.repository .Values.images.minio.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["server", "/data", "--console-address", {{ printf ":%d" (int .Values.minio.consolePort) | quote }}]
+          ports:
+            - name: api
+              containerPort: {{ .Values.minio.apiPort }}
+            - name: console
+              containerPort: {{ .Values.minio.consolePort }}
+          envFrom:
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+          readinessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: {{ .Values.minio.apiPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: {{ .Values.minio.apiPort }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.minio.storageSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sopiskill.minioHost" . }}
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: minio
+  ports:
+    - name: api
+      port: {{ .Values.minio.apiPort }}
+      targetPort: {{ .Values.minio.apiPort }}
+    - name: console
+      port: {{ .Values.minio.consolePort }}
+      targetPort: {{ .Values.minio.consolePort }}
+{{- end }}

@@ -4,14 +4,19 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.sopiskill.core.common.ApiException;
 import com.sopiskill.core.common.IdCodec;
 import com.sopiskill.core.common.JsonHelper;
+import com.sopiskill.core.config.SopiProperties;
 import com.sopiskill.core.course.GlossaryService;
+import com.sopiskill.core.gamification.LeagueService;
+import com.sopiskill.core.notifications.NotificationService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,17 +38,29 @@ public class InternalCallbackController {
     private final JdbcClient jdbc;
     private final JsonHelper json;
     private final GlossaryService glossaryService;
+    private final LeagueService leagueService;
+    private final NotificationService notificationService;
+    private final StringRedisTemplate redis;
+    private final SopiProperties props;
 
     public InternalCallbackController(
             InternalHmacSigner signer,
             JdbcClient jdbc,
             JsonHelper json,
-            GlossaryService glossaryService
+            GlossaryService glossaryService,
+            LeagueService leagueService,
+            NotificationService notificationService,
+            StringRedisTemplate redis,
+            SopiProperties props
     ) {
         this.signer = signer;
         this.jdbc = jdbc;
         this.json = json;
         this.glossaryService = glossaryService;
+        this.leagueService = leagueService;
+        this.notificationService = notificationService;
+        this.redis = redis;
+        this.props = props;
     }
 
     @PostMapping("/jobs/{jobId}/complete")
@@ -788,6 +805,63 @@ public class InternalCallbackController {
                 "documentId", IdCodec.format("doc", did),
                 "skipped", false,
                 "externalKey", externalKey
+        );
+    }
+
+    /**
+     * Phase 10B CronJob maintenance endpoint (HMAC-authenticated):
+     *   1. Settles completed past-week league cohorts.
+     *   2. Scans retention notifications across active users (respecting quiet hours).
+     *   3. Trims Redis job streams safely (`MAXLEN ~ 1000`).
+     *   4. Returns active `reels-audio/` object keys so `ai-engine` maintenance can prune orphans.
+     */
+    @PostMapping("/maintenance/run")
+    @Transactional
+    public Map<String, Object> runScheduledMaintenance(
+            @RequestBody(required = false) byte[] rawBody,
+            HttpServletRequest request
+    ) {
+        byte[] bodyBytes = rawBody == null ? new byte[0] : rawBody;
+        signer.verifyIncomingCallback(request, bodyBytes);
+
+        Instant now = Instant.now();
+        LocalDate previousWeekStart = LeagueService.currentWeekStart(now).minusWeeks(1);
+        int settledCohorts = leagueService.settleWeek(previousWeekStart, now);
+
+        List<UUID> userIds = jdbc.sql("SELECT id FROM core.users ORDER BY created_at DESC LIMIT 1000")
+                .query(UUID.class)
+                .list();
+        int nudgesDispatched = 0;
+        for (UUID uid : userIds) {
+            nudgesDispatched += notificationService.scanUserNotifications(uid, now).size();
+        }
+
+        int trimmedStreams = 0;
+        for (String streamKey : List.of(props.streamLlmKey(), props.streamIngestKey())) {
+            try {
+                Long trimmed = redis.opsForStream().trim(streamKey, 1000, true);
+                if (trimmed != null && trimmed > 0) {
+                    trimmedStreams++;
+                }
+            } catch (Exception ignored) {
+                // ignore if stream does not exist yet
+            }
+        }
+
+        List<String> activeReelKeys = jdbc.sql("""
+                SELECT DISTINCT object_key
+                FROM core.media_calls
+                WHERE object_key LIKE 'reels-audio/%'
+                """)
+                .query(String.class)
+                .list();
+
+        return Map.of(
+                "status", "ok",
+                "settledCohorts", settledCohorts,
+                "nudgesDispatched", nudgesDispatched,
+                "trimmedStreams", trimmedStreams,
+                "activeReelObjectKeys", activeReelKeys
         );
     }
 }

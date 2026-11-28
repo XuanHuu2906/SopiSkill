@@ -59,6 +59,13 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/v1/courses/{courseId}/tutor")
 public class TutorController {
 
+    private static final String POD_NAME = resolvePodName();
+
+    private static String resolvePodName() {
+        String host = System.getenv("HOSTNAME");
+        return (host == null || host.isBlank()) ? "local" : host.trim();
+    }
+
     private static final Set<String> VALID_ENTRY_POINTS = Set.of(
             "tab", "wrong_answer", "teach_block", "term", "path_harder", "proposal"
     );
@@ -619,6 +626,7 @@ public class TutorController {
         String formattedMsgId = IdCodec.format("tmsg", assistantMsgId);
         response.setHeader("X-Tutor-Thread-Id", formattedThreadId);
         response.setHeader("X-Tutor-Message-Id", formattedMsgId);
+        response.setHeader("X-Pod-Name", POD_NAME);
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 
@@ -698,6 +706,7 @@ public class TutorController {
 
         response.setHeader("X-Tutor-Thread-Id", String.valueOf(msgRow.get("threadId")));
         response.setHeader("X-Tutor-Message-Id", formattedMsgId);
+        response.setHeader("X-Pod-Name", POD_NAME);
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 
@@ -762,7 +771,8 @@ public class TutorController {
             @AuthenticationPrincipal AuthPrincipal principal,
             @PathVariable String courseId,
             @PathVariable String messageId,
-            HttpServletRequest request
+            HttpServletRequest request,
+            HttpServletResponse response
     ) {
         requireTutorEnabled();
         csrf.verify(request);
@@ -789,9 +799,11 @@ public class TutorController {
         }
         // Multi-Pod Instant Stop via Redis Pub/Sub (`tutor:cancel:{msgId}`)!
         redisStream.publishCancel(formattedMsgId);
+        response.setHeader("X-Pod-Name", POD_NAME);
 
         return Map.of(
                 "messageId", formattedMsgId,
+                "podName", POD_NAME,
                 "status", "cancel_requested",
                 "providerStopGuaranteed", false,
                 "notice", "Đã yêu cầu dừng câu trả lời."

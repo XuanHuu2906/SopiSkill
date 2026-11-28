@@ -1,0 +1,71 @@
+# `ai-api` is strictly internal (`ClusterIP` ONLY — never exposed via public Ingress).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-ai-api
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-api
+spec:
+  replicas: {{ .Values.aiApi.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ai-api
+  template:
+    metadata:
+      labels:
+        {{- include "sopiskill.labels" . | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: ai-api
+    spec:
+      containers:
+        - name: ai-api
+          image: {{ printf "%s:%s" .Values.images.aiEngine.repository .Values.images.aiEngine.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port {{ .Values.aiApi.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.aiApi.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "sopiskill.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.aiApi.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: {{ .Values.aiApi.port }}
+            initialDelaySeconds: 8
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            {{- toYaml .Values.aiApi.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-ai-api
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: ai-api
+  ports:
+    - name: http
+      port: {{ .Values.aiApi.port }}
+      targetPort: {{ .Values.aiApi.port }}

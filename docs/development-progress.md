@@ -2,6 +2,41 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-28 — Phase 10B — Đóng gói Kubernetes (`Helm` + `KEDA` + `Split Nginx Ingress` + `kind` Multi-Pod Chaos E2E)
+
+- Repository / branch: SopiSkill · nhánh `feat/phase10b-k8s-helm-chaos` (tách từ `feat/phase10a-reel-engine` commit `28e7a25`).
+- **IMPLEMENTED:**
+  - **Helm Chart production-grade (`deploy/k8s/sopiskill/`):**
+    - `Chart.yaml`, `values.yaml` (production spec: `pgvector` `2Gi/4Gi` RAM, `shared_buffers=1GB`, PVC `20Gi`; `minio` PVC `20Gi`), `values-kind.yaml` (local multi-pod testing keeping `coreApi.replicaCount=2`, `aiApi.replicaCount=2`, `frontend.replicaCount=2`), `templates/_helpers.tpl`, `configmap.yaml`, `secret.yaml`.
+    - **Stateless Deployments & HPA (`hpa.yaml`):** `frontend` (HPA 2–6), `core-api` (`2+` replicas, Virtual Threads, `/actuator/health/liveness` & `/readiness`, `terminationGracePeriodSeconds: 60`, `preStop` drain, `X-Pod-Name` header), `ai-api` (`ClusterIP` nội bộ tuyệt đối, `/ready` probe, HPA 2–4).
+    - **KEDA Event-Driven Workers (`keda-scaledobjects.yaml`):** `ai-worker-llm` (1–6, `terminationGracePeriodSeconds: 120`) & `ai-worker-ingest` (1–4, `terminationGracePeriodSeconds: 120`) gắn `ScaledObject` loại `redis-streams` tới `sopiskill-redis.<namespace>.svc.cluster.local:6379`.
+    - **Stateful Workloads:** `pgvector-db` (`pgvector/pgvector:pg16`), `redis` (`redis:7-alpine --appendonly yes`), `minio` (`pgsty/minio:latest`).
+    - **2 Split Nginx Ingress Rules (`ingress.yaml`):**
+      - `sopiskill-tutor-sse-ingress`: `/v1/courses/.*/tutor/.*` (`use-regex: "true"`, `proxy-buffering: "off"`, `proxy-read-timeout: "300"`, `proxy-send-timeout: "300"`).
+      - `sopiskill-api-media-ingress`: `/v1/library/figures`, `/v1`, `/health`, `/ready`, `/` (`proxy-buffering: "on"`, `proxy-body-size: "30m"`).
+    - **Jobs & Scheduled Maintenance:**
+      - `Job: core-db-migrate` (`helm.sh/hook: post-install,pre-upgrade`): chạy tuần tự `alembic upgrade head` (`rag.*`) + `core-api` `--sopiskill.migrate-only=true` (`CoreApiApplication.java`, `Flyway V1..V8`).
+      - `Job: library-seed` (tùy chọn `librarySeed.enabled`): chạy `python -m scripts.import_open_library`.
+      - `CronJob: maintenance` + `InternalCallbackController.POST /internal/maintenance/run` + `ai-engine/scripts/maintenance.py`: chốt cohort League, quét retention nudges 7 loại, trim Redis streams, xóa `reels-audio/` mồ côi trên MinIO, và `pg_dump` kiểm chứng `sha256sum`.
+  - **Multi-Pod Chaos & K8s Verification Suite (`deploy/k8s/kind-config.yaml`, `deploy/k8s/chaos_test.py`):** tự động kiểm chứng 3 kịch bản Chaos đa pod, bảo vệ `ClusterIP` cho `ai-api`, KEDA `ScaledObject` `Ready=True`, và `CronJob: maintenance`.
+- **TESTED (cụm `kind` Kubernetes 1.32.2 thật + Ingress-Nginx + KEDA 2.21.1, 0đ chi phí):**
+  - `helm lint deploy/k8s/sopiskill -f values.yaml` & `-f values-kind.yaml` → **exit `0` (`0` errors)**.
+  - `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_" && ../backend/.venv/bin/python -m bandit -r app scripts -q` → **exit `0`** (**`69/69` PASSED**, gồm `test_phase10b_k8s_maintenance.py`, `0` Bandit findings).
+  - `cd core-api && ./mvnw -B test -Dtest=PublicBlockProjectorTest -q` → **exit `0`** (và `mvn package` bên trong Docker image `sopiskill-core-sb:local` pass sạch).
+  - Triển khai sống trên cụm `kind` (`sopiskill-k8s`):
+    - `job.batch/sopiskill-core-db-migrate` (`post-install` & `pre-upgrade`): **Complete 1/1 (9s)**.
+    - `scaledobject.keda.sh`: cả `sopiskill-worker-llm-keda` & `sopiskill-worker-ingest-keda` đạt **`READY=True, HPAActive=True`**.
+    - `backend/.venv/bin/python deploy/k8s/chaos_test.py` → **exit `0` (ALL PASS)**:
+      1. **Chaos 1 (Pod Kill mid-SSE + `Last-Event-ID`):** mở stream trên pod `m6mpc` → `kubectl delete pod` giữa luồng → reconnect qua Split Ingress rơi vào pod `zghn2` nhận đủ `delta` + `done` (`0` chữ rơi).
+      2. **Chaos 2 (Cross-Pod `/stop` qua Redis Pub/Sub):** stream trên pod `7gfxp` → bắn `/stop` vào pod `bwtfj` → pod `7gfxp` ngắt tức thì (`cancelled` trong DB).
+      3. **Chaos 3 (Rolling Update `core-api` + `ai-worker-llm` khi job đang chạy):** `kubectl rollout restart` ngay lúc đang sinh khóa học → hoàn tất `4 lessons + Reel` (`0` job thất lạc).
+      4. **`CronJob: maintenance`:** hoàn tất `HTTP 200`, `activeReelObjects=264`, `pg_dump` + `sha256sum -c` pass.
+  - Full Playwright E2E trực tiếp qua **Split Nginx Ingress (`http://127.0.0.1:8088`)**: `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8088 E2E_FRONTEND_PORT=8088 npm run test:e2e` → **exit `0` (`12/12` PASSED in 1.3m**, `axe-core` **0 violations**).
+- **NOT TESTED:**
+  - KEDA autoscale tăng từ `1` lên `>1` pod dưới tải thực tế lớn hoặc scale-to-zero (`minReplicaCount=0`), và HPA CPU scaling (do `metrics-server` chưa cài mặc định trên cụm `kind` local).
+  - Production TLS (`cert-manager`) và `Job: library-seed` nạp full `491` sách trực tiếp vào cụm `kind` mới.
+- **ROLLBACK:** Thuần thư mục `deploy/k8s/` + mở rộng an toàn trên `CoreApiApplication.java`, `InternalCallbackController.java`, `TutorController.java`, `ai-engine/scripts/maintenance.py` (không đổi DB schema).
+
 ## 2026-11-28 — Phase 10A — 2-Phase Narrated Reel Engine (`Flyway V8`, Agent #6 `rel_`, Safe AST Plot, Neutral `TTSProvider`, `ReelPlayer` & Offline Audio Cache)
 
 - Repository / branch: SopiSkill · nhánh `feat/phase10a-reel-engine` (tách từ `feat/library-foundation` commit `9a87791`).

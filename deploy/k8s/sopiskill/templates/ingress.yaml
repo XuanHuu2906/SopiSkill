@@ -1,0 +1,95 @@
+{{- if .Values.ingress.enabled }}
+# Ingress 1: Real-time SSE Tutor paths (`/v1/courses/.*/tutor/.*`) — buffering strictly OFF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-tutor-sse-ingress
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ .Values.ingress.sseProxyReadTimeout | quote }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ .Values.ingress.sseProxySendTimeout | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - {{- if .Values.ingress.host }}
+      host: {{ .Values.ingress.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: /v1/courses/.*/tutor/.*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "sopiskill.fullname" . }}-core-api
+                port:
+                  number: {{ .Values.coreApi.port }}
+---
+# Ingress 2: REST API, Media Figures/Reels (`/v1/*`, `/v1/library/figures/*`) & Next.js Frontend (`/`)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-api-media-ingress
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "on"
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.apiBodySize | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - {{- if .Values.ingress.host }}
+      host: {{ .Values.ingress.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: /v1/library/figures
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sopiskill.fullname" . }}-core-api
+                port:
+                  number: {{ .Values.coreApi.port }}
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sopiskill.fullname" . }}-core-api
+                port:
+                  number: {{ .Values.coreApi.port }}
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "sopiskill.fullname" . }}-core-api
+                port:
+                  number: {{ .Values.coreApi.port }}
+          - path: /ready
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "sopiskill.fullname" . }}-core-api
+                port:
+                  number: {{ .Values.coreApi.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sopiskill.fullname" . }}-frontend
+                port:
+                  number: {{ .Values.frontend.port }}
+{{- end }}
