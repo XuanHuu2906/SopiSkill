@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-config
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+data:
+  ENV: {{ .Values.global.env | quote }}
+  CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  COOKIE_SECURE: {{ .Values.config.cookieSecure | quote }}
+  CORE_API_PORT: {{ .Values.coreApi.port | quote }}
+  CORE_API_URL: {{ include "sopiskill.coreApiUrl" . | quote }}
+  AI_ENGINE_URL: {{ include "sopiskill.aiApiUrl" . | quote }}
+  REDIS_HOST: {{ include "sopiskill.redisHost" . | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  REDIS_URL: {{ printf "redis://%s:%d/0" (include "sopiskill.redisHost" .) (int .Values.redis.port) | quote }}
+  SOURCE_STORAGE_BACKEND: "s3"
+  S3_ENDPOINT: {{ printf "http://%s:%d" (include "sopiskill.minioHost" .) (int .Values.minio.apiPort) | quote }}
+  S3_PUBLIC_ENDPOINT: {{ default (printf "http://%s:%d" (include "sopiskill.minioHost" .) (int .Values.minio.apiPort)) .Values.config.s3PublicEndpoint | quote }}
+  S3_BUCKET: {{ .Values.config.s3Bucket | quote }}
+  STREAM_LLM_KEY: {{ .Values.config.streamLlmKey | quote }}
+  STREAM_LLM_GROUP: {{ .Values.config.streamLlmGroup | quote }}
+  STREAM_INGEST_KEY: {{ .Values.config.streamIngestKey | quote }}
+  STREAM_INGEST_GROUP: {{ .Values.config.streamIngestGroup | quote }}
+  LLM_PROVIDER: {{ .Values.config.llmProvider | quote }}
+  LLM_BASE_URL: {{ .Values.config.llmBaseUrl | quote }}
+  LLM_MODEL: {{ .Values.config.llmModel | quote }}
+  EMBEDDING_PROVIDER: {{ .Values.config.embeddingProvider | quote }}
+  EMBEDDING_MODEL: {{ .Values.config.embeddingModel | quote }}
+  EMBEDDING_DIMENSION: {{ .Values.config.embeddingDimension | quote }}
+  TTS_PROVIDER: {{ .Values.config.ttsProvider | quote }}
+  TTS_MODEL: {{ .Values.config.ttsModel | quote }}
+  TTS_BASE_URL: {{ .Values.config.ttsBaseUrl | quote }}
+  REEL_ENABLED: {{ .Values.config.reelEnabled | quote }}
+  RAG_ENABLED: {{ .Values.config.ragEnabled | quote }}
+  OCR_ENABLED: {{ .Values.config.ocrEnabled | quote }}
+  TUTOR_ENABLED: {{ .Values.config.tutorEnabled | quote }}
+  P50_ENABLED: {{ .Values.config.p50Enabled | quote }}
+  RATE_LIMIT_ENABLED: {{ .Values.config.rateLimitEnabled | quote }}
+  RATE_LIMIT_FAIL_CLOSED: {{ .Values.config.rateLimitFailClosed | quote }}
+  HEARTS_ENFORCEMENT_ENABLED: {{ .Values.config.heartsEnforcementEnabled | quote }}
+  LEAGUES_ENABLED: {{ .Values.config.leaguesEnabled | quote }}
+  VALIDATOR_LLM_ENABLED: {{ .Values.config.validatorLlmEnabled | quote }}
+  LESSON_IMAGES_ENABLED: {{ .Values.config.lessonImagesEnabled | quote }}
+  WEB_INGEST_ENABLED: {{ .Values.config.webIngestEnabled | quote }}

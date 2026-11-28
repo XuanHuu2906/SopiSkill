@@ -18,7 +18,7 @@ class PublicBlockProjectorTest {
             "queue:ai:llm", "queue:ai:ingest", true, 30, 100000, 2, false, true, false, false,
             "http://127.0.0.1:9010", "http://127.0.0.1:9010", "minio", "minio-pass", "sopiskill-sources", "us-east-1",
             80, 20, 5, 30, false, false,
-            30, "sopiskill-google-client", "com.sopiskill.web", "", false
+            30, "sopiskill-google-client", "com.sopiskill.web", "", false, true
     );
     private final PublicBlockProjector projector = new PublicBlockProjector(props);
 

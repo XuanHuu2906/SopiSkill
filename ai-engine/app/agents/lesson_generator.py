@@ -51,6 +51,7 @@ class LessonGenerationResult:
     resolved_flag_codes: list[str] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
     grounding: str = "general_ai_knowledge"
+    available_figures: list[dict[str, Any]] = field(default_factory=list)
 
 
 SourceReaderFn = Callable[[str | None, str | None], Awaitable[list[dict[str, Any]]]]
@@ -576,4 +577,5 @@ async def generate_lesson_with_qa_loop(
         resolved_flag_codes=resolved_codes,
         citations=verified_citations,
         grounding=grounding,
+        available_figures=list(available_figures_by_id.values()),
     )

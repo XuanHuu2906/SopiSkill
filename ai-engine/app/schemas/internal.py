@@ -232,3 +232,28 @@ class ProposalGenerateResponse(BaseModel):
     toolsCalled: list[str] = Field(default_factory=list)
     turnsUsed: int = Field(default=0, ge=0)
     usage: LlmUsageOut = Field(default_factory=LlmUsageOut)
+
+
+class ReelCompileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    courseId: str = Field(min_length=1, max_length=128)
+    lessonId: str = Field(min_length=1, max_length=128)
+    contentVersion: int = Field(default=1, ge=1)
+    topic: str = Field(min_length=1, max_length=300)
+    lessonTitle: str = Field(min_length=1, max_length=300)
+    language: Literal["vi", "en"] = "vi"
+    lesson: dict[str, Any] = Field(default_factory=dict)
+    availableFigures: list[dict[str, Any]] = Field(default_factory=list)
+    prebuiltScript: dict[str, Any] | None = None
+
+
+class ReelCompileResponse(BaseModel):
+    reelId: str
+    manifest: dict[str, Any]
+    mediaCalls: list[dict[str, Any]] = Field(default_factory=list)
+    usage: LlmUsageOut = Field(default_factory=LlmUsageOut)
+
+
+class ReelAudioDeleteResponse(BaseModel):
+    deletedObjects: int = Field(ge=0)

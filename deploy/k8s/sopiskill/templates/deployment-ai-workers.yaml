@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-ai-worker-llm
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-worker-llm
+spec:
+  replicas: {{ .Values.aiWorkerLlm.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ai-worker-llm
+  template:
+    metadata:
+      labels:
+        {{- include "sopiskill.labels" . | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: ai-worker-llm
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.aiWorkerLlm.terminationGracePeriodSeconds }}
+      containers:
+        - name: ai-worker-llm
+          image: {{ printf "%s:%s" .Values.images.aiEngine.repository .Values.images.aiEngine.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["python", "-m", "app.workers.worker_llm"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "sopiskill.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+          resources:
+            {{- toYaml .Values.aiWorkerLlm.resources | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-ai-worker-ingest
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-worker-ingest
+spec:
+  replicas: {{ .Values.aiWorkerIngest.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ai-worker-ingest
+  template:
+    metadata:
+      labels:
+        {{- include "sopiskill.labels" . | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: ai-worker-ingest
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.aiWorkerIngest.terminationGracePeriodSeconds }}
+      containers:
+        - name: ai-worker-ingest
+          image: {{ printf "%s:%s" .Values.images.aiEngine.repository .Values.images.aiEngine.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["python", "-m", "app.workers.worker_ingest"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "sopiskill.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+          resources:
+            {{- toYaml .Values.aiWorkerIngest.resources | nindent 12 }}

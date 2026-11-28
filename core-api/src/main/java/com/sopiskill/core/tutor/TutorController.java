@@ -59,6 +59,13 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/v1/courses/{courseId}/tutor")
 public class TutorController {
 
+    private static final String POD_NAME = resolvePodName();
+
+    private static String resolvePodName() {
+        String host = System.getenv("HOSTNAME");
+        return (host == null || host.isBlank()) ? "local" : host.trim();
+    }
+
     private static final Set<String> VALID_ENTRY_POINTS = Set.of(
             "tab", "wrong_answer", "teach_block", "term", "path_harder", "proposal"
     );
@@ -619,6 +626,7 @@ public class TutorController {
         String formattedMsgId = IdCodec.format("tmsg", assistantMsgId);
         response.setHeader("X-Tutor-Thread-Id", formattedThreadId);
         response.setHeader("X-Tutor-Message-Id", formattedMsgId);
+        response.setHeader("X-Pod-Name", POD_NAME);
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 
@@ -698,6 +706,7 @@ public class TutorController {
 
         response.setHeader("X-Tutor-Thread-Id", String.valueOf(msgRow.get("threadId")));
         response.setHeader("X-Tutor-Message-Id", formattedMsgId);
+        response.setHeader("X-Pod-Name", POD_NAME);
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 
@@ -762,7 +771,8 @@ public class TutorController {
             @AuthenticationPrincipal AuthPrincipal principal,
             @PathVariable String courseId,
             @PathVariable String messageId,
-            HttpServletRequest request
+            HttpServletRequest request,
+            HttpServletResponse response
     ) {
         requireTutorEnabled();
         csrf.verify(request);
@@ -789,9 +799,11 @@ public class TutorController {
         }
         // Multi-Pod Instant Stop via Redis Pub/Sub (`tutor:cancel:{msgId}`)!
         redisStream.publishCancel(formattedMsgId);
+        response.setHeader("X-Pod-Name", POD_NAME);
 
         return Map.of(
                 "messageId", formattedMsgId,
+                "podName", POD_NAME,
                 "status", "cancel_requested",
                 "providerStopGuaranteed", false,
                 "notice", "Đã yêu cầu dừng câu trả lời."
@@ -874,10 +886,14 @@ public class TutorController {
         String topic = jdbc.sql("SELECT topic FROM core.courses WHERE id = :cid")
                 .param("cid", cid).query(String.class).single();
 
-        // Increment content_version + 1 on all lessons in the target unit & mark generating
+        // Increment content_version + 1 on all lessons in the target unit, clear old reel state & mark generating
         jdbc.sql("""
                 UPDATE core.lessons
-                SET content_version = content_version + 1, status = 'generating', updated_at = now()
+                SET content_version = content_version + 1,
+                    status = 'generating',
+                    reel_manifest = NULL,
+                    reel_status = 'none',
+                    updated_at = now()
                 WHERE unit_id = :unitId AND course_id = :cid
                 """)
                 .param("unitId", targetUnitId)
@@ -885,20 +901,32 @@ public class TutorController {
                 .update();
 
         List<Map<String, Object>> unitLessons = jdbc.sql("""
-                SELECT id, title FROM core.lessons
+                SELECT id, title, content_version FROM core.lessons
                 WHERE unit_id = :unitId AND course_id = :cid
                 ORDER BY order_index ASC
                 """)
                 .param("unitId", targetUnitId)
                 .param("cid", cid)
                 .query((rs, rowNum) -> Map.<String, Object>of(
+                        "uuid", rs.getObject("id", UUID.class),
                         "id", IdCodec.format("lsn", rs.getObject("id", UUID.class)),
-                        "title", rs.getString("title")
+                        "title", rs.getString("title"),
+                        "contentVersion", rs.getInt("content_version")
                 ))
                 .list();
 
+        String formattedCourseId = IdCodec.format("crs", cid);
+        for (Map<String, Object> ul : unitLessons) {
+            UUID lidUuid = (UUID) ul.get("uuid");
+            String lidFormatted = String.valueOf(ul.get("id"));
+            jdbc.sql("DELETE FROM core.media_calls WHERE lesson_id = :lid").param("lid", lidUuid).update();
+            jdbc.sql("DELETE FROM core.lesson_reels WHERE lesson_id = :lid").param("lid", lidUuid).update();
+            aiEngine.deleteRagResourceBestEffort("/internal/reels/audio/" + formattedCourseId + "/" + lidFormatted, null);
+        }
+
         List<String> lessonIds = unitLessons.stream().map(m -> String.valueOf(m.get("id"))).toList();
         List<String> lessonTitles = unitLessons.stream().map(m -> String.valueOf(m.get("title"))).toList();
+        int nextVersion = unitLessons.isEmpty() ? 2 : ((Number) unitLessons.get(0).get("contentVersion")).intValue();
 
         UUID jobId = UUID.randomUUID();
         String idempKey = "regen_unit_" + targetUnitId + "_" + jobId;
@@ -936,6 +964,8 @@ public class TutorController {
                         "topic", topic,
                         "language", language,
                         "lessonIds", lessonIds,
+                        "contentVersion", nextVersion,
+                        "reelEnabled", props.reelEnabled(),
                         "units", List.of(Map.of("title", unitTitle, "lessonTitles", lessonTitles))
                 )
         ));

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: sopiskill
+description: SopiSkill Polyglot Architecture (Next.js 15 + Spring Boot 3.4 core-api + Python ai-engine + pgvector + Redis 7 + MinIO + KEDA + Split Nginx Ingress)
+type: application
+version: 1.0.0
+appVersion: "1.0.0-phase10b"
+keywords:
+  - sopiskill
+  - spring-boot
+  - python
+  - pgvector
+  - keda
+  - kubernetes

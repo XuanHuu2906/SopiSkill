@@ -1,0 +1,105 @@
+# Local single-node `kind` cluster overrides for E2E & Multi-Pod Chaos verification.
+# Keeps `coreApi.replicaCount: 2` and `aiApi.replicaCount: 2` for genuine multi-pod testing
+# while sizing Postgres/MinIO PVCs and RAM comfortably for a local workstation.
+
+global:
+  env: development
+
+images:
+  pullPolicy: IfNotPresent
+  frontend:
+    repository: sopiskill-frontend-polyglot
+    tag: k8s
+  coreApi:
+    repository: sopiskill-core-sb
+    tag: local
+  aiEngine:
+    repository: sopiskill-ai-py
+    tag: local
+
+config:
+  corsOrigins: "http://127.0.0.1:8088,http://localhost:8088,http://127.0.0.1:3010,http://localhost:3010"
+  s3PublicEndpoint: "http://127.0.0.1:9010"
+  rateLimitEnabled: true
+  rateLimitFailClosed: false
+
+frontend:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 400m
+      memory: 384Mi
+
+coreApi:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 384Mi
+    limits:
+      cpu: 1000m
+      memory: 768Mi
+
+aiApi:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 750m
+      memory: 512Mi
+
+aiWorkerLlm:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 750m
+      memory: 512Mi
+
+aiWorkerIngest:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 750m
+      memory: 768Mi
+
+pgvector:
+  sharedBuffers: 256MB
+  storageSize: 2Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+
+redis:
+  storageSize: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+minio:
+  storageSize: 2Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

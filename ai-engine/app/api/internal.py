@@ -6,11 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import re
+
 from app.agents.pedagogy import extract_learner_profile
 from app.agents.planner_agent import PlannerMaxTurnsError, generate_proposal_with_tools
 from app.agents.providers import ProviderConfigError, get_llm_provider
+from app.agents.reel_compiler import compile_lesson_reel
 from app.agents.short_grader import grade_short_answer
 from app.agents.source_research_agent import SourceResearchMaxTurnsError, research_sources_with_agent
+from app.agents.tts_provider import TtsConfigError, get_tts_provider
 from app.agents.tutor_agent import stream_tutor_turn
 from app.core.sse import SSE_HEADERS
 from app.db.session import get_db
@@ -29,6 +33,9 @@ from app.schemas.internal import (
     RagDeleteResponse,
     RagSearchRequest,
     RagSearchResponse,
+    ReelAudioDeleteResponse,
+    ReelCompileRequest,
+    ReelCompileResponse,
     ResearchedSourceOut,
     SourceResearchRequest,
     SourceResearchResponse,
@@ -221,3 +228,100 @@ async def get_library_figure_bytes(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+_SAFE_REEL_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
+_SAFE_REEL_CLIP_RE = re.compile(r"^[a-zA-Z0-9_-]{1,80}\.(wav|mp3|ogg|webm)$")
+_AUDIO_MIME_BY_EXT = {
+    "wav": "audio/wav",
+    "mp3": "audio/mpeg",
+    "ogg": "audio/ogg",
+    "webm": "audio/webm",
+}
+
+
+@router.post("/reels/compile", response_model=ReelCompileResponse)
+async def reels_compile(body: ReelCompileRequest) -> ReelCompileResponse:
+    provider = _get_provider_or_503()
+    try:
+        tts = get_tts_provider()
+    except TtsConfigError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "TTS_NOT_CONFIGURED", "message": str(exc)},
+        ) from exc
+
+    res = await compile_lesson_reel(
+        course_id=body.courseId,
+        lesson_id=body.lessonId,
+        content_version=body.contentVersion,
+        topic=body.topic,
+        lesson_title=body.lessonTitle,
+        lesson=body.lesson,
+        language=body.language,
+        available_figures=body.availableFigures,
+        provider=provider,
+        tts_provider=tts,
+        prebuilt_script=body.prebuiltScript,
+    )
+    return ReelCompileResponse(
+        reelId=res.reel_id,
+        manifest=res.manifest,
+        mediaCalls=res.media_calls,
+        usage=res.usage,
+    )
+
+
+@router.get("/reels/audio/{course_id}/{lesson_id}/{clip_file}")
+async def get_reel_audio_bytes(
+    course_id: str,
+    lesson_id: str,
+    clip_file: str,
+) -> Response:
+    """Serve compiled Reel TTS audio from MinIO prefix `reels-audio/` strictly after `core-api` authz."""
+    if (
+        not _SAFE_REEL_SEGMENT_RE.match(course_id)
+        or not _SAFE_REEL_SEGMENT_RE.match(lesson_id)
+        or not _SAFE_REEL_CLIP_RE.match(clip_file)
+    ):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_REEL_CLIP", "message": "Invalid clip path."})
+
+    ext = clip_file.rsplit(".", 1)[-1].lower()
+    ctype = _AUDIO_MIME_BY_EXT.get(ext, "audio/wav")
+    key = f"reels-audio/{course_id}/{lesson_id}/{clip_file}"
+    storage = get_source_storage()
+    try:
+        data = await storage.get_bytes(key)
+    except SourceStorageError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "REEL_AUDIO_NOT_FOUND", "message": str(exc)},
+        ) from exc
+
+    return Response(
+        content=data,
+        media_type=ctype,
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "Accept-Ranges": "bytes",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.delete("/reels/audio/{course_id}/{lesson_id}", response_model=ReelAudioDeleteResponse)
+async def delete_lesson_reel_audio(course_id: str, lesson_id: str) -> ReelAudioDeleteResponse:
+    if not _SAFE_REEL_SEGMENT_RE.match(course_id) or not _SAFE_REEL_SEGMENT_RE.match(lesson_id):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_REEL_PATH", "message": "Invalid path."})
+    storage = get_source_storage()
+    deleted = await storage.delete_prefix(f"reels-audio/{course_id}/{lesson_id}/")
+    return ReelAudioDeleteResponse(deletedObjects=deleted)
+
+
+@router.delete("/reels/audio/{course_id}", response_model=ReelAudioDeleteResponse)
+async def delete_course_reel_audio(course_id: str) -> ReelAudioDeleteResponse:
+    if not _SAFE_REEL_SEGMENT_RE.match(course_id):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_REEL_PATH", "message": "Invalid path."})
+    storage = get_source_storage()
+    deleted = await storage.delete_prefix(f"reels-audio/{course_id}/")
+    return ReelAudioDeleteResponse(deletedObjects=deleted)

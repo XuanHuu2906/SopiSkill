@@ -79,6 +79,8 @@ services:
       S3_BUCKET: ${S3_BUCKET:-sopiskill-sources}
       WEB_INGEST_ENABLED: ${WEB_INGEST_ENABLED:-false}
       OCR_ENABLED: ${OCR_ENABLED:-false}
+      REEL_ENABLED: ${REEL_ENABLED:-true}
+      TTS_PROVIDER: ${TTS_PROVIDER:-mock}
     ports:
       # Internal-only binding on host loopback; never expose publicly in production (ClusterIP in K8s).
       - "127.0.0.1:${AI_API_PORT:-8010}:8000"
@@ -130,6 +132,7 @@ services:
       CORS_ORIGINS: http://localhost:3010,http://127.0.0.1:3010,http://localhost:3000,http://127.0.0.1:3000
       TUTOR_ENABLED: ${TUTOR_ENABLED:-true}
       P50_ENABLED: ${P50_ENABLED:-true}
+      REEL_ENABLED: ${REEL_ENABLED:-true}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       S3_ENDPOINT: http://minio:9000
       S3_PUBLIC_ENDPOINT: http://127.0.0.1:${POLYGLOT_MINIO_PORT:-9010}

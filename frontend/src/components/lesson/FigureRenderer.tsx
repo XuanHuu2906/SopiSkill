@@ -338,7 +338,7 @@ function evaluateSafeMathExpr(expr: string, env: Record<string, number>): number
 
 const PLOT_PALETTE = ["#c85a27", "#15803d", "#2563eb", "#7c3aed"];
 
-function FunctionPlotSvg({ figure }: { figure: LessonFigure }) {
+export function FunctionPlotSvg({ figure }: { figure: LessonFigure }) {
   const xMin = figure.xRange?.[0] ?? -5;
   const xMax = figure.xRange?.[1] ?? 5;
   const yMin = figure.yRange?.[0] ?? -5;

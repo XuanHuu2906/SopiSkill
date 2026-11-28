@@ -298,6 +298,59 @@ paths:
       responses:
         "200":
           description: Deletion summary
+
+  /internal/reels/compile:
+    post:
+      summary: Compile a 2-phase Narrated Reel (Agent #6 script -> safe AST plot + TTSProvider -> MinIO reels-audio/)
+      tags: [reels]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [courseId, lessonId, topic, lessonTitle]
+              properties:
+                courseId: { type: string }
+                lessonId: { type: string }
+                contentVersion: { type: integer, default: 1 }
+                topic: { type: string }
+                lessonTitle: { type: string }
+                language: { type: string, enum: [vi, en] }
+                lesson: { type: object }
+                availableFigures: { type: array, items: { type: object } }
+      responses:
+        "200":
+          description: Compiled reelManifest (0 answer keys) and mediaCalls ledger
+        "401":
+          $ref: "#/components/responses/InternalUnauthorized"
+
+  /internal/reels/audio/{courseId}/{lessonId}/{clipFile}:
+    get:
+      summary: Serve compiled Reel audio bytes from MinIO prefix `reels-audio/` after core-api ownership verification
+      tags: [reels]
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string } }
+        - { name: lessonId, in: path, required: true, schema: { type: string } }
+        - { name: clipFile, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Audio clip bytes (`audio/wav` or `audio/mpeg`)
+        "400":
+          description: Invalid clip filename
+        "404":
+          description: Clip not found
+
+  /internal/reels/audio/{courseId}/{lessonId}:
+    delete:
+      summary: Delete stale `reels-audio/{courseId}/{lessonId}/` objects on `regenerate_unit`
+      tags: [reels]
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string } }
+        - { name: lessonId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Deleted object count
           content:
             application/json:
               schema:

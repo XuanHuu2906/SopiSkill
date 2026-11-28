@@ -51,7 +51,7 @@ public class SecurityConfig {
         cfg.setAllowedOrigins(props.corsOriginList());
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         cfg.setAllowedHeaders(List.of("*"));
-        cfg.setExposedHeaders(List.of("X-Tutor-Thread-Id", "X-Tutor-Message-Id", "Retry-After", "X-Correlation-Id"));
+        cfg.setExposedHeaders(List.of("X-Tutor-Thread-Id", "X-Tutor-Message-Id", "X-Pod-Name", "Retry-After", "X-Correlation-Id"));
         cfg.setAllowCredentials(true);
         cfg.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

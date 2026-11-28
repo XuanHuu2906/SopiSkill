@@ -44,7 +44,8 @@ public record SopiProperties(
         String googleClientId,
         String appleClientId,
         String vapidPublicKey,
-        boolean billingCommercialStrictSources
+        boolean billingCommercialStrictSources,
+        boolean reelEnabled
 ) {
     public List<String> corsOriginList() {
         if (corsOrigins == null || corsOrigins.isBlank()) {

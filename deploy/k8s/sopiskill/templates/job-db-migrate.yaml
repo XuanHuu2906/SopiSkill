@@ -1,0 +1,56 @@
+{{- if .Values.dbMigrate.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-core-db-migrate
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core-db-migrate
+  annotations:
+    "helm.sh/hook": {{ .Values.dbMigrate.hooks | quote }}
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "sopiskill.labels" . | nindent 8 }}
+        app.kubernetes.io/component: core-db-migrate
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-postgres
+          image: {{ printf "%s:%s" .Values.images.pgvector.repository .Values.images.pgvector.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - "until pg_isready -h {{ include "sopiskill.pgHost" . }} -p {{ .Values.pgvector.port }} -U \"$POSTGRES_USER\"; do sleep 2; done"
+          envFrom:
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+        - name: alembic-rag-migrate
+          image: {{ printf "%s:%s" .Values.images.aiEngine.repository .Values.images.aiEngine.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "sopiskill.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+      containers:
+        - name: flyway-core-migrate
+          image: {{ printf "%s:%s" .Values.images.coreApi.repository .Values.images.coreApi.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          env:
+            - name: SERVER_PORT
+              value: "0"
+            - name: SOPISKILL_MIGRATE_ONLY
+              value: "true"
+          envFrom:
+            - configMapRef:
+                name: {{ include "sopiskill.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+{{- end }}

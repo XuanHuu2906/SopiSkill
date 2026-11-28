@@ -1,16 +1,16 @@
 """OpenAI & DeepSeek compatible Function Calling JSON Schemas for SopiSkill's 8-Agent Architecture.
 
-Active schemas (Agents #1..#5 & #8):
+Active schemas (all 8 Agents — #1..#8):
   1. `SOURCE_RESEARCH_TOOL_SCHEMAS` (#1 Source Research Agent): `search_sources`, `inspect_source`, `commit_sources`
   2. `SOURCE_BRIEF_TOOL_SCHEMAS` (#2 Source Brief Agent): `save_brief` (1-turn structured brief)
   3. `PLANNER_TOOL_SCHEMAS` (#3 Interview & Planner Agent): `read_source_brief`, `save_proposal`
   4. `LESSON_GENERATOR_TOOL_SCHEMAS` (#4 Lesson Generator Agent): `read_source`, `save_lesson` (+ optional `generate_image`)
   5. `VALIDATOR_QA_TOOL_SCHEMAS` (#5 Validator / QA Agent): `flag_question`, `approve_lesson`
+  6. `REEL_SCRIPT_TOOL_SCHEMAS` (#6 Reel Script Agent): `save_reel_script` (1-turn structured 11-scene audiovisual script)
   8. `TUTOR_TOOL_SCHEMAS` (#8 AI Tutor "Sopi"): `read_lesson`, `explain_deeper`, `read_source`,
      `flag_question`, `revise_proposal`, `regenerate_unit`
 
 Note:
-  - Agent #6 (Reel Script Agent: `save_reel_script`) is scheduled for Phase 10.
   - Agent #7 (Short-Answer Grader) uses direct Structured Output (zero extra tools) for low latency.
 """
 
@@ -541,3 +541,98 @@ def get_tutor_tool_schemas(allowed_tools: list[str] | None) -> list[dict[str, An
     if not allowed_tools:
         return list(TUTOR_TOOL_SCHEMAS.values())
     return [TUTOR_TOOL_SCHEMAS[name] for name in allowed_tools if name in TUTOR_TOOL_SCHEMAS]
+
+
+# ---------------------------------------------------------------------------
+# Agent #6: Reel Script Agent (1-turn structured output `save_reel_script`)
+# ---------------------------------------------------------------------------
+REEL_SCENE_KINDS: list[str] = [
+    "title",
+    "statement",
+    "bullets",
+    "term",
+    "compare",
+    "figure",
+    "chart",
+    "code",
+    "equation",
+    "plot",
+    "ready",
+]
+REEL_CUE_VERBS: list[str] = ["rise", "draw", "count", "pulse"]
+
+REEL_SCRIPT_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "save_reel_script",
+            "description": (
+                "Save a narrated audiovisual Reel script with 5 to 10 concise scenes covering the lesson's "
+                "core intuition, formulas, code, charts, plots, or verified textbook `sourceFigureId`. "
+                "NEVER include quiz answers or answer keys in the narration or scene content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "styleVersion": {"type": "string"},
+                    "scenes": {
+                        "type": "array",
+                        "minItems": 3,
+                        "maxItems": 11,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "kind": {"type": "string", "enum": REEL_SCENE_KINDS},
+                                "kicker": {"type": "string"},
+                                "title": {"type": "string"},
+                                "subtitle": {"type": "string"},
+                                "statement": {"type": "string"},
+                                "bullets": {"type": "array", "items": {"type": "string"}},
+                                "term": {"type": "string"},
+                                "definition": {"type": "string"},
+                                "leftTitle": {"type": "string"},
+                                "leftPoints": {"type": "array", "items": {"type": "string"}},
+                                "rightTitle": {"type": "string"},
+                                "rightPoints": {"type": "array", "items": {"type": "string"}},
+                                "sourceFigureId": {"type": "string"},
+                                "figure": {"type": "object"},
+                                "chart": {"type": "object"},
+                                "code": {"type": "string"},
+                                "language": {"type": "string"},
+                                "highlightLines": {"type": "array", "items": {"type": "integer"}},
+                                "steps": {"type": "array", "items": {"type": "object"}},
+                                "plot": {"type": "object"},
+                                "ctaLabel": {"type": "string"},
+                                "beats": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "say": {"type": "string"},
+                                            "show": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "verb": {"type": "string", "enum": REEL_CUE_VERBS},
+                                                        "target": {"type": "string"},
+                                                    },
+                                                    "required": ["verb", "target"],
+                                                },
+                                            },
+                                        },
+                                        "required": ["say"],
+                                    },
+                                },
+                            },
+                            "required": ["kind", "beats"],
+                        },
+                    },
+                },
+                "required": ["scenes"],
+            },
+        },
+    }
+]

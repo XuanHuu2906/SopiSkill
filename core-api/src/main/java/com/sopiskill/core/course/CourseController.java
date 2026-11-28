@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.sopiskill.core.common.ApiException;
 import com.sopiskill.core.common.IdCodec;
 import com.sopiskill.core.common.JsonHelper;
+import com.sopiskill.core.config.SopiProperties;
 import com.sopiskill.core.internal.AiEngineClient;
 import com.sopiskill.core.security.AuthPrincipal;
 import com.sopiskill.core.security.CsrfValidator;
@@ -42,19 +43,22 @@ public class CourseController {
     private final CsrfValidator csrf;
     private final RateLimiterService rateLimiter;
     private final AiEngineClient aiEngine;
+    private final SopiProperties props;
 
     public CourseController(
             JdbcClient jdbc,
             JsonHelper json,
             CsrfValidator csrf,
             RateLimiterService rateLimiter,
-            AiEngineClient aiEngine
+            AiEngineClient aiEngine,
+            SopiProperties props
     ) {
         this.jdbc = jdbc;
         this.json = json;
         this.csrf = csrf;
         this.rateLimiter = rateLimiter;
         this.aiEngine = aiEngine;
+        this.props = props;
     }
 
     public record CreateCourseRequest(
@@ -337,7 +341,9 @@ public class CourseController {
                 .param("uid", principal.userId())
                 .update();
         if (deleted > 0) {
-            aiEngine.deleteRagResourceBestEffort("/internal/rag/courses/" + IdCodec.format("crs", cid), null);
+            String formattedCid = IdCodec.format("crs", cid);
+            aiEngine.deleteRagResourceBestEffort("/internal/rag/courses/" + formattedCid, null);
+            aiEngine.deleteRagResourceBestEffort("/internal/reels/audio/" + formattedCid, null);
         }
         return ResponseEntity.noContent().build();
     }
@@ -688,6 +694,8 @@ public class CourseController {
         jobPayload.put("learnerProfile", payload.getOrDefault("learnerProfile", Map.of("currentLevel", "beginner")));
         jobPayload.put("units", units);
         jobPayload.put("lessonIds", orderedLessonIds);
+        jobPayload.put("contentVersion", 1);
+        jobPayload.put("reelEnabled", props.reelEnabled());
         if (!((List<?>) sourceCtx.get("sourceIds")).isEmpty()) {
             jobPayload.put("sourceIds", sourceCtx.get("sourceIds"));
         }

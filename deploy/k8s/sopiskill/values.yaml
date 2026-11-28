@@ -1,0 +1,225 @@
+# Production-grade default values for SopiSkill on Kubernetes.
+# Override with `values-kind.yaml` for local single-node `kind` testing.
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  env: production
+  storageClass: ""
+
+images:
+  pullPolicy: IfNotPresent
+  frontend:
+    repository: sopiskill-frontend-polyglot
+    tag: k8s
+  coreApi:
+    repository: sopiskill-core-sb
+    tag: local
+  aiEngine:
+    repository: sopiskill-ai-py
+    tag: local
+  pgvector:
+    repository: pgvector/pgvector
+    tag: pg16
+  redis:
+    repository: redis
+    tag: 7-alpine
+  minio:
+    repository: pgsty/minio
+    tag: latest
+
+config:
+  corsOrigins: "http://localhost:8088,http://127.0.0.1:8088,http://localhost:3010,http://127.0.0.1:3010"
+  cookieSecure: false
+  llmProvider: mock
+  llmBaseUrl: ""
+  llmModel: ""
+  embeddingProvider: hashing
+  embeddingModel: hashing-ngram-v1
+  embeddingDimension: "256"
+  ttsProvider: mock
+  ttsModel: tts-1
+  ttsBaseUrl: ""
+  reelEnabled: true
+  ragEnabled: false
+  ocrEnabled: false
+  tutorEnabled: true
+  p50Enabled: true
+  rateLimitEnabled: true
+  rateLimitFailClosed: false
+  heartsEnforcementEnabled: false
+  leaguesEnabled: false
+  validatorLlmEnabled: false
+  lessonImagesEnabled: false
+  webIngestEnabled: false
+  s3Bucket: sopiskill-sources
+  s3PublicEndpoint: ""
+  streamLlmKey: queue:ai:llm
+  streamLlmGroup: ai-worker-llm-group
+  streamIngestKey: queue:ai:ingest
+  streamIngestGroup: ai-worker-ingest-group
+
+secrets:
+  existingSecret: ""
+  postgresUser: sopiskill
+  postgresPassword: sopiskill_password
+  postgresDb: sopiskill
+  jwtSecret: dev-sopiskill-jwt-secret-must-be-at-least-32-bytes-long-change-in-prod
+  lessonShuffleSecret: dev-lesson-shuffle-hmac-secret-change-in-prod
+  internalServiceToken: dev-internal-service-token-change-me
+  internalHmacSecret: dev-internal-hmac-secret-change-me
+  minioAccessKey: sopiskill_minio
+  minioSecretKey: sopiskill_minio_password
+  llmApiKey: ""
+  embeddingApiKey: ""
+  ttsApiKey: ""
+
+frontend:
+  replicaCount: 2
+  port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+coreApi:
+  replicaCount: 2
+  port: 8080
+  terminationGracePeriodSeconds: 60
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1500m
+      memory: 1Gi
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+aiApi:
+  replicaCount: 2
+  port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+
+aiWorkerLlm:
+  replicaCount: 1
+  terminationGracePeriodSeconds: 120
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  keda:
+    minReplicaCount: 1
+    maxReplicaCount: 6
+    pollingInterval: 10
+    cooldownPeriod: 60
+    pendingEntriesCount: "2"
+
+aiWorkerIngest:
+  replicaCount: 1
+  terminationGracePeriodSeconds: 120
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  keda:
+    minReplicaCount: 1
+    maxReplicaCount: 4
+    pollingInterval: 10
+    cooldownPeriod: 60
+    pendingEntriesCount: "1"
+
+keda:
+  enabled: true
+
+pgvector:
+  enabled: true
+  port: 5432
+  sharedBuffers: 1GB
+  storageSize: 20Gi
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+redis:
+  enabled: true
+  port: 6379
+  storageSize: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+minio:
+  enabled: true
+  apiPort: 9000
+  consolePort: 9001
+  storageSize: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+dbMigrate:
+  enabled: true
+  hooks: "post-install,pre-upgrade"
+
+librarySeed:
+  enabled: false
+  tiers: "tier1_textbook,tier2_monograph"
+  limit: 25
+
+maintenance:
+  enabled: true
+  schedule: "15 * * * *"
+  pgBackupEnabled: true
+
+ingress:
+  enabled: true
+  className: nginx
+  host: ""
+  tls:
+    enabled: false
+    secretName: sopiskill-tls
+  sseProxyReadTimeout: "300"
+  sseProxySendTimeout: "300"
+  apiBodySize: "30m"

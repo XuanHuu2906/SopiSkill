@@ -2,6 +2,71 @@
 
 > Ghi nhận trạng thái thực tế. Quy ước: **IMPLEMENTED** (có code) / **TESTED** (đã chạy và pass) / **NOT TESTED** (chưa chạy).
 
+## 2026-11-28 — Phase 10B — Đóng gói Kubernetes (`Helm` + `KEDA` + `Split Nginx Ingress` + `kind` Multi-Pod Chaos E2E)
+
+- Repository / branch: SopiSkill · nhánh `feat/phase10b-k8s-helm-chaos` (tách từ `feat/phase10a-reel-engine` commit `28e7a25`).
+- **IMPLEMENTED:**
+  - **Helm Chart production-grade (`deploy/k8s/sopiskill/`):**
+    - `Chart.yaml`, `values.yaml` (production spec: `pgvector` `2Gi/4Gi` RAM, `shared_buffers=1GB`, PVC `20Gi`; `minio` PVC `20Gi`), `values-kind.yaml` (local multi-pod testing keeping `coreApi.replicaCount=2`, `aiApi.replicaCount=2`, `frontend.replicaCount=2`), `templates/_helpers.tpl`, `configmap.yaml`, `secret.yaml`.
+    - **Stateless Deployments & HPA (`hpa.yaml`):** `frontend` (HPA 2–6), `core-api` (`2+` replicas, Virtual Threads, `/actuator/health/liveness` & `/readiness`, `terminationGracePeriodSeconds: 60`, `preStop` drain, `X-Pod-Name` header), `ai-api` (`ClusterIP` nội bộ tuyệt đối, `/ready` probe, HPA 2–4).
+    - **KEDA Event-Driven Workers (`keda-scaledobjects.yaml`):** `ai-worker-llm` (1–6, `terminationGracePeriodSeconds: 120`) & `ai-worker-ingest` (1–4, `terminationGracePeriodSeconds: 120`) gắn `ScaledObject` loại `redis-streams` tới `sopiskill-redis.<namespace>.svc.cluster.local:6379`.
+    - **Stateful Workloads:** `pgvector-db` (`pgvector/pgvector:pg16`), `redis` (`redis:7-alpine --appendonly yes`), `minio` (`pgsty/minio:latest`).
+    - **2 Split Nginx Ingress Rules (`ingress.yaml`):**
+      - `sopiskill-tutor-sse-ingress`: `/v1/courses/.*/tutor/.*` (`use-regex: "true"`, `proxy-buffering: "off"`, `proxy-read-timeout: "300"`, `proxy-send-timeout: "300"`).
+      - `sopiskill-api-media-ingress`: `/v1/library/figures`, `/v1`, `/health`, `/ready`, `/` (`proxy-buffering: "on"`, `proxy-body-size: "30m"`).
+    - **Jobs & Scheduled Maintenance:**
+      - `Job: core-db-migrate` (`helm.sh/hook: post-install,pre-upgrade`): chạy tuần tự `alembic upgrade head` (`rag.*`) + `core-api` `--sopiskill.migrate-only=true` (`CoreApiApplication.java`, `Flyway V1..V8`).
+      - `Job: library-seed` (tùy chọn `librarySeed.enabled`): chạy `python -m scripts.import_open_library`.
+      - `CronJob: maintenance` + `InternalCallbackController.POST /internal/maintenance/run` + `ai-engine/scripts/maintenance.py`: chốt cohort League, quét retention nudges 7 loại, trim Redis streams, xóa `reels-audio/` mồ côi trên MinIO, và `pg_dump` kiểm chứng `sha256sum`.
+  - **Multi-Pod Chaos & K8s Verification Suite (`deploy/k8s/kind-config.yaml`, `deploy/k8s/chaos_test.py`):** tự động kiểm chứng 3 kịch bản Chaos đa pod, bảo vệ `ClusterIP` cho `ai-api`, KEDA `ScaledObject` `Ready=True`, và `CronJob: maintenance`.
+- **TESTED (cụm `kind` Kubernetes 1.32.2 thật + Ingress-Nginx + KEDA 2.21.1, 0đ chi phí):**
+  - `helm lint deploy/k8s/sopiskill -f values.yaml` & `-f values-kind.yaml` → **exit `0` (`0` errors)**.
+  - `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_" && ../backend/.venv/bin/python -m bandit -r app scripts -q` → **exit `0`** (**`69/69` PASSED**, gồm `test_phase10b_k8s_maintenance.py`, `0` Bandit findings).
+  - `cd core-api && ./mvnw -B test -Dtest=PublicBlockProjectorTest -q` → **exit `0`** (và `mvn package` bên trong Docker image `sopiskill-core-sb:local` pass sạch).
+  - Triển khai sống trên cụm `kind` (`sopiskill-k8s`):
+    - `job.batch/sopiskill-core-db-migrate` (`post-install` & `pre-upgrade`): **Complete 1/1 (9s)**.
+    - `scaledobject.keda.sh`: cả `sopiskill-worker-llm-keda` & `sopiskill-worker-ingest-keda` đạt **`READY=True, HPAActive=True`**.
+    - `backend/.venv/bin/python deploy/k8s/chaos_test.py` → **exit `0` (ALL PASS)**:
+      1. **Chaos 1 (Pod Kill mid-SSE + `Last-Event-ID`):** mở stream trên pod `m6mpc` → `kubectl delete pod` giữa luồng → reconnect qua Split Ingress rơi vào pod `zghn2` nhận đủ `delta` + `done` (`0` chữ rơi).
+      2. **Chaos 2 (Cross-Pod `/stop` qua Redis Pub/Sub):** stream trên pod `7gfxp` → bắn `/stop` vào pod `bwtfj` → pod `7gfxp` ngắt tức thì (`cancelled` trong DB).
+      3. **Chaos 3 (Rolling Update `core-api` + `ai-worker-llm` khi job đang chạy):** `kubectl rollout restart` ngay lúc đang sinh khóa học → hoàn tất `4 lessons + Reel` (`0` job thất lạc).
+      4. **`CronJob: maintenance`:** hoàn tất `HTTP 200`, `activeReelObjects=264`, `pg_dump` + `sha256sum -c` pass.
+  - Full Playwright E2E trực tiếp qua **Split Nginx Ingress (`http://127.0.0.1:8088`)**: `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8088 E2E_FRONTEND_PORT=8088 npm run test:e2e` → **exit `0` (`12/12` PASSED in 1.3m**, `axe-core` **0 violations**).
+- **NOT TESTED:**
+  - KEDA autoscale tăng từ `1` lên `>1` pod dưới tải thực tế lớn hoặc scale-to-zero (`minReplicaCount=0`), và HPA CPU scaling (do `metrics-server` chưa cài mặc định trên cụm `kind` local).
+  - Production TLS (`cert-manager`) và `Job: library-seed` nạp full `491` sách trực tiếp vào cụm `kind` mới.
+- **ROLLBACK:** Thuần thư mục `deploy/k8s/` + mở rộng an toàn trên `CoreApiApplication.java`, `InternalCallbackController.java`, `TutorController.java`, `ai-engine/scripts/maintenance.py` (không đổi DB schema).
+
+## 2026-11-28 — Phase 10A — 2-Phase Narrated Reel Engine (`Flyway V8`, Agent #6 `rel_`, Safe AST Plot, Neutral `TTSProvider`, `ReelPlayer` & Offline Audio Cache)
+
+- Repository / branch: SopiSkill · nhánh `feat/phase10a-reel-engine` (tách từ `feat/library-foundation` commit `9a87791`).
+- **IMPLEMENTED:**
+  - **Flyway `core` V8 (`core-api/src/main/resources/db/migration/V8__lesson_reels_and_media.sql`):**
+    - Mở rộng thuần additive trên `core.lessons` (`reel_manifest JSONB`, `reel_status VARCHAR(24)`, `reel_version INT`) và tạo 2 bảng mới `core.lesson_reels` (`rel_`, `UNIQUE(lesson_id, content_version)`) + `core.media_calls` (`mdc_`, chỉ mục `(lesson_id, clip_id)` và `(course_id)`).
+  - **`ai-engine/` — Agent #6 (`rel_`) 2-Phase Compiler, Shared Safe AST Plot & Neutral `TTSProvider`:**
+    - `ai-engine/app/agents/figure_validator.py`: tái sử dụng trực tiếp `validate_safe_math_expr` (Python `ast` whitelist, **0 `eval()`/`exec()`**) và bổ sung `evaluate_safe_math_ast` + `compile_plot_scene_spec` biên dịch `expr` thành tọa độ SVG `segments`, tiếp tuyến `tangents` (`slope`), đa giác tích phân `areas` và `points`.
+    - `ai-engine/app/agents/tts_provider.py`: trừu tượng `TTSProvider` trung lập với 3 adapter: `MockTTSProvider` (mặc định 0đ chi phí, sinh file RIFF PCM `.wav` hợp lệ + `words[{text, startMs, endMs}]` đơn điệu cho `vi`/`en`), `LocalWordBoundaryTTSProvider` (`edge-tts` opt-in), và `OpenAICompatibleTTSProvider` (fail-fast khi thiếu `TTS_API_KEY`).
+    - `ai-engine/app/agents/tool_schemas.py` & `providers.py`: hoàn tất **8/8 Agent** bằng `REEL_SCRIPT_TOOL_SCHEMAS` (`save_reel_script`) và `OpenAICompatibleProvider.generate_reel_script` (1-turn forced tool call trên `AsyncOpenAI` / DeepSeek).
+    - `ai-engine/app/agents/reel_compiler.py`: Pha 1 sinh `reelScript` (đủ **11 scene kinds**: `title, statement, bullets, term, compare, figure, chart, code, equation, plot, ready` + `fallback` cho scene lỗi, `cues: rise/draw/count/pulse`, hỗ trợ `sourceFigureId` xác thực chặt theo `available_figures` của `rag.source_figures`); Pha 2 biên dịch AST plot + tổng hợp âm thanh TTS + đẩy MinIO prefix riêng `reels-audio/{courseId}/{lessonId}/v{ver}_{sceneId}.{ext}` + lọc sạch phòng thủ mọi khóa đáp án.
+    - `ai-engine/app/rag/storage.py`, `app/api/internal.py`, `app/workers/worker_llm.py`, `contracts/internal-ai.yaml`: thêm `delete_prefix` (khóa cứng chỉ cho xóa `reels-audio/`), các endpoint nội bộ ký HMAC `POST /internal/reels/compile`, `GET /internal/reels/audio/{courseId}/{lessonId}/{clipFile}`, `DELETE /internal/reels/audio/{courseId}[/{lessonId}]`, và nối biên dịch Reel + tự dọn audio cũ khi `regenerate_unit` vào `worker_llm.py` sau cờ `REEL_ENABLED`.
+  - **`core-api/` (Spring Boot 3.4):**
+    - `SopiProperties.java`, `application.yml`, `deploy/docker-compose.yml`: thêm cờ `REEL_ENABLED` (mặc định `true` ở dev/CI, tôn trọng khi tắt).
+    - `InternalCallbackController.java`: lưu `reelManifest` + `mediaCalls` vào `core.lessons`, `core.lesson_reels`, `core.media_calls` (tự tước sạch mọi khóa đáp án phòng thủ).
+    - `LessonController.java`, `TutorController.java`, `CourseController.java`, `SourcesAndResearchController.java`: trả `reel` trong `GET /v1/lessons/{lessonId}` (0 answer key); thêm `GET /v1/lessons/{lessonId}/reel/audio/{clipId}` khóa chặt quyền sở hữu `loadOwnedLesson` + kiểm tra `core.media_calls` + bucket rate-limit riêng `reel_audio` (`240/60s`, kèm bucket riêng `library_figure` cho `/v1/library/figures/**`); tự xóa audio `reels-audio/` cũ khi `regenerate_unit` hoặc `DELETE /v1/courses/{id}`.
+  - **`frontend/` (Next.js 15):**
+    - Tách export `FunctionPlotSvg` từ `FigureRenderer.tsx` dùng chung với `CodeBlockCard`, `FormulaMath` (`MathText.tsx`) trong **`frontend/src/components/lesson/ReelPlayer.tsx`** (phát đủ 11 scene kinds + `fallback`, tốc độ `1× / 1.25× / 1.5×`, đồng bộ resync khi lệch `>80ms`, phụ đề karaoke theo từng từ `words[]`, chạy mượt khi tắt tiếng, đạt chuẩn WCAG 2.1 AA / `wcag253`).
+    - Nâng cấp `frontend/src/lib/offline/db.ts` (`putCachedReelClip`/`getCachedReelClip` giới hạn 30 clip LRU trong `cached_reel_clips`), `prefetch.ts` (warm 2 clip đầu), `public/sw.js` (cache có giới hạn tối đa 60 ảnh `/v1/library/figures/**` cho chế độ ngoại tuyến), và tích hợp nút `"Xem Reel"` trên `/lesson/[lessonId]`.
+- **TESTED (100% offline/mock + live 8-container Docker polyglot stack, 0đ chi phí):**
+  - `cd ai-engine && ../backend/.venv/bin/python -m pytest -v -k "not test_live_" && ../backend/.venv/bin/python -m bandit -r app scripts -q` → **exit `0`** (**`68/68` PASSED**, gồm `7/7` test mới `test_phase10a_reel_engine.py`, `0` Bandit findings).
+  - `cd frontend && npm run lint && npm run typecheck && NEXT_PUBLIC_API_URL=http://127.0.0.1:8080 npm run build` → **exit `0`** (`0` warnings, `0` errors, `16/16` routes).
+  - `cd core-api && ./mvnw -B test` → **exit `0`** (**`15/15` JUnit PASS** trên live PostgreSQL 16 Flyway `V8`, gồm `Phase10AReelEngineTest`).
+  - Live Docker rebuild (`docker compose -f deploy/docker-compose.yml up -d --build --wait ai-api ai-worker-llm core-api frontend`) → **9/9 UP & HEALTHY**.
+  - `cd frontend && E2E_REUSE_SERVERS=1 E2E_BACKEND_PORT=8080 E2E_FRONTEND_PORT=3010 npm run test:e2e` → **exit `0`** (**`12/12` PASSED in 1.1m**, `axe-core` **0 violations**, kịch bản #12 kiểm chứng 11 scene Reel, `1×/1.25×/1.5×`, chế độ tắt tiếng, karaoke captions, 0 byte đáp án, audio WAV và IndexedDB `cached_reel_clips`).
+- **NOT TESTED:**
+  - Chạy tổng hợp giọng nói thật qua `TTS_PROVIDER=local` (`edge-tts` cần cài gói tùy chọn + mạng ngoài) hoặc `TTS_PROVIDER=openai_compatible` trả phí; gọi `LLM_PROVIDER=deepseek` thật tới `api.deepseek.com` (đã test đầy đủ `AsyncOpenAI` + `save_reel_script` qua `httpx.MockTransport`).
+  - Phần **Phase 10B** (đóng gói Kubernetes Helm + KEDA + `kind` Chaos đa pod — chưa thực hiện trong lượt này).
+- **ROLLBACK:** Thuần nhánh `feat/phase10a-reel-engine`; Flyway `V8` thuần additive (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`) và có cờ tắt nhanh `REEL_ENABLED=false`.
+
 ## 2026-11-27 — Multimodal Knowledge & Rich Lesson Engine (`Phase M0–M3`: Code, LaTeX, Interactive Plots & Grounded MinIO Figures)
 
 - Repository / branch: SopiSkill · nhánh `feat/library-foundation` + đồng bộ pipeline nguồn tại `/home/nguyenhuu/Hoc Tap/Cào sách` (`docs/multimodal-formulas-code-figures-plan.md`).

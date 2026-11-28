@@ -63,6 +63,8 @@ export interface OutboxAttemptRecord {
 export interface CachedReelClipRecord {
   clipId: string;
   ownerId: string;
+  lessonId?: string;
+  contentType?: string;
   data: unknown;
   updatedAt: number;
 }
@@ -331,4 +333,50 @@ export function notifyOfflineChange(): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("sopiskill:offline-change"));
   }
+}
+
+const MAX_CACHED_REEL_CLIPS = 30;
+
+/** Store a Reel audio clip (`ArrayBuffer`) bounded to `MAX_CACHED_REEL_CLIPS` (LRU eviction). */
+export async function putCachedReelClip(
+  clipId: string,
+  ownerId: string,
+  lessonId: string,
+  contentType: string,
+  bytes: ArrayBuffer,
+): Promise<void> {
+  if (!clipId || !ownerId || !bytes || bytes.byteLength === 0) return;
+  await idbPut<CachedReelClipRecord>("cached_reel_clips", {
+    clipId,
+    ownerId,
+    lessonId,
+    contentType,
+    data: bytes,
+    updatedAt: Date.now(),
+  });
+  try {
+    const all = await idbGetAll<CachedReelClipRecord>("cached_reel_clips");
+    if (all.length > MAX_CACHED_REEL_CLIPS) {
+      all.sort((a, b) => a.updatedAt - b.updatedAt);
+      const excess = all.slice(0, all.length - MAX_CACHED_REEL_CLIPS);
+      for (const old of excess) {
+        await idbDelete("cached_reel_clips", old.clipId);
+      }
+    }
+  } catch {
+    // ignore background eviction error
+  }
+}
+
+export async function getCachedReelClip(
+  clipId: string,
+  ownerId: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string } | null> {
+  const rec = await idbGet<CachedReelClipRecord>("cached_reel_clips", clipId);
+  if (!rec || rec.ownerId !== ownerId) return null;
+  if (!(rec.data instanceof ArrayBuffer)) return null;
+  return {
+    bytes: rec.data,
+    contentType: rec.contentType || "audio/wav",
+  };
 }

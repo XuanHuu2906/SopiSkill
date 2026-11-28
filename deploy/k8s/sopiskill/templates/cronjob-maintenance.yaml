@@ -1,0 +1,52 @@
+{{- if .Values.maintenance.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-maintenance
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+spec:
+  schedule: {{ .Values.maintenance.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "sopiskill.labels" . | nindent 12 }}
+            app.kubernetes.io/component: maintenance
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: maintenance-app
+              image: {{ printf "%s:%s" .Values.images.aiEngine.repository .Values.images.aiEngine.tag | quote }}
+              imagePullPolicy: {{ .Values.images.pullPolicy }}
+              command: ["python", "-m", "scripts.maintenance"]
+              envFrom:
+                - configMapRef:
+                    name: {{ include "sopiskill.fullname" . }}-config
+                - secretRef:
+                    name: {{ include "sopiskill.secretName" . }}
+            {{- if .Values.maintenance.pgBackupEnabled }}
+            - name: pg-backup-verify
+              image: {{ printf "%s:%s" .Values.images.pgvector.repository .Values.images.pgvector.tag | quote }}
+              imagePullPolicy: {{ .Values.images.pullPolicy }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  OUT="/tmp/sopiskill_$(date -u +%Y%m%dT%H%M%SZ).sql"
+                  PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h {{ include "sopiskill.pgHost" . }} -p {{ .Values.pgvector.port }} -U "$POSTGRES_USER" -d "$POSTGRES_DB" > "$OUT"
+                  gzip "$OUT"
+                  sha256sum "${OUT}.gz" > "${OUT}.gz.sha256"
+                  sha256sum -c "${OUT}.gz.sha256"
+              envFrom:
+                - secretRef:
+                    name: {{ include "sopiskill.secretName" . }}
+            {{- end }}
+{{- end }}

@@ -90,3 +90,4 @@ sopiskill:
   apple-client-id: ${APPLE_CLIENT_ID:com.sopiskill.web}
   vapid-public-key: ${VAPID_PUBLIC_KEY:}
   billing-commercial-strict-sources: ${BILLING_COMMERCIAL_STRICT_SOURCES:false}
+  reel-enabled: ${REEL_ENABLED:true}

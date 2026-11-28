@@ -34,6 +34,26 @@ class MemorySourceStorage:
             raise SourceStorageError(f"Object not found in memory storage: {key}")
         return self._objects[key]
 
+    async def delete_prefix(self, prefix: str) -> int:
+        if not prefix.startswith("reels-audio/"):
+            raise SourceStorageError(f"Refusing to delete non-reel prefix: {prefix}")
+        matching = [k for k in list(self._objects.keys()) if k.startswith(prefix)]
+        for k in matching:
+            self._objects.pop(k, None)
+            self._content_types.pop(k, None)
+        return len(matching)
+
+    async def list_prefix(self, prefix: str) -> list[str]:
+        return sorted(k for k in self._objects.keys() if k.startswith(prefix))
+
+    async def delete_object(self, key: str) -> bool:
+        if not key.startswith("reels-audio/"):
+            raise SourceStorageError(f"Refusing to delete non-reel object: {key}")
+        existed = key in self._objects
+        self._objects.pop(key, None)
+        self._content_types.pop(key, None)
+        return existed
+
 
 class MinioSourceStorage:
     def __init__(self, settings: Settings) -> None:
@@ -93,6 +113,48 @@ class MinioSourceStorage:
             return await asyncio.to_thread(self._read_sync, key)
         except Exception as exc:
             raise SourceStorageError(f"Failed to download object from S3 ({type(exc).__name__}).") from exc
+
+    def _delete_prefix_sync(self, prefix: str) -> int:
+        if not self._client.bucket_exists(self._bucket):
+            return 0
+        deleted = 0
+        for obj in self._client.list_objects(self._bucket, prefix=prefix, recursive=True):
+            if obj.object_name:
+                self._client.remove_object(self._bucket, obj.object_name)
+                deleted += 1
+        return deleted
+
+    async def delete_prefix(self, prefix: str) -> int:
+        if not prefix.startswith("reels-audio/"):
+            raise SourceStorageError(f"Refusing to delete non-reel prefix: {prefix}")
+        try:
+            return await asyncio.to_thread(self._delete_prefix_sync, prefix)
+        except Exception as exc:
+            raise SourceStorageError(f"Failed to delete S3 prefix ({type(exc).__name__}).") from exc
+
+    def _list_prefix_sync(self, prefix: str) -> list[str]:
+        if not self._client.bucket_exists(self._bucket):
+            return []
+        return sorted(
+            obj.object_name
+            for obj in self._client.list_objects(self._bucket, prefix=prefix, recursive=True)
+            if obj.object_name
+        )
+
+    async def list_prefix(self, prefix: str) -> list[str]:
+        try:
+            return await asyncio.to_thread(self._list_prefix_sync, prefix)
+        except Exception as exc:
+            raise SourceStorageError(f"Failed to list S3 prefix ({type(exc).__name__}).") from exc
+
+    async def delete_object(self, key: str) -> bool:
+        if not key.startswith("reels-audio/"):
+            raise SourceStorageError(f"Refusing to delete non-reel object: {key}")
+        try:
+            await asyncio.to_thread(self._client.remove_object, self._bucket, key)
+            return True
+        except Exception as exc:
+            raise SourceStorageError(f"Failed to delete S3 object ({type(exc).__name__}).") from exc
 
 
 _memory_singleton = MemorySourceStorage()

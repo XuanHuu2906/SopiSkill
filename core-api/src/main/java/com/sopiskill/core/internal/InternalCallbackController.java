@@ -4,14 +4,19 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.sopiskill.core.common.ApiException;
 import com.sopiskill.core.common.IdCodec;
 import com.sopiskill.core.common.JsonHelper;
+import com.sopiskill.core.config.SopiProperties;
 import com.sopiskill.core.course.GlossaryService;
+import com.sopiskill.core.gamification.LeagueService;
+import com.sopiskill.core.notifications.NotificationService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,17 +38,29 @@ public class InternalCallbackController {
     private final JdbcClient jdbc;
     private final JsonHelper json;
     private final GlossaryService glossaryService;
+    private final LeagueService leagueService;
+    private final NotificationService notificationService;
+    private final StringRedisTemplate redis;
+    private final SopiProperties props;
 
     public InternalCallbackController(
             InternalHmacSigner signer,
             JdbcClient jdbc,
             JsonHelper json,
-            GlossaryService glossaryService
+            GlossaryService glossaryService,
+            LeagueService leagueService,
+            NotificationService notificationService,
+            StringRedisTemplate redis,
+            SopiProperties props
     ) {
         this.signer = signer;
         this.jdbc = jdbc;
         this.json = json;
         this.glossaryService = glossaryService;
+        this.leagueService = leagueService;
+        this.notificationService = notificationService;
+        this.redis = redis;
+        this.props = props;
     }
 
     @PostMapping("/jobs/{jobId}/complete")
@@ -125,6 +142,12 @@ public class InternalCallbackController {
 
                 // Extract glossary terms strictly from teach blocks (never quiz blocks)
                 glossaryService.extractAndUpsertFromTeachBlocks(courseId, lid, blocks);
+
+                Object genReel = gen.get("reelManifest");
+                List<Map<String, Object>> genMedia = (List<Map<String, Object>>) gen.getOrDefault("mediaCalls", List.of());
+                if (genReel instanceof Map<?, ?> reelMap) {
+                    persistLessonReel(courseId, lid, (Map<String, Object>) reelMap, genMedia);
+                }
             }
 
             jdbc.sql("""
@@ -223,6 +246,18 @@ public class InternalCallbackController {
 
             List<Map<String, Object>> flags = (List<Map<String, Object>>) body.getOrDefault("contentFlags", List.of());
             persistContentFlags(cid, lid, flags);
+
+            Object rawReel = body.get("reelManifest");
+            if (rawReel == null && content != null) {
+                rawReel = content.get("reelManifest");
+            }
+            List<Map<String, Object>> mediaCalls = (List<Map<String, Object>>) body.getOrDefault("mediaCalls", List.of());
+            if (mediaCalls.isEmpty() && content != null && content.get("mediaCalls") instanceof List<?> mcList) {
+                mediaCalls = (List<Map<String, Object>>) mcList;
+            }
+            if (rawReel instanceof Map<?, ?> reelMap) {
+                persistLessonReel(cid, lid, (Map<String, Object>) reelMap, mediaCalls);
+            }
 
             int readyLessonsCount = jdbc.sql("SELECT COUNT(*) FROM core.lessons WHERE course_id = :cid AND status = 'ready'")
                     .param("cid", cid).query(Integer.class).single();
@@ -323,6 +358,140 @@ public class InternalCallbackController {
                     .param("ev", evidence)
                     .param("vst", vStatus)
                     .update();
+        }
+    }
+
+    private static final java.util.Set<String> FORBIDDEN_REEL_KEYS = java.util.Set.of(
+            "answerIndex", "answerIndices", "acceptedAnswers", "answer_key", "solution", "answer", "answers", "pairs"
+    );
+
+    @SuppressWarnings("unchecked")
+    private Object stripForbiddenReelKeys(Object obj) {
+        if (obj instanceof List<?> list) {
+            return list.stream().map(this::stripForbiddenReelKeys).toList();
+        }
+        if (obj instanceof Map<?, ?> map) {
+            Map<String, Object> clean = new java.util.LinkedHashMap<>();
+            for (var entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                if (FORBIDDEN_REEL_KEYS.contains(key)) continue;
+                clean.put(key, stripForbiddenReelKeys(entry.getValue()));
+            }
+            return clean;
+        }
+        return obj;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void persistLessonReel(
+            UUID courseId,
+            UUID lessonId,
+            Map<String, Object> rawManifest,
+            List<Map<String, Object>> mediaCalls
+    ) {
+        Map<String, Object> sanitized = (Map<String, Object>) stripForbiddenReelKeys(rawManifest);
+        int contentVersion = jdbc.sql("SELECT content_version FROM core.lessons WHERE id = :lid")
+                .param("lid", lessonId)
+                .query(Integer.class)
+                .optional()
+                .orElse(1);
+        String styleVersion = String.valueOf(sanitized.getOrDefault("styleVersion", "v1"));
+        if (styleVersion.length() > 32) styleVersion = styleVersion.substring(0, 32);
+        String language = String.valueOf(sanitized.getOrDefault("language", "vi"));
+        if (language.length() > 16) language = language.substring(0, 16);
+        int durationMs = sanitized.get("durationMs") instanceof Number n ? Math.max(0, n.intValue()) : 0;
+
+        String manifestJson = json.toJson(sanitized).replace("\\u0000", "").replace("\u0000", "");
+        UUID reelId = UUID.randomUUID();
+
+        jdbc.sql("""
+                INSERT INTO core.lesson_reels (
+                    id, lesson_id, course_id, content_version, style_version, language, status, duration_ms, manifest_json
+                ) VALUES (
+                    :id, :lid, :cid, :ver, :sv, :lang, 'ready', :dur, CAST(:mj AS jsonb)
+                )
+                ON CONFLICT (lesson_id, content_version) DO UPDATE SET
+                    style_version = EXCLUDED.style_version,
+                    language = EXCLUDED.language,
+                    status = 'ready',
+                    duration_ms = EXCLUDED.duration_ms,
+                    manifest_json = EXCLUDED.manifest_json,
+                    updated_at = now()
+                """)
+                .param("id", reelId)
+                .param("lid", lessonId)
+                .param("cid", courseId)
+                .param("ver", contentVersion)
+                .param("sv", styleVersion)
+                .param("lang", language)
+                .param("dur", durationMs)
+                .param("mj", manifestJson)
+                .update();
+
+        UUID persistedReelId = jdbc.sql("SELECT id FROM core.lesson_reels WHERE lesson_id = :lid AND content_version = :ver")
+                .param("lid", lessonId)
+                .param("ver", contentVersion)
+                .query(UUID.class)
+                .single();
+
+        jdbc.sql("""
+                UPDATE core.lessons
+                SET reel_manifest = CAST(:mj AS jsonb),
+                    reel_status = 'ready',
+                    reel_version = :ver,
+                    updated_at = now()
+                WHERE id = :lid AND course_id = :cid
+                """)
+                .param("mj", manifestJson)
+                .param("ver", contentVersion)
+                .param("lid", lessonId)
+                .param("cid", courseId)
+                .update();
+
+        // Replace media_calls for this lesson cleanly
+        jdbc.sql("DELETE FROM core.media_calls WHERE lesson_id = :lid")
+                .param("lid", lessonId)
+                .update();
+
+        if (mediaCalls != null) {
+            for (Map<String, Object> mc : mediaCalls) {
+                if (mc == null) continue;
+                String objectKey = mc.get("objectKey") == null ? "" : String.valueOf(mc.get("objectKey")).trim();
+                String clipId = mc.get("clipId") == null ? "" : String.valueOf(mc.get("clipId")).trim();
+                if (objectKey.isEmpty() || clipId.isEmpty() || !objectKey.startsWith("reels-audio/")) continue;
+                String kind = String.valueOf(mc.getOrDefault("kind", "reel_tts"));
+                if (kind.length() > 32) kind = kind.substring(0, 32);
+                String provider = String.valueOf(mc.getOrDefault("provider", "mock"));
+                if (provider.length() > 64) provider = provider.substring(0, 64);
+                String voice = mc.get("voice") == null ? null : String.valueOf(mc.get("voice"));
+                if (voice != null && voice.length() > 80) voice = voice.substring(0, 80);
+                String ctype = String.valueOf(mc.getOrDefault("contentType", "audio/wav"));
+                if (ctype.length() > 64) ctype = ctype.substring(0, 64);
+                int byteSize = mc.get("byteSize") instanceof Number n ? Math.max(0, n.intValue()) : 0;
+                int durMs = mc.get("durationMs") instanceof Number n ? Math.max(0, n.intValue()) : 0;
+                jdbc.sql("""
+                        INSERT INTO core.media_calls (
+                            id, lesson_id, course_id, reel_id, kind, provider, voice,
+                            clip_id, object_key, content_type, byte_size, duration_ms, status
+                        ) VALUES (
+                            :id, :lid, :cid, :rid, :kind, :prov, :voice,
+                            :clip, :okey, :ctype, :bsize, :dur, 'ready'
+                        )
+                        """)
+                        .param("id", UUID.randomUUID())
+                        .param("lid", lessonId)
+                        .param("cid", courseId)
+                        .param("rid", persistedReelId)
+                        .param("kind", kind)
+                        .param("prov", provider)
+                        .param("voice", voice)
+                        .param("clip", clipId.length() > 96 ? clipId.substring(0, 96) : clipId)
+                        .param("okey", objectKey)
+                        .param("ctype", ctype)
+                        .param("bsize", byteSize)
+                        .param("dur", durMs)
+                        .update();
+            }
         }
     }
 
@@ -636,6 +805,63 @@ public class InternalCallbackController {
                 "documentId", IdCodec.format("doc", did),
                 "skipped", false,
                 "externalKey", externalKey
+        );
+    }
+
+    /**
+     * Phase 10B CronJob maintenance endpoint (HMAC-authenticated):
+     *   1. Settles completed past-week league cohorts.
+     *   2. Scans retention notifications across active users (respecting quiet hours).
+     *   3. Trims Redis job streams safely (`MAXLEN ~ 1000`).
+     *   4. Returns active `reels-audio/` object keys so `ai-engine` maintenance can prune orphans.
+     */
+    @PostMapping("/maintenance/run")
+    @Transactional
+    public Map<String, Object> runScheduledMaintenance(
+            @RequestBody(required = false) byte[] rawBody,
+            HttpServletRequest request
+    ) {
+        byte[] bodyBytes = rawBody == null ? new byte[0] : rawBody;
+        signer.verifyIncomingCallback(request, bodyBytes);
+
+        Instant now = Instant.now();
+        LocalDate previousWeekStart = LeagueService.currentWeekStart(now).minusWeeks(1);
+        int settledCohorts = leagueService.settleWeek(previousWeekStart, now);
+
+        List<UUID> userIds = jdbc.sql("SELECT id FROM core.users ORDER BY created_at DESC LIMIT 1000")
+                .query(UUID.class)
+                .list();
+        int nudgesDispatched = 0;
+        for (UUID uid : userIds) {
+            nudgesDispatched += notificationService.scanUserNotifications(uid, now).size();
+        }
+
+        int trimmedStreams = 0;
+        for (String streamKey : List.of(props.streamLlmKey(), props.streamIngestKey())) {
+            try {
+                Long trimmed = redis.opsForStream().trim(streamKey, 1000, true);
+                if (trimmed != null && trimmed > 0) {
+                    trimmedStreams++;
+                }
+            } catch (Exception ignored) {
+                // ignore if stream does not exist yet
+            }
+        }
+
+        List<String> activeReelKeys = jdbc.sql("""
+                SELECT DISTINCT object_key
+                FROM core.media_calls
+                WHERE object_key LIKE 'reels-audio/%'
+                """)
+                .query(String.class)
+                .list();
+
+        return Map.of(
+                "status", "ok",
+                "settledCohorts", settledCohorts,
+                "nudgesDispatched", nudgesDispatched,
+                "trimmedStreams", trimmedStreams,
+                "activeReelObjectKeys", activeReelKeys
         );
     }
 }

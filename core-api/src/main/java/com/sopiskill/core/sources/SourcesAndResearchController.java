@@ -97,8 +97,10 @@ public class SourcesAndResearchController {
     public ResponseEntity<byte[]> getLibraryFigure(
             @AuthenticationPrincipal AuthPrincipal principal,
             @PathVariable String sourceId,
-            @PathVariable String figureId
+            @PathVariable String figureId,
+            HttpServletRequest request
     ) {
+        rateLimiter.check(request, "library_figure", 240, 60);
         if (!SAFE_FIGURE_ID.matcher(figureId).matches()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_FIGURE_ID", "Mã hình minh họa không hợp lệ.");
         }

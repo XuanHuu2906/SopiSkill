@@ -544,7 +544,8 @@ test("Phase 4: Rich Lesson — KaTeX, SVG FigureRenderer, {termKey} VocabSheet, 
   await page.waitForURL("**/lesson/lsn_*");
   await expect(page.locator(".katex").first()).toBeVisible();
   await expect(page.locator('figure[data-figure-layout="flow"] svg[role="img"]')).toBeVisible();
-  await expect(page.locator(".citation-chip")).toBeVisible();
+  // Phase L5 strips ungrounded `block.cite` when no source is linked -> notice badge shown instead of fake citation chip
+  await expect(page.getByText("Chưa xác minh")).toBeVisible();
 
   await page.locator(".inline-term-chip").first().click();
   const vocabDialog = page.getByRole("dialog", { name: "Bảng thuật ngữ" });
@@ -1013,4 +1014,106 @@ test("Phase 8: Offline-First IndexedDB 6 stores, 0 answer keys, offline learn/su
     )
     .toBe(0);
   await expect(page.locator(".side-nav")).toContainText("0 XP");
+});
+
+test("Phase 10A: Narrated Reel Engine (11 scenes, 1x/1.25x/1.5x, captions, audio fetch & offline cached_reel_clips)", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const email = uniqueEmail("phase10a-reel");
+  const topic = "Giải tích hàm số";
+
+  await registerUser(page, email);
+  await createAndGenerateCourse(page, topic, "vi");
+
+  const firstLessonLink = page.locator('a[href^="/lesson/"]').first();
+  await expect(firstLessonLink).toBeVisible({ timeout: 30_000 });
+
+  // Intercept GET /v1/lessons/{id} and verify reel manifest + strictly 0 answer keys
+  let interceptedLessonRaw = "";
+  let firstAudioUrl = "";
+  let sceneCount = 0;
+  page.on("response", async (resp) => {
+    const url = resp.url();
+    if (resp.request().method() === "GET" && /\/v1\/lessons\/lsn_[^/?]+(\?|$)/.test(url) && resp.status() === 200) {
+      const txt = await resp.text().catch(() => "");
+      if (txt.includes('"reel"')) {
+        interceptedLessonRaw = txt;
+        try {
+          const parsed = JSON.parse(txt);
+          sceneCount = parsed.reel?.scenes?.length ?? 0;
+          firstAudioUrl = parsed.reel?.scenes?.[0]?.audio?.url ?? "";
+        } catch {
+          // ignore
+        }
+      }
+    }
+  });
+
+  await firstLessonLink.click();
+  await page.waitForURL("**/lesson/lsn_*", { timeout: 15_000 });
+
+  // Open ReelPlayer via header button
+  const reelToggle = page.getByTestId("lesson-reel-toggle");
+  await expect(reelToggle).toBeVisible({ timeout: 15_000 });
+  expect(sceneCount).toBeGreaterThanOrEqual(10);
+  expect(interceptedLessonRaw).not.toContain('"answerIndex"');
+  expect(interceptedLessonRaw).not.toContain('"acceptedAnswers"');
+  expect(interceptedLessonRaw).not.toContain('"solution"');
+
+  await reelToggle.click();
+  const reelPlayer = page.getByTestId("reel-player");
+  await expect(reelPlayer).toBeVisible();
+  await expect(reelPlayer).toHaveAttribute("data-scene-kind", "title");
+  await expect(page.getByTestId("reel-captions")).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  // Cycle speeds 1x -> 1.25x -> 1.5x
+  const speedBtn = page.getByTestId("reel-speed-btn");
+  await expect(speedBtn).toHaveText("1×");
+  await speedBtn.click();
+  await expect(speedBtn).toHaveText("1.25×");
+  await speedBtn.click();
+  await expect(speedBtn).toHaveText("1.5×");
+
+  // Mute and play cleanly in silent mode without errors
+  await page.getByTestId("reel-mute-btn").click();
+  await expect(page.getByTestId("reel-mute-btn")).toHaveText("Đã tắt tiếng");
+  await page.getByTestId("reel-play-toggle").click();
+  await expect(page.getByTestId("reel-play-toggle")).toHaveText("Tạm dừng");
+  await page.getByTestId("reel-play-toggle").click();
+
+  // Navigate through scenes and verify plot, code, equation, chart & ready scenes render cleanly
+  const nextSceneBtn = page.getByTestId("reel-next-scene");
+  const seenKinds = new Set<string>(["title"]);
+  for (let i = 0; i < Math.min(sceneCount - 1, 11); i += 1) {
+    await nextSceneBtn.click();
+    const kind = await reelPlayer.getAttribute("data-scene-kind");
+    if (kind) seenKinds.add(kind);
+  }
+  expect(seenKinds.has("plot")).toBe(true);
+  expect(seenKinds.has("code")).toBe(true);
+  expect(seenKinds.has("equation")).toBe(true);
+  expect(seenKinds.has("chart")).toBe(true);
+  expect(seenKinds.has("ready")).toBe(true);
+
+  // Verify authenticated Reel audio endpoint cached clip in IndexedDB `cached_reel_clips`
+  expect(firstAudioUrl).toContain("/reel/audio/");
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(
+          () =>
+            new Promise<number>((resolve) => {
+              const req = window.indexedDB.open("sopiskill_offline_v1", 1);
+              req.onsuccess = () => {
+                const tx = req.result.transaction("cached_reel_clips", "readonly");
+                const r = tx.objectStore("cached_reel_clips").count();
+                r.onsuccess = () => resolve(r.result);
+              };
+            }),
+        ),
+      { timeout: 10_000 },
+    )
+    .toBeGreaterThanOrEqual(1);
 });

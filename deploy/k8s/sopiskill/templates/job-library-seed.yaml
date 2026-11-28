@@ -1,0 +1,35 @@
+{{- if .Values.librarySeed.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-library-seed
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: library-seed
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "sopiskill.labels" . | nindent 8 }}
+        app.kubernetes.io/component: library-seed
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: library-seed
+          image: {{ printf "%s:%s" .Values.images.aiEngine.repository .Values.images.aiEngine.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command:
+            - python
+            - -m
+            - scripts.import_open_library
+            - --tiers
+            - {{ .Values.librarySeed.tiers | quote }}
+            - --limit
+            - {{ .Values.librarySeed.limit | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "sopiskill.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sopiskill.secretName" . }}
+{{- end }}

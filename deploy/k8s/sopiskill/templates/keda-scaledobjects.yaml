@@ -1,0 +1,45 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-worker-llm-keda
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "sopiskill.fullname" . }}-ai-worker-llm
+  pollingInterval: {{ .Values.aiWorkerLlm.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.aiWorkerLlm.keda.cooldownPeriod }}
+  minReplicaCount: {{ .Values.aiWorkerLlm.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.aiWorkerLlm.keda.maxReplicaCount }}
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: {{ printf "%s.%s.svc.cluster.local:%d" (include "sopiskill.redisHost" .) .Release.Namespace (int .Values.redis.port) | quote }}
+        stream: {{ .Values.config.streamLlmKey | quote }}
+        consumerGroup: {{ .Values.config.streamLlmGroup | quote }}
+        pendingEntriesCount: {{ .Values.aiWorkerLlm.keda.pendingEntriesCount | quote }}
+        lagCount: {{ .Values.aiWorkerLlm.keda.pendingEntriesCount | quote }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-worker-ingest-keda
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "sopiskill.fullname" . }}-ai-worker-ingest
+  pollingInterval: {{ .Values.aiWorkerIngest.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.aiWorkerIngest.keda.cooldownPeriod }}
+  minReplicaCount: {{ .Values.aiWorkerIngest.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.aiWorkerIngest.keda.maxReplicaCount }}
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: {{ printf "%s.%s.svc.cluster.local:%d" (include "sopiskill.redisHost" .) .Release.Namespace (int .Values.redis.port) | quote }}
+        stream: {{ .Values.config.streamIngestKey | quote }}
+        consumerGroup: {{ .Values.config.streamIngestGroup | quote }}
+        pendingEntriesCount: {{ .Values.aiWorkerIngest.keda.pendingEntriesCount | quote }}
+        lagCount: {{ .Values.aiWorkerIngest.keda.pendingEntriesCount | quote }}
+{{- end }}

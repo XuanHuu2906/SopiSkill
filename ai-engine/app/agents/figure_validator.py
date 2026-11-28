@@ -61,6 +61,271 @@ SAFE_PLOT_FUNCS = frozenset(
 )
 SAFE_PLOT_CONSTANTS = frozenset({"pi", "e"})
 
+_SAFE_MATH_CALLABLES: dict[str, Any] = {
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "asin": math.asin,
+    "acos": math.acos,
+    "atan": math.atan,
+    "sinh": math.sinh,
+    "cosh": math.cosh,
+    "tanh": math.tanh,
+    "exp": math.exp,
+    "ln": math.log,
+    "log": math.log,
+    "log10": math.log10,
+    "sqrt": math.sqrt,
+    "abs": abs,
+    "floor": math.floor,
+    "ceil": math.ceil,
+    "min": min,
+    "max": max,
+    "pow": math.pow,
+}
+
+
+def evaluate_safe_math_ast(expr: str, variables: dict[str, float]) -> float | None:
+    """Safely evaluate a validated math expression using pure Python AST traversal (ZERO eval/exec)."""
+    allowed_vars = set(variables.keys()) | {"x"}
+    if validate_safe_math_expr(expr, allowed_vars) is not None:
+        return None
+    py_expr = (expr or "").strip().replace("^", "**")
+    try:
+        tree = ast.parse(py_expr, mode="eval")
+    except SyntaxError:
+        return None
+
+    def _walk(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _walk(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return float(node.value)
+        if isinstance(node, ast.Name):
+            low = node.id.lower()
+            if low == "pi":
+                return math.pi
+            if low == "e":
+                return math.e
+            if node.id in variables:
+                return float(variables[node.id])
+            if low in variables:
+                return float(variables[low])
+            raise ValueError(f"Unknown variable {node.id!r}")
+        if isinstance(node, ast.UnaryOp):
+            val = _walk(node.operand)
+            if isinstance(node.op, ast.UAdd):
+                return +val
+            if isinstance(node.op, ast.USub):
+                return -val
+            raise ValueError("Unsupported unary op")
+        if isinstance(node, ast.BinOp):
+            left = _walk(node.left)
+            right = _walk(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                if abs(right) < 1e-12:
+                    raise ZeroDivisionError("division by zero")
+                return left / right
+            if isinstance(node.op, ast.Pow):
+                if abs(right) > 100 or (abs(left) > 1e6 and abs(right) > 4):
+                    raise OverflowError("exponent too large")
+                return math.pow(left, right) if left >= 0 or float(right).is_integer() else float("nan")
+            raise ValueError("Unsupported binary op")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            fn = _SAFE_MATH_CALLABLES.get(node.func.id.lower())
+            if fn is None:
+                raise ValueError(f"Disallowed function {node.func.id!r}")
+            args = [_walk(a) for a in node.args]
+            return float(fn(*args))
+        raise ValueError(f"Disallowed AST node {type(node).__name__}")
+
+    try:
+        res = _walk(tree)
+        if not math.isfinite(res):
+            return None
+        return res
+    except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+        return None
+
+
+def compile_plot_scene_spec(
+    plot_spec: dict[str, Any],
+    *,
+    samples: int = 80,
+) -> dict[str, Any]:
+    """Deterministically compile a Phase 10A `plot` scene (`expr` -> SVG `segments`, `tangents`, `areas`).
+
+    Reuses `validate_safe_math_expr` and `evaluate_safe_math_ast` with ZERO `eval()`.
+    """
+    raw_xr = plot_spec.get("xRange")
+    raw_yr = plot_spec.get("yRange")
+    x_min, x_max = (-5.0, 5.0)
+    y_min, y_max = (-5.0, 5.0)
+    if (
+        isinstance(raw_xr, list)
+        and len(raw_xr) == 2
+        and _is_finite_number(raw_xr[0])
+        and _is_finite_number(raw_xr[1])
+        and float(raw_xr[0]) < float(raw_xr[1])
+    ):
+        x_min, x_max = float(raw_xr[0]), float(raw_xr[1])
+    if (
+        isinstance(raw_yr, list)
+        and len(raw_yr) == 2
+        and _is_finite_number(raw_yr[0])
+        and _is_finite_number(raw_yr[1])
+        and float(raw_yr[0]) < float(raw_yr[1])
+    ):
+        y_min, y_max = float(raw_yr[0]), float(raw_yr[1])
+
+    palette = ["#c85a27", "#2d6a4f", "#1d4ed8", "#7c3aed"]
+    y_span = max(1e-6, y_max - y_min)
+    clamp_margin = y_span * 1.5
+    safe_samples = max(20, min(int(samples), 200))
+
+    raw_funcs = plot_spec.get("functions") or plot_spec.get("curves") or []
+    compiled_curves: list[dict[str, Any]] = []
+    primary_expr: str | None = None
+
+    for idx, fn in enumerate(raw_funcs[:4] if isinstance(raw_funcs, list) else []):
+        if not isinstance(fn, dict):
+            continue
+        expr = str(fn.get("expr") or "").strip()
+        if validate_safe_math_expr(expr, {"x"}) is not None:
+            continue
+        if primary_expr is None:
+            primary_expr = expr
+        segments: list[list[list[float]]] = []
+        current_seg: list[list[float]] = []
+        prev_y: float | None = None
+        for step in range(safe_samples + 1):
+            x = x_min + (x_max - x_min) * (step / safe_samples)
+            y = evaluate_safe_math_ast(expr, {"x": x})
+            if (
+                y is None
+                or y < y_min - clamp_margin
+                or y > y_max + clamp_margin
+                or (prev_y is not None and abs(y - prev_y) > y_span * 1.25)
+            ):
+                if len(current_seg) >= 2:
+                    segments.append(current_seg)
+                current_seg = []
+                prev_y = None
+                continue
+            current_seg.append([round(x, 4), round(y, 4)])
+            prev_y = y
+        if len(current_seg) >= 2:
+            segments.append(current_seg)
+
+        compiled_curves.append(
+            {
+                "expr": expr,
+                "label": str(fn.get("label") or f"f(x) = {expr}")[:64],
+                "color": str(fn.get("color") or palette[idx % len(palette)]),
+                "segments": segments,
+            }
+        )
+
+    # Compile explicit points
+    compiled_points: list[dict[str, Any]] = []
+    for pt in (plot_spec.get("points") or [])[:12]:
+        if not isinstance(pt, dict):
+            continue
+        if _is_finite_number(pt.get("x")) and _is_finite_number(pt.get("y")):
+            compiled_points.append(
+                {
+                    "x": round(float(pt["x"]), 4),
+                    "y": round(float(pt["y"]), 4),
+                    "label": str(pt.get("label") or "")[:40],
+                }
+            )
+
+    # Compile tangent lines via symmetric finite difference on safe AST
+    compiled_tangents: list[dict[str, Any]] = []
+    h = max(1e-4, (x_max - x_min) * 1e-4)
+    for tan_spec in (plot_spec.get("tangents") or [])[:4]:
+        if not isinstance(tan_spec, dict) or not _is_finite_number(tan_spec.get("x")):
+            continue
+        expr = str(tan_spec.get("expr") or primary_expr or "").strip()
+        if not expr or validate_safe_math_expr(expr, {"x"}) is not None:
+            continue
+        x0 = float(tan_spec["x"])
+        y0 = evaluate_safe_math_ast(expr, {"x": x0})
+        y_plus = evaluate_safe_math_ast(expr, {"x": x0 + h})
+        y_minus = evaluate_safe_math_ast(expr, {"x": x0 - h})
+        if y0 is None or y_plus is None or y_minus is None:
+            continue
+        slope = (y_plus - y_minus) / (2.0 * h)
+        if not math.isfinite(slope):
+            continue
+        span = (x_max - x_min) * 0.25
+        x1, x2 = max(x_min, x0 - span), min(x_max, x0 + span)
+        y1 = y0 + slope * (x1 - x0)
+        y2 = y0 + slope * (x2 - x0)
+        compiled_tangents.append(
+            {
+                "expr": expr,
+                "x": round(x0, 4),
+                "y": round(y0, 4),
+                "slope": round(slope, 4),
+                "label": str(tan_spec.get("label") or f"m = {slope:.2f}")[:40],
+                "segment": [[round(x1, 4), round(y1, 4)], [round(x2, 4), round(y2, 4)]],
+            }
+        )
+
+    # Compile shaded definite integral / area polygons under a curve
+    compiled_areas: list[dict[str, Any]] = []
+    for area_spec in (plot_spec.get("areas") or [])[:3]:
+        if not isinstance(area_spec, dict):
+            continue
+        if not (_is_finite_number(area_spec.get("fromX")) and _is_finite_number(area_spec.get("toX"))):
+            continue
+        expr = str(area_spec.get("expr") or primary_expr or "").strip()
+        if not expr or validate_safe_math_expr(expr, {"x"}) is not None:
+            continue
+        a_x = max(x_min, min(x_max, float(area_spec["fromX"])))
+        b_x = max(x_min, min(x_max, float(area_spec["toX"])))
+        if a_x >= b_x:
+            continue
+        baseline = float(area_spec["baseline"]) if _is_finite_number(area_spec.get("baseline")) else 0.0
+        poly: list[list[float]] = [[round(a_x, 4), round(baseline, 4)]]
+        steps = 36
+        for step in range(steps + 1):
+            x = a_x + (b_x - a_x) * (step / steps)
+            y = evaluate_safe_math_ast(expr, {"x": x})
+            if y is not None:
+                clamped_y = max(y_min, min(y_max, y))
+                poly.append([round(x, 4), round(clamped_y, 4)])
+        poly.append([round(b_x, 4), round(baseline, 4)])
+        if len(poly) >= 4:
+            compiled_areas.append(
+                {
+                    "expr": expr,
+                    "fromX": round(a_x, 4),
+                    "toX": round(b_x, 4),
+                    "label": str(area_spec.get("label") or "")[:40],
+                    "color": str(area_spec.get("color") or "rgba(200, 90, 39, 0.18)"),
+                    "polygon": poly,
+                }
+            )
+
+    return {
+        "xRange": [x_min, x_max],
+        "yRange": [y_min, y_max],
+        "xLabel": str(plot_spec.get("xLabel") or "x")[:24],
+        "yLabel": str(plot_spec.get("yLabel") or "y")[:24],
+        "curves": compiled_curves,
+        "points": compiled_points,
+        "tangents": compiled_tangents,
+        "areas": compiled_areas,
+    }
+
 
 def validate_safe_math_expr(expr: str, allowed_vars: set[str]) -> str | None:
     """Validate a plot expression via Python AST without ever executing it. Returns error string or None."""
