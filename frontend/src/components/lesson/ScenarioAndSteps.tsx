@@ -1,5 +1,7 @@
 "use client";
 
+import MathText from "./MathText";
+
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
 export function ScenarioQuestion({
@@ -24,10 +26,12 @@ export function ScenarioQuestion({
           className="notice-box"
           style={{ marginBottom: 14, borderLeft: "3px solid var(--ember)", paddingLeft: 14 }}
         >
-          {context}
+          <MathText text={context} />
         </div>
       )}
-      <h1 className="block-title-sm">{question}</h1>
+      <h1 className="block-title-sm">
+        <MathText text={question} />
+      </h1>
       <div role="radiogroup" aria-label={question}>
         {options.map((opt, j) => {
           const selected = selectedIndex === j;
@@ -41,7 +45,9 @@ export function ScenarioQuestion({
               onClick={() => onSelect(j)}
             >
               <span className="option-letter">{LETTERS[j] ?? j + 1}</span>
-              <span>{opt}</span>
+              <span>
+                <MathText text={opt} />
+              </span>
             </button>
           );
         })}
@@ -53,7 +59,7 @@ export function ScenarioQuestion({
           data-scenario-outcome="true"
           style={{ marginTop: 14 }}
         >
-          <strong>Hệ quả:</strong> {outcome}
+          <strong>Hệ quả:</strong> <MathText text={outcome} />
         </div>
       )}
     </>
@@ -75,7 +81,9 @@ export function StepsQuestion({
 }) {
   return (
     <>
-      <h1 className="block-title-sm">{question}</h1>
+      <h1 className="block-title-sm">
+        <MathText text={question} />
+      </h1>
       <ol
         className="steps-card"
         style={{
@@ -101,7 +109,7 @@ export function StepsQuestion({
               lineHeight: 1.5,
             }}
           >
-            {s}
+            <MathText text={s} />
           </li>
         ))}
       </ol>
@@ -118,7 +126,9 @@ export function StepsQuestion({
               onClick={() => onSelect(j)}
             >
               <span className="option-letter">{LETTERS[j] ?? j + 1}</span>
-              <span>{opt}</span>
+              <span>
+                <MathText text={opt} />
+              </span>
             </button>
           );
         })}

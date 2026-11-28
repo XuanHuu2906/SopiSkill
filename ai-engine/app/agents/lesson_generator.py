@@ -11,12 +11,13 @@ Architecture invariant:
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
 from app.agents.providers import LLMProvider
-from app.agents.validator_qa import CONTENT_FLAG_CODES, QaReport, run_two_tier_validator
+from app.agents.validator_qa import CONTENT_FLAG_CODES, QaReport, run_static_qa, run_two_tier_validator
 from app.schemas.internal import LlmUsageOut
 
 logger = logging.getLogger(__name__)
@@ -274,10 +275,37 @@ def apply_targeted_refinement(
         elif code == "other":
             touched_codes.append(code)
 
-    # Also clean malformed non-dict entries if flagged via blocking errors
-    if blocking_errors and any(not isinstance(b, dict) for b in blocks):
-        refined["blocks"] = [b for b in blocks if isinstance(b, dict)]
-        touched_codes.append("other")
+    # Also clean malformed non-dict entries and normalize multi-blank structure if blocking errors exist
+    if blocking_errors:
+        if any(not isinstance(b, dict) for b in blocks):
+            blocks = [b for b in blocks if isinstance(b, dict)]
+            refined["blocks"] = blocks
+            touched_codes.append("other")
+        for blk in blocks:
+            if not isinstance(blk, dict) or blk.get("type") != "blank":
+                continue
+            parts = blk.get("parts")
+            answers = blk.get("answers")
+            if isinstance(parts, list) and isinstance(answers, list) and answers:
+                norm_answers = [str(a).strip() or topic for a in answers[:4]]
+                norm_parts = [str(p) for p in parts]
+                while len(norm_parts) < len(norm_answers) + 1:
+                    norm_parts.append("")
+                if len(norm_parts) > len(norm_answers) + 1:
+                    tail = " ".join(p for p in norm_parts[len(norm_answers) :] if p)
+                    norm_parts = [*norm_parts[: len(norm_answers)], tail]
+                bank = [str(b).strip() for b in (blk.get("bank") or []) if str(b).strip()]
+                bank_cf = {b.casefold() for b in bank}
+                for a in norm_answers:
+                    if a.casefold() not in bank_cf:
+                        bank.insert(0, a)
+                        bank_cf.add(a.casefold())
+                if len(bank) < 2:
+                    bank.append("khái niệm khác" if language == "vi" else "unrelated term")
+                blk["parts"] = norm_parts
+                blk["answers"] = norm_answers
+                blk["bank"] = bank[:10]
+                touched_codes.append("wrong_answer")
 
     return refined, list(dict.fromkeys(touched_codes))
 
@@ -322,6 +350,8 @@ async def generate_lesson_with_qa_loop(
         turns_used = turn
         call_id = f"call_turn_{turn}"
         if callable(turn_planner):
+            has_source = bool(source_brief) or (source_reader is not None)
+            force_save = (turn >= safe_max_turns) or ("read_source" in tools_called and not source_excerpts)
             planner_kwargs: dict[str, Any] = {
                 "turn": turn,
                 "topic": topic,
@@ -335,6 +365,11 @@ async def generate_lesson_with_qa_loop(
             }
             if image_gen_enabled:
                 planner_kwargs["image_gen_enabled"] = True
+            sig_params = inspect.signature(turn_planner).parameters
+            if "has_source" in sig_params:
+                planner_kwargs["has_source"] = has_source
+            if "force_save" in sig_params:
+                planner_kwargs["force_save"] = force_save
             action = await turn_planner(**planner_kwargs)
             call_id = str(action.get("id") or call_id)
             tool_name = str(action.get("tool") or "")
@@ -506,9 +541,12 @@ async def generate_lesson_with_qa_loop(
             source_excerpts=source_excerpts,
         )
 
-        # Optional provider-level Refiner hook for real LLM providers when still needed
+        # Skip expensive LLM rewrite when deterministic repair already resolved static blocking issues and no content flags exist
+        after_det = run_static_qa(candidate)
         provider_refiner = getattr(provider, "refine_lesson", None)
-        if callable(provider_refiner):
+        if callable(provider_refiner) and (
+            after_det.blocking_errors or after_det.content_flags or qa.content_flags
+        ):
             candidate, ref_usage = await provider_refiner(
                 lesson=candidate,
                 flags=qa.content_flags,

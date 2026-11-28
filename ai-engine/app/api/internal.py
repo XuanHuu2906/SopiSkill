@@ -92,7 +92,12 @@ async def sources_research(body: SourceResearchRequest) -> SourceResearchRespons
 @router.post("/interview/questions", response_model=InterviewQuestionsResponse)
 async def interview_questions(body: InterviewQuestionsRequest) -> InterviewQuestionsResponse:
     provider = _get_provider_or_503()
-    questions, usage = await provider.generate_interview_questions(body.topic, body.language)
+    questions, usage = await provider.generate_interview_questions(
+        body.topic,
+        body.language,
+        source_brief=body.sourceBrief,
+        onboarding_profile=body.onboardingProfile,
+    )
     return InterviewQuestionsResponse(questions=questions, usage=usage)
 
 

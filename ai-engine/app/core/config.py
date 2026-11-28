@@ -52,10 +52,10 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
-    llm_timeout_seconds: float = 45.0
+    llm_timeout_seconds: float = 90.0
     llm_max_retries: int = 2
     llm_max_input_chars: int = 16_000
-    llm_max_output_tokens_lesson: int = 4000
+    llm_max_output_tokens_lesson: int = 8000
     llm_max_output_tokens_tutor: int = 1500
     llm_max_output_tokens_dispute: int = 600
 
@@ -99,13 +99,13 @@ class Settings(BaseSettings):
 
     # Phase 10A: 2-Phase Narrated Reel Engine & neutral TTSProvider (mock default — 0 cost in CI/dev)
     reel_enabled: bool = True
-    tts_provider: str = "mock"  # "mock" | "local" | "edge" | "openai_compatible"
+    tts_provider: str = "mock"  # "mock" | "vieneu" | "local" | "edge" | "openai_compatible"
     tts_api_key: str = ""
     tts_base_url: str = ""
     tts_model: str = "tts-1"
     tts_voice_vi: str = "vi-VN-HoaiMyNeural"
     tts_voice_en: str = "en-US-AriaNeural"
-    tts_timeout_seconds: float = 20.0
+    tts_timeout_seconds: float = 60.0
 
     readiness_timeout_seconds: float = 2.0
 

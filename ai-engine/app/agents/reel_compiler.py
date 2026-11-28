@@ -580,27 +580,75 @@ def _compile_scene_payload(
             else:
                 out["highlightLines"] = []
     elif kind == "equation":
-        raw_steps = raw_scene.get("steps") or []
+        def _clean_latex(raw_val: Any) -> str:
+            s = str(raw_val or "").strip()
+            for left, right in (("$$", "$$"), ("$", "$"), (r"\[", r"\]"), (r"\(", r"\)")):
+                if s.startswith(left) and s.endswith(right) and len(s) > len(left) + len(right):
+                    s = s[len(left) : -len(right)].strip()
+            return s[:320]
+
+        raw_steps = (
+            raw_scene.get("steps")
+            or raw_scene.get("equations")
+            or raw_scene.get("lines")
+            or []
+        )
         steps: list[dict[str, str]] = []
         if isinstance(raw_steps, list):
             for st in raw_steps[:6]:
-                if isinstance(st, dict) and str(st.get("latex") or "").strip():
-                    steps.append(
-                        {
-                            "latex": str(st["latex"]).strip()[:320],
-                            "note": str(st.get("note") or "").strip()[:120],
-                        }
+                if isinstance(st, dict):
+                    tex = _clean_latex(
+                        st.get("latex")
+                        or st.get("tex")
+                        or st.get("formula")
+                        or st.get("equation")
+                        or st.get("expr")
+                        or st.get("expression")
+                        or st.get("math")
                     )
+                    if tex:
+                        note = str(
+                            st.get("note")
+                            or st.get("label")
+                            or st.get("caption")
+                            or st.get("description")
+                            or ""
+                        ).strip()[:120]
+                        steps.append({"latex": tex, "note": note})
                 elif isinstance(st, str) and st.strip():
-                    steps.append({"latex": st.strip()[:320], "note": ""})
-        if not steps and raw_scene.get("latex"):
-            steps.append({"latex": str(raw_scene["latex"]).strip()[:320], "note": ""})
+                    tex = _clean_latex(st)
+                    if tex:
+                        steps.append({"latex": tex, "note": ""})
+        if not steps:
+            for key in ("latex", "tex", "formula", "equation", "expression", "math"):
+                tex = _clean_latex(raw_scene.get(key))
+                if tex:
+                    steps.append({"latex": tex, "note": str(raw_scene.get("note") or raw_scene.get("subtitle") or "").strip()[:120]})
+                    break
         if not steps:
             out["kind"] = "fallback"
         else:
             out["steps"] = steps
     elif kind == "plot":
-        raw_plot = raw_scene.get("plot") if isinstance(raw_scene.get("plot"), dict) else raw_scene
+        raw_plot = copy.deepcopy(raw_scene.get("plot")) if isinstance(raw_scene.get("plot"), dict) else copy.deepcopy(raw_scene)
+        # Normalize common LLM aliases (`expression`/`formula`/`fn` -> `expr`, strip `y = ` or `f(x) = `)
+        raw_funcs = raw_plot.get("functions") or raw_plot.get("curves") or raw_plot.get("expressions")
+        if not isinstance(raw_funcs, list) or not raw_funcs:
+            single_expr = raw_plot.get("expr") or raw_plot.get("expression") or raw_plot.get("formula") or raw_plot.get("fn")
+            if isinstance(single_expr, str) and single_expr.strip():
+                raw_funcs = [{"expr": single_expr, "label": str(raw_plot.get("label") or out.get("title") or "f(x)")}]
+        if isinstance(raw_funcs, list):
+            norm_funcs = []
+            for fn in raw_funcs[:4]:
+                if isinstance(fn, str) and fn.strip():
+                    fn_expr = re.sub(r"^\s*(?:[a-zA-Z]\s*\(\s*x\s*\)|y)\s*=\s*", "", fn.strip())
+                    norm_funcs.append({"expr": fn_expr, "label": fn.strip()[:48]})
+                elif isinstance(fn, dict):
+                    fn_copy = dict(fn)
+                    raw_e = str(fn_copy.get("expr") or fn_copy.get("expression") or fn_copy.get("formula") or fn_copy.get("fn") or "").strip()
+                    fn_copy["expr"] = re.sub(r"^\s*(?:[a-zA-Z]\s*\(\s*x\s*\)|y)\s*=\s*", "", raw_e)
+                    norm_funcs.append(fn_copy)
+            raw_plot["functions"] = norm_funcs
         compiled_plot = compile_plot_scene_spec(raw_plot)
         if not compiled_plot["curves"]:
             out["kind"] = "fallback"
@@ -612,7 +660,20 @@ def _compile_scene_payload(
 
     if out["kind"] == "fallback":
         out.setdefault("title", out.get("title") or "Summary")
-        out.setdefault("statement", out.get("subtitle") or out.get("title") or "Key concept summary")
+        first_beat_say = ""
+        raw_beats_fb = raw_scene.get("beats")
+        if isinstance(raw_beats_fb, list):
+            for bf in raw_beats_fb:
+                if isinstance(bf, dict) and str(bf.get("say") or "").strip():
+                    first_beat_say = str(bf["say"]).strip()[:320]
+                    break
+        fb_stmt = (
+            str(raw_scene.get("statement") or "").strip()
+            or str(out.get("subtitle") or "").strip()
+            or first_beat_say
+            or str(out.get("title") or "Key concept summary")
+        )
+        out.setdefault("statement", fb_stmt[:320])
     return out
 
 

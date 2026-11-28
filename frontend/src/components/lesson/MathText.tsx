@@ -10,7 +10,7 @@ export interface InlineTermSpec {
 }
 
 const FENCE_BLOCK_RE = /(```[a-zA-Z0-9_+#.-]*\n[\s\S]*?```)/g;
-const TOKEN_RE = /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|`[^`\n]+?`|\{[a-zA-Z0-9_-]{2,40}\})/g;
+const TOKEN_RE = /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|`[^`\n]+?`|\*\*[^*\n]+?\*\*|\{[a-zA-Z0-9_-]{2,40}\})/g;
 
 const CODE_KEYWORDS = new Set([
   "def", "class", "return", "import", "from", "as", "if", "elif", "else", "for", "while", "try",
@@ -261,6 +261,9 @@ function renderInlineTokens(
           {part.slice(1, -1)}
         </code>
       );
+    }
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return <strong key={idx}>{part.slice(2, -2)}</strong>;
     }
     if (part.startsWith("{") && part.endsWith("}")) {
       const key = part.slice(1, -1);

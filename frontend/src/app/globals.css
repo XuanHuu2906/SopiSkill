@@ -4815,6 +4815,123 @@ button.tutor-chip:disabled,
   box-shadow: none !important;
 }
 
+.interview-kind-hint {
+  margin: 12px 0 8px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-3);
+}
+
+.interview-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 16px;
+}
+
+.interview-choice {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  width: 100%;
+  min-height: 54px;
+  padding: 12px 16px;
+  border: 2px solid var(--linen);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.interview-choice:hover:not(:disabled) {
+  background: var(--wash-soft);
+  border-color: var(--wash-border);
+}
+
+.interview-choice.is-selected {
+  background: var(--wash);
+  border-color: var(--ember);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.interview-choice-other {
+  border-style: dashed;
+}
+
+.interview-choice-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--linen-strong, var(--linen));
+  background: var(--bone);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.interview-choice-indicator.is-single {
+  border-radius: 999px;
+}
+
+.interview-choice-indicator.is-multi {
+  border-radius: 6px;
+}
+
+.interview-choice.is-selected .interview-choice-indicator {
+  border-color: var(--ember);
+  background: var(--ember);
+  color: var(--on-accent);
+}
+
+.interview-choice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.interview-answer-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.interview-edit-btn {
+  border: 0;
+  background: transparent;
+  color: var(--ember-deep);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.interview-edit-btn:hover {
+  background: var(--wash);
+}
+
+.interview-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
 @media (max-width: 720px) {
   .profile-stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

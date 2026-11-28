@@ -761,7 +761,9 @@ export default function LessonPage() {
 
           {current!.type === "teach" && (
             <>
-              <h1 className="block-title">{current!.title}</h1>
+              <h1 className="block-title">
+                <MathText text={current!.title} />
+              </h1>
               {current!.cite && (
                 <div style={{ marginBottom: 12 }}>
                   <CitationChip cite={current!.cite} />
@@ -892,7 +894,9 @@ export default function LessonPage() {
             />
           ) : current!.type === "mc" ? (
             <>
-              <h1 className="block-title-sm">{current!.question}</h1>
+              <h1 className="block-title-sm">
+                <MathText text={current!.question} />
+              </h1>
               <div role="radiogroup" aria-label={current!.question}>
                 {current!.options.map((opt, j) => {
                   const selected = mcAnswers[safeStep] === j;
@@ -906,7 +910,9 @@ export default function LessonPage() {
                       onClick={() => setMcAnswers((p) => ({ ...p, [safeStep]: j }))}
                     >
                       <span className="option-letter">{LETTERS[j] ?? j + 1}</span>
-                      <span>{opt}</span>
+                      <span>
+                        <MathText text={opt} />
+                      </span>
                     </button>
                   );
                 })}
@@ -932,7 +938,9 @@ export default function LessonPage() {
             </>
           ) : current!.type === "blank" ? (
             <>
-              <h1 className="block-title-sm">{current!.sentence}</h1>
+              <h1 className="block-title-sm">
+                <MathText text={current!.sentence} />
+              </h1>
               <label className="blank-label" htmlFor={`blank-${safeStep}`}>
                 Điền từ còn thiếu
               </label>
@@ -966,7 +974,9 @@ export default function LessonPage() {
 
           {current!.type === "short" && (
             <>
-              <h1 className="block-title-sm">{current!.question}</h1>
+              <h1 className="block-title-sm">
+                <MathText text={current!.question} />
+              </h1>
               <label className="blank-label" htmlFor={`short-${safeStep}`}>
                 Câu trả lời ngắn
               </label>
@@ -982,7 +992,9 @@ export default function LessonPage() {
 
           {current!.type === "order" && (
             <>
-              <h1 className="block-title-sm">{current!.prompt}</h1>
+              <h1 className="block-title-sm">
+                <MathText text={current!.prompt} />
+              </h1>
               <p className="caption" style={{ marginBottom: 12 }}>
                 Dùng nút mũi tên để đổi thứ tự.
               </p>
@@ -991,7 +1003,9 @@ export default function LessonPage() {
                 return (
                   <div className="order-item" key={itemId}>
                     <span className="summary-index">{j + 1}</span>
-                    <span style={{ flex: 1 }}>{text}</span>
+                    <span style={{ flex: 1 }}>
+                      <MathText text={text} />
+                    </span>
                     <IconButton
                       aria-label={`Đưa "${text}" lên`}
                       onClick={() => moveItem(safeStep, j, -1)}
@@ -1014,7 +1028,9 @@ export default function LessonPage() {
 
           {current!.type === "match" && (
             <>
-              <h1 className="block-title-sm">{current!.prompt}</h1>
+              <h1 className="block-title-sm">
+                <MathText text={current!.prompt} />
+              </h1>
               <p className="caption" style={{ marginBottom: 8 }}>
                 Chọn một mục bên trái rồi chạm vào mục tương ứng bên phải để ghép cặp.
               </p>
@@ -1041,7 +1057,9 @@ export default function LessonPage() {
                           setMatchSelectedLeft((cur) => (cur === left.id ? null : left.id))
                         }
                       >
-                        <span>{left.text}</span>
+                        <span>
+                          <MathText text={left.text} />
+                        </span>
                         {isPaired && <span className="match-pair-tag">{idx + 1}</span>}
                       </button>
                     );
@@ -1074,7 +1092,9 @@ export default function LessonPage() {
                           setMatchSelectedLeft(null);
                         }}
                       >
-                        <span>{right.text}</span>
+                        <span>
+                          <MathText text={right.text} />
+                        </span>
                         {isPaired && <span className="match-pair-tag">{pairedLeftIdx + 1}</span>}
                       </button>
                     );
@@ -1184,12 +1204,14 @@ export default function LessonPage() {
                     <Icon name={activeCheck.correct ? "checkCircle" : "close"} size={18} />
                     {activeCheck.correct ? "Quá chuẩn!" : "Chưa chính xác"}
                   </span>
-                  <p className="lesson-feedback-text">{activeCheck.feedback}</p>
+                  <p className="lesson-feedback-text">
+                    <MathText text={activeCheck.feedback} />
+                  </p>
                   {activeCheck.solution &&
                     current &&
                     solutionText(current, activeCheck.solution) && (
                       <p className="lesson-feedback-solution">
-                        Đáp án: {solutionText(current, activeCheck.solution)}
+                        Đáp án: <MathText text={solutionText(current, activeCheck.solution)!} />
                       </p>
                     )}
                 </div>
@@ -1377,7 +1399,9 @@ function OutlineSheet({
                 <span className="outline-index">{index + 1}</span>
                 <span className="outline-body">
                   <span className="outline-label">{BLOCK_LABELS[block.type]}</span>
-                  <span className="outline-prompt">{blockPrompt(block)}</span>
+                  <span className="outline-prompt">
+                    <MathText text={blockPrompt(block)} />
+                  </span>
                 </span>
               </button>
             </li>
@@ -1454,9 +1478,17 @@ function ResultView({
                 <p className="lesson-result-label">
                   {BLOCK_LABELS[block.type]} · {graded?.correct ? "Đúng" : "Sai"}
                 </p>
-                <p className="lesson-result-prompt">{blockPrompt(block)}</p>
+                <p className="lesson-result-prompt">
+                  <MathText text={blockPrompt(block)} />
+                </p>
                 <p className="lesson-result-solution">
-                  {solution ? `Đáp án: ${solution}` : "Không có đáp án mẫu."}
+                  {solution ? (
+                    <>
+                      Đáp án: <MathText text={solution} />
+                    </>
+                  ) : (
+                    "Không có đáp án mẫu."
+                  )}
                 </p>
               </div>
             </li>

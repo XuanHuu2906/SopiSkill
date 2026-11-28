@@ -354,10 +354,21 @@ public class CourseController {
             @PathVariable String courseId
     ) {
         UUID cid = IdCodec.parse(courseId, "crs");
-        loadOwnedCourse(principal.userId(), cid);
-        return jdbc.sql("SELECT questions, completed_count FROM core.course_interviews WHERE course_id = :cid")
+        Map<String, Object> course = loadOwnedCourse(principal.userId(), cid);
+        String topic = String.valueOf(course.get("topic"));
+        String language = String.valueOf(course.get("language"));
+        return jdbc.sql("SELECT questions, answers, completed_count FROM core.course_interviews WHERE course_id = :cid")
                 .param("cid", cid)
-                .query((rs, rowNum) -> buildInterviewOut(rs.getString("questions"), rs.getInt("completed_count")))
+                .query((rs, rowNum) -> {
+                    List<String> savedAnswers = json.fromJson(rs.getString("answers"), new TypeReference<List<String>>() {});
+                    return buildInterviewOut(
+                            rs.getString("questions"),
+                            savedAnswers,
+                            rs.getInt("completed_count"),
+                            topic,
+                            language
+                    );
+                })
                 .optional()
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "INTERVIEW_NOT_FOUND", "Không tìm thấy phỏng vấn."));
     }
@@ -374,6 +385,8 @@ public class CourseController {
         rateLimiter.check(request, "interview_answer", 60, 60);
         UUID cid = IdCodec.parse(courseId, "crs");
         Map<String, Object> course = loadOwnedCourse(principal.userId(), cid);
+        String topic = String.valueOf(course.get("topic"));
+        String language = String.valueOf(course.get("language"));
 
         var row = jdbc.sql("SELECT questions, answers, completed_count FROM core.course_interviews WHERE course_id = :cid FOR UPDATE")
                 .param("cid", cid)
@@ -410,10 +423,10 @@ public class CourseController {
                 .update();
 
         if (completedCount >= questions.size()) {
-            createInitialProposalIfAbsent(cid, String.valueOf(course.get("topic")), String.valueOf(course.get("language")), questions, answers);
+            createInitialProposalIfAbsent(cid, topic, language, questions, answers);
         }
 
-        return buildInterviewOut(questionsRaw, completedCount);
+        return buildInterviewOut(questionsRaw, answers, completedCount, topic, language);
     }
 
     @SuppressWarnings("unchecked")
@@ -431,33 +444,24 @@ public class CourseController {
         return prompts;
     }
 
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> buildInterviewOut(String questionsJson, int completedCount) {
+    private Map<String, Object> buildInterviewOut(
+            String questionsJson,
+            List<String> answers,
+            int completedCount,
+            String topic,
+            String language
+    ) {
         List<Object> rawList = json.fromJson(questionsJson, new TypeReference<>() {});
-        List<String> prompts = new ArrayList<>(rawList.size());
-        List<Map<String, Object>> structured = new ArrayList<>(rawList.size());
-        for (int i = 0; i < rawList.size(); i++) {
-            Object item = rawList.get(i);
-            if (item instanceof Map<?, ?> m) {
-                Object p = m.get("prompt");
-                String prompt = p == null ? "" : String.valueOf(p);
-                prompts.add(prompt);
-                Map<String, Object> q = new LinkedHashMap<>();
-                q.put("index", i);
-                q.put("prompt", prompt);
-                Object kindVal = m.get("kind");
-                q.put("kind", kindVal == null ? "freeform" : String.valueOf(kindVal));
-                q.put("choices", m.get("choices") instanceof List<?> c ? c : List.of());
-                structured.add(q);
-            } else {
-                String prompt = String.valueOf(item);
-                prompts.add(prompt);
-                structured.add(Map.of("index", i, "prompt", prompt, "kind", "freeform", "choices", List.of()));
-            }
+        List<Map<String, Object>> structured = aiEngine.ensureStructuredChoices(rawList, topic, language);
+        List<String> prompts = new ArrayList<>(structured.size());
+        for (Map<String, Object> q : structured) {
+            prompts.add(String.valueOf(q.get("prompt")));
         }
+        List<String> safeAnswers = answers == null ? List.of() : answers;
         return Map.of(
                 "questions", prompts,
                 "structuredQuestions", structured,
+                "answers", safeAnswers,
                 "completedCount", completedCount
         );
     }
@@ -859,27 +863,37 @@ public class CourseController {
         Map<String, Object> primarySourceBrief = (Map<String, Object>) sourceCtx.get("sourceBrief");
 
         List<Map<String, Object>> units = null;
+        List<String> proposalOutcomes = null;
         String proposalName = topic;
         String proposalObjective = en
                 ? "Build a solid practical foundation in " + topic + "."
                 : "Xây dựng nền tảng vững chắc và thực hành hiệu quả với " + topic + ".";
 
-        if (primarySourceBrief != null) {
-            Map<String, Object> planned = aiEngine.generateProposal(
-                    IdCodec.format("crs", courseId), topic, language, profile, primarySourceBrief, null);
-            if (planned != null) {
-                List<Map<String, Object>> normalizedUnits = normalizePlannerUnits(planned);
-                if (!normalizedUnits.isEmpty()) {
-                    units = normalizedUnits;
-                    if (planned.get("name") != null && !String.valueOf(planned.get("name")).isBlank()) {
-                        proposalName = String.valueOf(planned.get("name"));
-                    } else if (planned.get("title") != null && !String.valueOf(planned.get("title")).isBlank()) {
-                        proposalName = String.valueOf(planned.get("title"));
+        Map<String, Object> planned = aiEngine.generateProposal(
+                IdCodec.format("crs", courseId), topic, language, profile, primarySourceBrief, null);
+        if (planned != null) {
+            List<Map<String, Object>> normalizedUnits = normalizePlannerUnits(planned);
+            if (!normalizedUnits.isEmpty()) {
+                units = normalizedUnits;
+                if (planned.get("name") != null && !String.valueOf(planned.get("name")).isBlank()) {
+                    proposalName = String.valueOf(planned.get("name"));
+                } else if (planned.get("title") != null && !String.valueOf(planned.get("title")).isBlank()) {
+                    proposalName = String.valueOf(planned.get("title"));
+                }
+                if (planned.get("objective") != null && !String.valueOf(planned.get("objective")).isBlank()) {
+                    proposalObjective = String.valueOf(planned.get("objective"));
+                } else if (planned.get("summary") != null && !String.valueOf(planned.get("summary")).isBlank()) {
+                    proposalObjective = String.valueOf(planned.get("summary"));
+                }
+                if (planned.get("outcomes") instanceof List<?> rawOutcomes) {
+                    List<String> cleanedOutcomes = new ArrayList<>();
+                    for (Object o : rawOutcomes) {
+                        if (o != null && !String.valueOf(o).isBlank()) {
+                            cleanedOutcomes.add(String.valueOf(o).trim());
+                        }
                     }
-                    if (planned.get("objective") != null && !String.valueOf(planned.get("objective")).isBlank()) {
-                        proposalObjective = String.valueOf(planned.get("objective"));
-                    } else if (planned.get("summary") != null && !String.valueOf(planned.get("summary")).isBlank()) {
-                        proposalObjective = String.valueOf(planned.get("summary"));
+                    if (!cleanedOutcomes.isEmpty()) {
+                        proposalOutcomes = cleanedOutcomes;
                     }
                 }
             }
@@ -909,9 +923,11 @@ public class CourseController {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("name", proposalName);
         payload.put("objective", proposalObjective);
-        payload.put("outcomes", en
-                ? List.of("Explain core concepts of " + topic, "Apply " + topic + " to structured exercises")
-                : List.of("Hiểu rõ khái niệm cốt lõi của " + topic, "Áp dụng " + topic + " vào bài tập thực tế"));
+        payload.put("outcomes", proposalOutcomes != null
+                ? proposalOutcomes
+                : (en
+                        ? List.of("Explain core concepts of " + topic, "Apply " + topic + " to structured exercises")
+                        : List.of("Hiểu rõ khái niệm cốt lõi của " + topic, "Áp dụng " + topic + " vào bài tập thực tế")));
         payload.put("units", units);
         payload.put("learnerProfile", profile);
 

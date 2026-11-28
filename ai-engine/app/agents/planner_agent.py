@@ -75,11 +75,15 @@ def _normalize_proposal(raw: dict[str, Any], *, topic: str, language: str) -> di
                 ],
             }
         ]
+    raw_outcomes = raw.get("outcomes") if isinstance(raw.get("outcomes"), list) else []
+    outcomes = [str(o).strip()[:240] for o in raw_outcomes[:6] if str(o).strip()]
     out = dict(raw)
     out["title"] = title
     out["name"] = title
     out["summary"] = summary
     out["objective"] = summary
+    if outcomes:
+        out["outcomes"] = outcomes
     out["estimatedHours"] = float(raw.get("estimatedHours") or max(1.0, round(len(units) * 1.5, 1)))
     out["units"] = units
     return out

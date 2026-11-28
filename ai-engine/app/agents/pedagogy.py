@@ -11,13 +11,15 @@ from app.schemas.internal import InterviewAnswerItem, LearnerProfileOut
 
 _LEVEL_BEGINNER = (
     "chưa biết", "chưa từng", "chưa tiếp xúc", "mới bắt đầu", "mới học",
-    "người mới", "cơ bản", "beginner", "from scratch", "chưa có kinh nghiệm",
+    "người mới", "cơ bản", "từ đầu", "con số 0", "chưa nắm", "làm quen từ đầu",
+    "beginner", "from scratch", "chưa có kinh nghiệm",
     "zero", "no experience", "never used", "new to", "just starting",
     "complete beginner", "absolute beginner", "novice", "basic knowledge",
     "basics only", "introductory",
 )
 _LEVEL_INTERMEDIATE = (
     "đã biết", "đã học qua", "đã học", "đã từng", "đã viết", "đã làm", "đã dùng",
+    "đã quen", "từng cài đặt", "từng áp dụng", "áp dụng thực tế", "biết sơ qua", "làm quen sơ",
     "2 năm", "3 năm", "trung bình", "intermediate", "có chút kinh nghiệm",
     "biết sơ", "some experience", "familiar with", "comfortable with",
     "working knowledge", "used it before", "work with", "work in",
@@ -25,7 +27,7 @@ _LEVEL_INTERMEDIATE = (
     "1-2 years", "2 years", "3 years", "can write", "read a lot about",
 )
 _LEVEL_ADVANCED = (
-    "nâng cao", "chuyên sâu", "thành thạo", "advanced", "expert",
+    "nâng cao", "chuyên sâu", "thành thạo", "khá vững", "tối ưu", "advanced", "expert",
     "đã có kinh nghiệm", "nhiều năm", "senior", "years of experience",
     "5+ years", "production", "proficient", "deeply familiar",
     "deep experience", "architect", "staff engineer", "principal",
@@ -43,9 +45,9 @@ _STYLE_VISUAL = (
     "minh họa", "diagrams", "charts", "visual",
 )
 
-_DEPTH_OVERVIEW = ("phủ rộng", "tổng quan", "bao quát", "rộng", "overview", "broad", "high-level", "survey")
+_DEPTH_OVERVIEW = ("phủ rộng", "tổng quan", "tổng quan nhanh", "bao quát", "rộng", "overview", "broad", "high-level", "survey")
 _DEPTH_DEEP = (
-    "đi sâu", "hiểu sâu", "chuyên sâu", "chi tiết", "deep", "deep dive",
+    "đi sâu", "hiểu sâu", "chuyên sâu", "chi tiết", "bản chất", "cơ chế bên trong", "deep", "deep dive",
     "in-depth", "thorough", "comprehensive", "nâng cao",
 )
 
