@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
+import MathText from "./MathText";
 
 export interface SpeedItem {
   id: number;
@@ -89,7 +90,9 @@ export default function SpeedRound({
       style={{ display: "grid", gap: 16 }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <h1 className="block-title-sm" style={{ margin: 0 }}>{prompt}</h1>
+        <h1 className="block-title-sm" style={{ margin: 0 }}>
+          <MathText text={prompt} />
+        </h1>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <Badge tone={remaining <= 10 ? "danger" : "muted"}>
             {remaining}s
@@ -118,7 +121,7 @@ export default function SpeedRound({
         >
           <div className="caption">Thẻ {activeIndex + 1}/{items.length}</div>
           <div style={{ fontSize: 19, fontWeight: 700, color: "var(--ink)" }}>
-            {activeItem.prompt}
+            <MathText text={activeItem.prompt} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
             {activeItem.choices.map((choice, cIdx) => {
@@ -133,7 +136,9 @@ export default function SpeedRound({
                   style={{ margin: 0, justifyContent: "center" }}
                 >
                   <span className="option-letter">{cIdx === 0 ? "←" : "→"}</span>
-                  <span>{choice}</span>
+                  <span>
+                    <MathText text={choice} />
+                  </span>
                 </button>
               );
             })}
@@ -159,7 +164,15 @@ export default function SpeedRound({
                     : undefined
               }
             >
-              #{idx + 1}{picked >= 0 ? ` · ${item.choices[picked]}` : ""}
+              #{idx + 1}
+              {picked >= 0 ? (
+                <>
+                  {" · "}
+                  <MathText text={item.choices[picked]} />
+                </>
+              ) : (
+                ""
+              )}
             </button>
           );
         })}

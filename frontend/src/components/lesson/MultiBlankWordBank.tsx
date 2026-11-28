@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment } from "react";
+import MathText from "./MathText";
 
 export default function MultiBlankWordBank({
   parts,
@@ -47,7 +48,9 @@ export default function MultiBlankWordBank({
       <p style={{ fontSize: 19, lineHeight: 1.85, color: "var(--ink)", margin: 0 }}>
         {parts.map((text, idx) => (
           <Fragment key={idx}>
-            <span>{text}</span>
+            <span>
+              <MathText text={text} />
+            </span>
             {idx < blankCount && (
               <button
                 type="button"
@@ -83,7 +86,14 @@ export default function MultiBlankWordBank({
                   cursor: locked.has(idx) ? "default" : slots[idx] ? "pointer" : "default",
                 }}
               >
-                {slots[idx] ? `${locked.has(idx) ? "✓ " : ""}${slots[idx]}` : `(${idx + 1})`}
+                {slots[idx] ? (
+                  <>
+                    {locked.has(idx) ? "✓ " : ""}
+                    <MathText text={slots[idx]} />
+                  </>
+                ) : (
+                  `(${idx + 1})`
+                )}
               </button>
             )}
           </Fragment>
@@ -114,7 +124,7 @@ export default function MultiBlankWordBank({
                   : undefined
               }
             >
-              {word}
+              <MathText text={word} />
             </button>
           );
         })}

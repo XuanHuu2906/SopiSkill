@@ -351,3 +351,102 @@ async def test_deepseek_sdk_rejects_unallowed_tool_and_falls_back_safely():
     assert '"name":"read_lesson"' in joined
     assert "event: tool_effect\n" not in joined
     assert "Safe reply." in joined
+
+
+async def test_deepseek_lesson_without_source_omits_read_source_and_detects_truncation():
+    from app.agents.providers import ProviderTransientError
+
+    seen_bodies: list[dict[str, Any]] = []
+
+    def handler_no_source(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        seen_bodies.append(body)
+        return httpx.Response(
+            200,
+            json=_chat_completion_tool_resp(
+                call_id="call_save_only",
+                tool_name="save_lesson",
+                arguments={
+                    "lesson": {
+                        "title": "Binary Tree Overview",
+                        "blocks": [
+                            {
+                                "type": "teach",
+                                "title": "What is a Binary Tree?",
+                                "paragraphs": [
+                                    "A binary tree stores hierarchical nodes where each parent points to at most a left child and right child."
+                                ],
+                            },
+                            {
+                                "type": "mc",
+                                "question": "At most how many children does each node in a binary tree have?",
+                                "options": ["One", "Two", "Four"],
+                                "answerIndex": 1,
+                            },
+                        ],
+                    }
+                },
+            ),
+        )
+
+    cfg = Settings(llm_provider="deepseek", llm_api_key="sk-test-deepseek")
+    provider = OpenAICompatibleProvider(cfg, transport=httpx.MockTransport(handler_no_source))
+    res = await generate_lesson_with_qa_loop(
+        topic="Binary Tree",
+        unit_title="Foundations",
+        lesson_title="What is a Binary Tree?",
+        language="vi",
+        learner_profile={"currentLevel": "beginner"},
+        provider=provider,
+        source_brief=None,
+        source_reader=None,
+        max_turns=6,
+    )
+    assert res.turns_used == 1
+    assert res.tools_called == ["save_lesson"]
+    assert res.qa.blocking_errors == []
+    assert seen_bodies[0]["tool_choice"] == {"type": "function", "function": {"name": "save_lesson"}}
+    assert seen_bodies[0]["max_tokens"] == 8000
+
+    def handler_truncated(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-trunc",
+                "object": "chat.completion",
+                "created": 1732500000,
+                "model": "deepseek-chat",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_trunc",
+                                    "type": "function",
+                                    "function": {"name": "save_lesson", "arguments": '{"lesson": {"title": "Cut'},
+                                }
+                            ],
+                        },
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {"prompt_tokens": 200, "completion_tokens": 8000, "total_tokens": 8200},
+            },
+        )
+
+    provider_trunc = OpenAICompatibleProvider(cfg, transport=httpx.MockTransport(handler_truncated))
+    with pytest.raises(ProviderTransientError, match="finish_reason=length"):
+        await generate_lesson_with_qa_loop(
+            topic="Binary Tree",
+            unit_title="Foundations",
+            lesson_title="What is a Binary Tree?",
+            language="vi",
+            learner_profile={"currentLevel": "beginner"},
+            provider=provider_trunc,
+            source_brief=None,
+            source_reader=None,
+            max_turns=6,
+        )

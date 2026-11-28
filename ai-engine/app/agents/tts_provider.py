@@ -16,6 +16,7 @@ import io
 import math
 import re
 import struct
+import urllib.parse
 import wave
 from dataclasses import dataclass
 from typing import Protocol
@@ -231,11 +232,92 @@ class OpenAICompatibleTTSProvider:
         )
 
 
+def _wav_duration_ms(wav_bytes: bytes) -> int | None:
+    """Read exact duration in milliseconds from a RIFF WAV header when valid."""
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if frames > 0 and rate > 0:
+                return max(400, int(round((frames / float(rate)) * 1000.0)))
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+class VieNeuTTSProvider:
+    """Adapter for `pnnbao97/VieNeu-TTS` (via dedicated HTTP service `TTS_BASE_URL` or local SDK)."""
+
+    name = "vieneu"
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        cfg = settings or get_settings()
+        self._cfg = cfg
+        self._base_url = (cfg.tts_base_url or "").strip().rstrip("/")
+        self._transport = transport
+
+    async def synthesize(self, text: str, *, language: str = "vi", voice: str | None = None) -> TtsSynthesisResult:
+        clean_text = (text or "").strip() or " "
+        selected_voice = (voice or "").strip() or ("Mai Anh" if language == "en" else "Hải Đăng")
+        # Normalize `tts_base_url` whether caller passed `http://host:8010` or `http://host:8010/v1`
+        if self._base_url or self._transport is not None:
+            base = self._base_url or "http://sopiskill-tts-vieneu:8010"
+            endpoint = f"{base}/audio/speech" if base.endswith("/v1") else f"{base}/v1/audio/speech"
+            headers = {"Content-Type": "application/json"}
+            if self._cfg.tts_api_key.strip():
+                headers["Authorization"] = f"Bearer {self._cfg.tts_api_key.strip()}"
+            payload = {
+                "model": self._cfg.tts_model or "vieneu-v3-turbo",
+                "voice": selected_voice,
+                "language": language,
+                "input": clean_text[:4000],
+                "response_format": "wav",
+            }
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self._cfg.tts_timeout_seconds,
+                    transport=self._transport,
+                ) as client:
+                    resp = await client.post(endpoint, headers=headers, json=payload)
+                    resp.raise_for_status()
+                    wav_bytes = resp.content
+                    header_dur = resp.headers.get("X-Audio-Duration-Ms")
+                    raw_voice = resp.headers.get("X-VieNeu-Voice")
+                    used_voice = urllib.parse.unquote(raw_voice) if raw_voice else selected_voice
+            except Exception as exc:
+                raise TtsSynthesisError(f"VieNeu TTS HTTP request failed ({type(exc).__name__}): {exc}") from exc
+
+            if not wav_bytes:
+                raise TtsSynthesisError("VieNeu TTS HTTP service returned empty audio bytes.")
+            duration_ms = int(header_dur) if (header_dur and header_dur.isdigit()) else _wav_duration_ms(wav_bytes)
+            words, final_duration_ms = estimate_word_timings(clean_text, total_duration_ms=duration_ms)
+            return TtsSynthesisResult(
+                audio_bytes=wav_bytes,
+                content_type="audio/wav",
+                file_ext="wav",
+                duration_ms=final_duration_ms,
+                words=words,
+                provider=self.name,
+                voice=used_voice,
+            )
+
+        raise TtsConfigError(
+            "TTS_PROVIDER=vieneu requires TTS_BASE_URL pointing to the VieNeu-TTS service (e.g. http://sopiskill-tts-vieneu:8010)."
+        )
+
+
 def get_tts_provider(settings: Settings | None = None) -> TTSProvider:
     cfg = settings or get_settings()
     kind = (cfg.tts_provider or "mock").strip().lower()
     if kind == "mock":
         return MockTTSProvider(cfg)
+    if kind in {"vieneu", "vieneu_tts", "vieneu-tts"}:
+        return VieNeuTTSProvider(cfg)
     if kind in {"local", "edge", "local_edge"}:
         return LocalWordBoundaryTTSProvider(cfg)
     if kind in {"openai_compatible", "cloud"}:

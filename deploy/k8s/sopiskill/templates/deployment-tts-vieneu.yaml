@@ -1,0 +1,105 @@
+{{- if .Values.ttsVieneu.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-tts-vieneu-cache
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tts-vieneu
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ttsVieneu.cacheSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-tts-vieneu
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tts-vieneu
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: tts-vieneu
+  template:
+    metadata:
+      labels:
+        {{- include "sopiskill.labels" . | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: tts-vieneu
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: tts-vieneu
+          image: {{ printf "%s:%s" .Values.images.ttsVieneu.repository .Values.images.ttsVieneu.tag | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ttsVieneu.port }}
+          env:
+            - name: VIENEU_MODE
+              value: {{ .Values.ttsVieneu.mode | default "" | quote }}
+            - name: VIENEU_BACKEND
+              value: {{ .Values.ttsVieneu.backend | quote }}
+            - name: VIENEU_PRECISION
+              value: {{ .Values.ttsVieneu.precision | quote }}
+            - name: VIENEU_SAMPLE_RATE
+              value: {{ .Values.ttsVieneu.sampleRate | quote }}
+            - name: VIENEU_DEFAULT_VOICE
+              value: {{ .Values.ttsVieneu.defaultVoice | quote }}
+            - name: OMP_NUM_THREADS
+              value: {{ .Values.ttsVieneu.ompThreads | default "4" | quote }}
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /data/hf-cache
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.ttsVieneu.port }}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.ttsVieneu.port }}
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.ttsVieneu.port }}
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.ttsVieneu.resources | nindent 12 }}
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: {{ include "sopiskill.fullname" . }}-tts-vieneu-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sopiskill.fullname" . }}-tts-vieneu
+  labels:
+    {{- include "sopiskill.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tts-vieneu
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: tts-vieneu
+  ports:
+    - name: http
+      port: {{ .Values.ttsVieneu.port }}
+      targetPort: {{ .Values.ttsVieneu.port }}
+{{- end }}

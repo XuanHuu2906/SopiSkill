@@ -19,6 +19,9 @@ images:
   aiEngine:
     repository: sopiskill-ai-py
     tag: local
+  ttsVieneu:
+    repository: sopiskill-tts-vieneu
+    tag: local
   pgvector:
     repository: pgvector/pgvector
     tag: pg16
@@ -223,3 +226,21 @@ ingress:
   sseProxyReadTimeout: "300"
   sseProxySendTimeout: "300"
   apiBodySize: "30m"
+
+ttsVieneu:
+  enabled: false
+  port: 8010
+  mode: v3nano
+  backend: onnx
+  precision: int8
+  sampleRate: "24000"
+  defaultVoice: "Mai Anh"
+  ompThreads: "4"
+  cacheSize: 2Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 4000m
+      memory: 2560Mi

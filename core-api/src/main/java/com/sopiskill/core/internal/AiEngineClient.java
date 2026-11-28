@@ -60,6 +60,10 @@ public class AiEngineClient {
     }
 
     public Map<String, Object> postJson(String path, Map<String, Object> payload, String correlationId) {
+        return postJson(path, payload, correlationId, Duration.ofSeconds(30));
+    }
+
+    public Map<String, Object> postJson(String path, Map<String, Object> payload, String correlationId, Duration timeout) {
         return circuitBreaker.executeSupplier(() -> {
             byte[] rawBody = json.toJson(payload).getBytes(StandardCharsets.UTF_8);
             Map<String, String> signed = signer.signHeaders("POST", path, rawBody, correlationId);
@@ -67,7 +71,7 @@ public class AiEngineClient {
 
             HttpRequest.Builder req = HttpRequest.newBuilder()
                     .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(30))
+                    .timeout(timeout)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(rawBody));
             signed.forEach(req::header);
@@ -172,35 +176,150 @@ public class AiEngineClient {
             Map<String, Object> resp = postJson("/internal/interview/questions", reqBody, correlationId);
             List<Map<String, Object>> qs = (List<Map<String, Object>>) resp.get("questions");
             if (qs != null && !qs.isEmpty()) {
-                return qs;
+                return ensureStructuredChoices(qs, topic, language);
             }
         } catch (Exception ex) {
             log.warn("ai_engine_interview_questions_fallback errorType={}", ex.getClass().getSimpleName());
         }
-        List<String> fallback = fetchInterviewQuestionsFallback(topic, language);
-        List<Map<String, Object>> structured = new java.util.ArrayList<>();
-        for (int i = 0; i < fallback.size(); i++) {
-            structured.add(Map.of("index", i, "prompt", fallback.get(i), "kind", "freeform", "choices", List.of()));
-        }
-        return structured;
+        return defaultStructuredInterviewQuestions(topic, language);
     }
 
-    private List<String> fetchInterviewQuestionsFallback(String topic, String language) {
+    /**
+     * Guarantee every interview slot has selectable {@code kind} ({@code single}/{@code multi}) and non-empty {@code choices}.
+     * Preserves any valid prompt/choices returned by AI or stored in DB, backfilling only missing choices.
+     */
+    public List<Map<String, Object>> ensureStructuredChoices(
+            List<?> rawQuestions,
+            String topic,
+            String language
+    ) {
+        List<Map<String, Object>> defaults = defaultStructuredInterviewQuestions(topic, language);
+        List<Map<String, Object>> out = new java.util.ArrayList<>(defaults.size());
+        int count = Math.max(defaults.size(), rawQuestions == null ? 0 : rawQuestions.size());
+        for (int i = 0; i < count; i++) {
+            Map<String, Object> def = i < defaults.size() ? defaults.get(i) : defaults.get(defaults.size() - 1);
+            Object rawItem = (rawQuestions != null && i < rawQuestions.size()) ? rawQuestions.get(i) : null;
+            if (rawItem instanceof Map<?, ?> m) {
+                Object rawPrompt = m.get("prompt");
+                String prompt = (rawPrompt != null && !String.valueOf(rawPrompt).isBlank())
+                        ? String.valueOf(rawPrompt).trim()
+                        : String.valueOf(def.get("prompt"));
+                String rawKind = m.get("kind") == null ? "freeform" : String.valueOf(m.get("kind"));
+                List<String> validChoices = new java.util.ArrayList<>();
+                if (m.get("choices") instanceof List<?> rawChoices) {
+                    for (Object c : rawChoices) {
+                        if (c != null && !String.valueOf(c).isBlank()) {
+                            validChoices.add(String.valueOf(c).trim());
+                        }
+                    }
+                }
+                boolean hasChoices = validChoices.size() >= 2 && ("single".equals(rawKind) || "multi".equals(rawKind));
+                Map<String, Object> item = new java.util.LinkedHashMap<>();
+                item.put("index", i);
+                item.put("prompt", prompt);
+                item.put("kind", hasChoices ? rawKind : String.valueOf(def.get("kind")));
+                item.put("choices", hasChoices ? validChoices : def.get("choices"));
+                out.add(item);
+            } else if (rawItem != null && !String.valueOf(rawItem).isBlank()) {
+                Map<String, Object> item = new java.util.LinkedHashMap<>();
+                item.put("index", i);
+                item.put("prompt", String.valueOf(rawItem).trim());
+                item.put("kind", String.valueOf(def.get("kind")));
+                item.put("choices", def.get("choices"));
+                out.add(item);
+            } else if (i < defaults.size()) {
+                out.add(def);
+            }
+        }
+        return out;
+    }
+
+    public List<Map<String, Object>> defaultStructuredInterviewQuestions(String topic, String language) {
         if ("en".equals(language)) {
             return List.of(
-                    "Have you worked with " + topic + " before?",
-                    "What concrete goal do you want to achieve with " + topic + "?",
-                    "How many hours per week can you dedicate to learning?",
-                    "Which learning style helps you most (examples, diagrams, projects)?",
-                    "Do you prefer a quick practical overview or a deep dive?"
+                    Map.of(
+                            "index", 0,
+                            "prompt", "Have you worked with " + topic + " before?",
+                            "kind", "single",
+                            "choices", List.of(
+                                    "Complete beginner — never used it",
+                                    "Some experience — know the basics",
+                                    "Intermediate — use it occasionally",
+                                    "Advanced — want to deepen mastery"
+                            )
+                    ),
+                    Map.of(
+                            "index", 1,
+                            "prompt", "What concrete goal do you want to achieve with " + topic + "?",
+                            "kind", "single",
+                            "choices", List.of(
+                                    "Understand core concepts quickly",
+                                    "Build a clean working project",
+                                    "Prepare for work or interviews",
+                                    "Apply it to my own documents"
+                            )
+                    ),
+                    Map.of(
+                            "index", 2,
+                            "prompt", "How many hours per week can you dedicate to learning?",
+                            "kind", "single",
+                            "choices", List.of("1-2 hours per week", "3 hours per week", "5+ hours per week")
+                    ),
+                    Map.of(
+                            "index", 3,
+                            "prompt", "Which learning style helps you most (examples, diagrams, projects)?",
+                            "kind", "multi",
+                            "choices", List.of("Hands-on examples", "Visual diagrams", "Mini projects", "Clear theory")
+                    ),
+                    Map.of(
+                            "index", 4,
+                            "prompt", "Do you prefer a quick practical overview or a deep dive?",
+                            "kind", "single",
+                            "choices", List.of("Quick practical overview", "Balanced theory & practice", "Deep dive into core ideas")
+                    )
             );
         }
         return List.of(
-                "Bạn đã từng tiếp xúc hay làm việc với " + topic + " chưa?",
-                "Mục tiêu cụ thể bạn muốn đạt được với " + topic + " là gì?",
-                "Mỗi tuần bạn có thể dành khoảng bao nhiêu giờ để học?",
-                "Bạn thích học theo phong cách nào (ví dụ thực tế, sơ đồ, dự án)?",
-                "Bạn muốn nắm tổng quan nhanh hay đi sâu vào nền tảng?"
+                Map.of(
+                        "index", 0,
+                        "prompt", "Bạn đã từng tiếp xúc hay làm việc với " + topic + " chưa?",
+                        "kind", "single",
+                        "choices", List.of(
+                                "Mới bắt đầu từ con số 0",
+                                "Đã biết cơ bản một chút",
+                                "Đã dùng thực tế ở mức trung bình",
+                                "Khá vững, muốn đào sâu chuyên môn"
+                        )
+                ),
+                Map.of(
+                        "index", 1,
+                        "prompt", "Mục tiêu cụ thể bạn muốn đạt được với " + topic + " là gì?",
+                        "kind", "single",
+                        "choices", List.of(
+                                "Nắm nhanh khái niệm cốt lõi",
+                                "Tự làm được bài tập / dự án nhỏ",
+                                "Ứng dụng ngay vào công việc",
+                                "Hiểu sâu tài liệu chuyên ngành"
+                        )
+                ),
+                Map.of(
+                        "index", 2,
+                        "prompt", "Mỗi tuần bạn có thể dành khoảng bao nhiêu giờ để học?",
+                        "kind", "single",
+                        "choices", List.of("1-2 giờ mỗi tuần", "Khoảng 3 giờ mỗi tuần", "5 giờ trở lên mỗi tuần")
+                ),
+                Map.of(
+                        "index", 3,
+                        "prompt", "Bạn thích học theo phong cách nào (ví dụ thực tế, sơ đồ, dự án)?",
+                        "kind", "multi",
+                        "choices", List.of("Ví dụ thực tế", "Sơ đồ trực quan", "Dự án nhỏ", "Giải thích lý thuyết rõ ràng")
+                ),
+                Map.of(
+                        "index", 4,
+                        "prompt", "Bạn muốn nắm tổng quan nhanh hay đi sâu vào nền tảng?",
+                        "kind", "single",
+                        "choices", List.of("Tổng quan nhanh, dễ áp dụng", "Cân bằng lý thuyết và thực hành", "Đi sâu vào bản chất nền tảng")
+                )
         );
     }
 
@@ -258,7 +377,7 @@ public class AiEngineClient {
             if (sourceBrief != null) {
                 reqBody.put("sourceBrief", sourceBrief);
             }
-            Map<String, Object> resp = postJson("/internal/proposal/generate", reqBody, correlationId);
+            Map<String, Object> resp = postJson("/internal/proposal/generate", reqBody, correlationId, Duration.ofSeconds(60));
             Object prop = resp.get("proposal");
             if (prop instanceof Map<?, ?> map) {
                 return (Map<String, Object>) map;

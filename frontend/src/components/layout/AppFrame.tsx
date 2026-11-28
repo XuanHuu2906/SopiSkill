@@ -35,6 +35,16 @@ function courseIsActive(pathname: string, courseId: string) {
   return pathname === `/course/${courseId}` || pathname.startsWith(`/course/${courseId}/`);
 }
 
+function courseHref(course: { id: string; status?: string }) {
+  if (course.status === "interviewing") {
+    return `/new/interview?courseId=${encodeURIComponent(course.id)}`;
+  }
+  if (course.status === "proposal_ready") {
+    return `/new/proposal?courseId=${encodeURIComponent(course.id)}`;
+  }
+  return `/course/${course.id}`;
+}
+
 function CourseRow({
   course,
   active,
@@ -44,7 +54,7 @@ function CourseRow({
 }) {
   return (
     <Link
-      href={`/course/${course.id}`}
+      href={courseHref(course)}
       className={`nav-row${active ? " is-active" : ""}`}
       aria-label={`${course.topic}, đã học ${course.progress.percent}%`}
     >

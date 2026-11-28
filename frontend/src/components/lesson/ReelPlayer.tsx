@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import { getCachedReelClip, putCachedReelClip } from "@/lib/offline/db";
 import FigureRenderer, { FunctionPlotSvg, type LessonFigure } from "./FigureRenderer";
-import { CodeBlockCard, FormulaMath } from "./MathText";
+import MathText, { CodeBlockCard, FormulaMath } from "./MathText";
 
 export const REEL_SPEEDS = [1, 1.25, 1.5] as const;
 export type ReelSpeed = (typeof REEL_SPEEDS)[number];
@@ -634,6 +634,8 @@ export default function ReelPlayer({
               onClick={() => goToScene(idx)}
               style={{
                 height: 6,
+                minHeight: 0,
+                minWidth: 0,
                 border: 0,
                 padding: 0,
                 borderRadius: 99,
@@ -718,10 +720,12 @@ export default function ReelPlayer({
         {currentScene.kind === "title" && (
           <div style={{ textAlign: "center", padding: "18px 8px" }}>
             <h2 style={{ fontSize: 24, fontWeight: 800, color: "#1d1b18", margin: "0 0 8px" }}>
-              {currentScene.title}
+              <MathText text={currentScene.title ?? ""} />
             </h2>
             {currentScene.subtitle && (
-              <p style={{ fontSize: 15, color: "#5c564d", margin: 0 }}>{currentScene.subtitle}</p>
+              <p style={{ fontSize: 15, color: "#5c564d", margin: 0 }}>
+                <MathText text={currentScene.subtitle} />
+              </p>
             )}
           </div>
         )}
@@ -738,7 +742,7 @@ export default function ReelPlayer({
               color: "#1d1b18",
             }}
           >
-            {currentScene.statement}
+            <MathText text={currentScene.statement ?? ""} />
           </blockquote>
         )}
 
@@ -746,7 +750,7 @@ export default function ReelPlayer({
           <div>
             {currentScene.title && (
               <h3 style={{ fontSize: 18, fontWeight: 750, margin: "0 0 12px", color: "#1d1b18" }}>
-                {currentScene.title}
+                <MathText text={currentScene.title} />
               </h3>
             )}
             <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 8 }}>
@@ -760,7 +764,7 @@ export default function ReelPlayer({
                     transition: "opacity 0.25s ease",
                   }}
                 >
-                  {item}
+                  <MathText text={item} />
                 </li>
               ))}
             </ul>
@@ -778,10 +782,10 @@ export default function ReelPlayer({
           >
             <div style={{ fontSize: 12, fontWeight: 700, color: "#9a3412", marginBottom: 4 }}>THUẬT NGỮ</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: "#1d1b18", marginBottom: 6 }}>
-              {currentScene.term}
+              <MathText text={currentScene.term ?? ""} />
             </div>
             <p style={{ margin: 0, fontSize: 14.5, color: "#3f3b35", lineHeight: 1.5 }}>
-              {currentScene.definition}
+              <MathText text={currentScene.definition ?? ""} />
             </p>
           </div>
         )}
@@ -790,23 +794,31 @@ export default function ReelPlayer({
           <div>
             {currentScene.title && (
               <h3 style={{ fontSize: 17, fontWeight: 750, margin: "0 0 12px", color: "#1d1b18" }}>
-                {currentScene.title}
+                <MathText text={currentScene.title} />
               </h3>
             )}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
               <div style={{ padding: 12, borderRadius: 10, background: "#eef6f0", border: "1px solid #b7d8bf" }}>
-                <div style={{ fontWeight: 700, color: "#1b5e20", marginBottom: 6 }}>{currentScene.leftTitle}</div>
+                <div style={{ fontWeight: 700, color: "#1b5e20", marginBottom: 6 }}>
+                  <MathText text={currentScene.leftTitle ?? ""} />
+                </div>
                 <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, display: "grid", gap: 4 }}>
                   {(currentScene.leftPoints ?? []).map((p, i) => (
-                    <li key={i}>{p}</li>
+                    <li key={i}>
+                      <MathText text={p} />
+                    </li>
                   ))}
                 </ul>
               </div>
               <div style={{ padding: 12, borderRadius: 10, background: "#fdf0ea", border: "1px solid #e7b9a6" }}>
-                <div style={{ fontWeight: 700, color: "#9a3412", marginBottom: 6 }}>{currentScene.rightTitle}</div>
+                <div style={{ fontWeight: 700, color: "#9a3412", marginBottom: 6 }}>
+                  <MathText text={currentScene.rightTitle ?? ""} />
+                </div>
                 <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, display: "grid", gap: 4 }}>
                   {(currentScene.rightPoints ?? []).map((p, i) => (
-                    <li key={i}>{p}</li>
+                    <li key={i}>
+                      <MathText text={p} />
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -867,7 +879,7 @@ export default function ReelPlayer({
           <div>
             {currentScene.title && (
               <h3 style={{ fontSize: 16.5, fontWeight: 750, margin: "0 0 10px", color: "#1d1b18" }}>
-                {currentScene.title}
+                <MathText text={currentScene.title} />
               </h3>
             )}
             <div style={{ display: "grid", gap: 10 }}>
@@ -880,10 +892,15 @@ export default function ReelPlayer({
                     background: idx === activeBeatIdx ? "#fff7ed" : "#f9f7f3",
                     border: idx === activeBeatIdx ? "1px solid #f59e0b" : "1px solid var(--linen)",
                     textAlign: "center",
+                    overflowX: "auto",
                   }}
                 >
                   <FormulaMath latex={st.latex} display />
-                  {st.note && <div style={{ fontSize: 12.5, color: "#5c564d", marginTop: 4 }}>{st.note}</div>}
+                  {st.note && (
+                    <div style={{ fontSize: 12.5, color: "#5c564d", marginTop: 4 }}>
+                      <MathText text={st.note} />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -894,7 +911,7 @@ export default function ReelPlayer({
           <div>
             {currentScene.title && (
               <h3 style={{ fontSize: 16.5, fontWeight: 750, margin: "0 0 6px", color: "#1d1b18" }}>
-                {currentScene.title}
+                <MathText text={currentScene.title} />
               </h3>
             )}
             <ReelCompiledPlotSvg plot={currentScene.plot} />
@@ -904,10 +921,12 @@ export default function ReelPlayer({
         {currentScene.kind === "ready" && (
           <div style={{ textAlign: "center", padding: "14px 8px" }}>
             <h3 style={{ fontSize: 21, fontWeight: 800, color: "#1d1b18", margin: "0 0 8px" }}>
-              {currentScene.title || "Sẵn sàng thực hành?"}
+              <MathText text={currentScene.title || "Sẵn sàng thực hành?"} />
             </h3>
             {currentScene.subtitle && (
-              <p style={{ fontSize: 14.5, color: "#5c564d", margin: "0 0 14px" }}>{currentScene.subtitle}</p>
+              <p style={{ fontSize: 14.5, color: "#5c564d", margin: "0 0 14px" }}>
+                <MathText text={currentScene.subtitle} />
+              </p>
             )}
             {onStartPractice && (
               <button
@@ -924,12 +943,26 @@ export default function ReelPlayer({
           </div>
         )}
 
-        {currentScene.kind === "fallback" && (
-          <div style={{ padding: "10px 4px" }}>
-            <h3 style={{ fontSize: 17, fontWeight: 700, margin: "0 0 6px" }}>{currentScene.title || "Tóm tắt"}</h3>
-            <p style={{ margin: 0, fontSize: 14.5, color: "#3f3b35" }}>{currentScene.statement || currentScene.subtitle}</p>
-          </div>
-        )}
+        {currentScene.kind === "fallback" && (() => {
+          const titleText = currentScene.title || "Tóm tắt";
+          const rawBody = currentScene.statement || currentScene.subtitle || "";
+          const bodyText =
+            rawBody && rawBody.trim() !== titleText.trim()
+              ? rawBody
+              : (currentScene.beats?.[0]?.say ?? "");
+          return (
+            <div style={{ padding: "10px 4px" }}>
+              <h3 style={{ fontSize: 17, fontWeight: 700, margin: "0 0 8px" }}>
+                <MathText text={titleText} />
+              </h3>
+              {bodyText && (
+                <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55, color: "#3f3b35" }}>
+                  <MathText text={bodyText} />
+                </p>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Word-by-word Karaoke Captions */}

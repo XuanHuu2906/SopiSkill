@@ -210,3 +210,70 @@ async def test_tutor_stream_rejects_answer_keys_and_streams_verified_citations(a
     r_del = await ai_client.delete("/internal/rag/users/usr_a", headers=headers_d)
     assert r_del.status_code == 200
     assert r_del.json()["deletedChunks"] == 1
+
+
+async def test_openai_provider_hybrid_structured_interview_choices_and_fallback(monkeypatch):
+    provider = OpenAICompatibleProvider(
+        Settings(
+            llm_provider="openai_compatible",
+            llm_api_key="test-key",
+            llm_base_url="https://llm.invalid/v1",
+            llm_model="deepseek-chat",
+        )
+    )
+
+    async def fake_chat_json(sys_p: str, user_p: str, *, max_tokens: int = 1200):
+        assert "Binary Tree" in user_p
+        assert "claims" in user_p
+        return (
+            {
+                "questions": [
+                    {
+                        "index": 0,
+                        "prompt": "Bạn đã làm việc với Binary Tree đến mức nào?",
+                        "kind": "single",
+                        "choices": [
+                            "Mới bắt đầu tìm hiểu cấu trúc cây",
+                            "Đã biết duyệt DFS/BFS cơ bản",
+                            "Đã dùng BST và giải bài tập trung bình",
+                            "Thành thạo AVL/Red-Black Tree nâng cao",
+                        ],
+                    },
+                    {
+                        "index": 1,
+                        "prompt": "Mục tiêu chính khi học Binary Tree là gì?",
+                        "kind": "single",
+                        "choices": [
+                            "Nắm vững duyệt cây và đệ quy",
+                            "Luyện phỏng vấn thuật toán",
+                        ],
+                    },
+                    # Intentionally omit index 4 to verify per-slot structured fallback
+                ]
+            },
+            provider_usage_stub(),
+        )
+
+    def provider_usage_stub():
+        from app.schemas.internal import LlmUsageOut
+
+        return LlmUsageOut(provider="openai_compatible", model="deepseek-chat", totalTokens=120)
+
+    monkeypatch.setattr(provider, "_chat_json", fake_chat_json)
+    items, usage = await provider.generate_interview_questions(
+        "Binary Tree",
+        "vi",
+        source_brief={"suggestedTopic": "Binary Tree", "summary": "Tree traversal", "claims": ["DFS vs BFS"]},
+    )
+    assert usage.totalTokens == 120
+    assert len(items) == 5
+    # Slots 0 and 1 come from LLM with topic-tailored choices
+    assert items[0].kind == "single"
+    assert "DFS/BFS" in items[0].choices[1]
+    assert items[1].kind == "single"
+    assert len(items[1].choices) == 2
+    # Slots 2 and 3 use standardized hybrid choices
+    assert items[2].kind == "single" and len(items[2].choices) == 3
+    assert items[3].kind == "multi" and len(items[3].choices) == 4
+    # Slot 4 fell back to default structured choices (never empty freeform)
+    assert items[4].kind == "single" and len(items[4].choices) == 3

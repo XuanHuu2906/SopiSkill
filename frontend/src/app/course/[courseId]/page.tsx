@@ -174,6 +174,16 @@ export default function CoursePage() {
     },
   });
 
+  // Redirect unapproved courses back to their setup step instead of showing an empty 0/0 syllabus
+  useEffect(() => {
+    if (!course.data) return;
+    if (course.data.status === "interviewing") {
+      router.replace(`/new/interview?courseId=${encodeURIComponent(courseId)}`);
+    } else if (course.data.status === "proposal_ready") {
+      router.replace(`/new/proposal?courseId=${encodeURIComponent(courseId)}`);
+    }
+  }, [course.data, courseId, router]);
+
   // Warm Next.js App Router JS chunks + SW cache for up to 3 ready lessons & /complete
   useEffect(() => {
     if (!course.data || (typeof navigator !== "undefined" && !navigator.onLine)) return;
@@ -250,6 +260,21 @@ export default function CoursePage() {
   if (!courseId) return <p className="muted">Thiếu courseId.</p>;
   if (authLoading) return <p className="muted">Đang kiểm tra phiên đăng nhập…</p>;
   if (!isAuthenticated) return <p className="muted">Đang chuyển tới trang đăng nhập…</p>;
+  if (course.data?.status === "interviewing") {
+    return <p className="muted">Đang chuyển tới bước khảo sát mục tiêu khóa học…</p>;
+  }
+  if (course.data?.status === "proposal_ready") {
+    return (
+      <div className="course-page">
+        <p className="muted">
+          Khóa học này đang chờ duyệt kế hoạch.{" "}
+          <Link className="link" href={`/new/proposal?courseId=${encodeURIComponent(courseId)}`}>
+            Mở kế hoạch khóa học
+          </Link>
+        </p>
+      </div>
+    );
+  }
 
   const progress = course.data?.progress;
   // `nextLesson` is the backend's recommendation, but /learning-path is behind
@@ -297,10 +322,17 @@ export default function CoursePage() {
             </h1>
             {switcherOpen && allCourses.data && (
               <div className="course-switcher-menu" role="menu" aria-label="Chuyển khóa học">
-                {allCourses.data.items.map((item) => (
+                {allCourses.data.items.map((item) => {
+                  const itemHref =
+                    item.status === "interviewing"
+                      ? `/new/interview?courseId=${encodeURIComponent(item.id)}`
+                      : item.status === "proposal_ready"
+                        ? `/new/proposal?courseId=${encodeURIComponent(item.id)}`
+                        : `/course/${item.id}`;
+                  return (
                   <Link
                     key={item.id}
-                    href={`/course/${item.id}`}
+                    href={itemHref}
                     role="menuitem"
                     className={`course-switcher-item${item.id === courseId ? " is-current" : ""}`}
                     onClick={() => setSwitcherOpen(false)}
@@ -316,7 +348,8 @@ export default function CoursePage() {
                     </span>
                     <span className="caption">{item.progress.percent}%</span>
                   </Link>
-                ))}
+                  );
+                })}
                 <Link
                   href="/new"
                   role="menuitem"

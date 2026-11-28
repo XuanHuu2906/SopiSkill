@@ -67,6 +67,45 @@ async def test_mock_tts_provider_generates_valid_wav_and_monotonic_word_timings(
     with pytest.raises(TtsConfigError):
         get_tts_provider(Settings(tts_provider="openai_compatible", tts_api_key=""))
 
+    # Fail-fast when vieneu selected without base URL
+    with pytest.raises(TtsConfigError):
+        await get_tts_provider(Settings(tts_provider="vieneu", tts_base_url="")).synthesize("Xin chào")
+
+
+@pytest.mark.asyncio
+async def test_vieneu_tts_provider_synthesizes_wav_and_syncs_duration():
+    from app.agents.tts_provider import VieNeuTTSProvider, _generate_minimal_wav
+
+    sample_wav = _generate_minimal_wav(2400)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://sopiskill-tts-vieneu:8010/v1/audio/speech"
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["voice"] == "Hải Đăng"
+        assert body["response_format"] == "wav"
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "audio/wav",
+                "X-Audio-Duration-Ms": "2400",
+                "X-VieNeu-Voice": "H%E1%BA%A3i%20%C4%90%C4%83ng",
+            },
+            content=sample_wav,
+        )
+
+    provider = VieNeuTTSProvider(
+        Settings(tts_provider="vieneu", tts_base_url="http://sopiskill-tts-vieneu:8010"),
+        transport=httpx.MockTransport(handler),
+    )
+    res = await provider.synthesize("Cây nhị phân Binary Tree gồm node gốc và lá.", language="vi")
+    assert res.provider == "vieneu"
+    assert res.content_type == "audio/wav"
+    assert res.file_ext == "wav"
+    assert res.duration_ms == 2400
+    assert res.voice == "Hải Đăng"
+    assert res.words[0].startMs >= 0
+    assert res.words[-1].endMs <= 2400
+
 
 @pytest.mark.asyncio
 async def test_two_phase_reel_compiler_all_11_scenes_grounded_figure_and_zero_answer_keys():

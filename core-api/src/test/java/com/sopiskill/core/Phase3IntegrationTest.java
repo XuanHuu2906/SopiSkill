@@ -179,6 +179,9 @@ class Phase3IntegrationTest {
             HttpResponse<String> ansResp = postAuthed("/v1/courses/" + courseId + "/interview/answer",
                     cookieHeader, csrfCookie, Map.of("position", pos, "answer", "Intermediate learner."));
             assertThat(ansResp.statusCode()).isEqualTo(200);
+            Map<String, Object> ansJson = parseMap(ansResp.body());
+            assertThat((List<String>) ansJson.get("answers")).hasSize(pos + 1);
+            assertThat(((List<String>) ansJson.get("answers")).get(pos)).isEqualTo("Intermediate learner.");
         }
 
         // 5. Approve course -> get ordered lesson IDs -> simulate Lesson-1-First callback ONLY for Lesson 1

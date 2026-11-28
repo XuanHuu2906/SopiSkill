@@ -221,6 +221,10 @@ PLANNER_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "properties": {
                             "title": {"type": "string"},
                             "summary": {"type": "string"},
+                            "outcomes": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
                             "estimatedHours": {"type": "number"},
                             "units": {
                                 "type": "array",
@@ -597,12 +601,97 @@ REEL_SCRIPT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                                 "rightPoints": {"type": "array", "items": {"type": "string"}},
                                 "sourceFigureId": {"type": "string"},
                                 "figure": {"type": "object"},
-                                "chart": {"type": "object"},
+                                "chart": {
+                                    "type": "object",
+                                    "properties": {
+                                        "chartType": {"type": "string", "enum": ["bar", "line", "donut"]},
+                                        "unit": {"type": "string"},
+                                        "series": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "label": {"type": "string"},
+                                                    "value": {"type": "number"},
+                                                },
+                                                "required": ["label", "value"],
+                                            },
+                                        },
+                                    },
+                                },
                                 "code": {"type": "string"},
                                 "language": {"type": "string"},
                                 "highlightLines": {"type": "array", "items": {"type": "integer"}},
-                                "steps": {"type": "array", "items": {"type": "object"}},
-                                "plot": {"type": "object"},
+                                "latex": {"type": "string"},
+                                "steps": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "latex": {"type": "string"},
+                                            "note": {"type": "string"},
+                                        },
+                                        "required": ["latex"],
+                                    },
+                                },
+                                "plot": {
+                                    "type": "object",
+                                    "properties": {
+                                        "xRange": {"type": "array", "items": {"type": "number"}},
+                                        "yRange": {"type": "array", "items": {"type": "number"}},
+                                        "xLabel": {"type": "string"},
+                                        "yLabel": {"type": "string"},
+                                        "functions": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "expr": {"type": "string"},
+                                                    "label": {"type": "string"},
+                                                    "color": {"type": "string"},
+                                                },
+                                                "required": ["expr"],
+                                            },
+                                        },
+                                        "points": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "x": {"type": "number"},
+                                                    "y": {"type": "number"},
+                                                    "label": {"type": "string"},
+                                                },
+                                                "required": ["x", "y"],
+                                            },
+                                        },
+                                        "tangents": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "x": {"type": "number"},
+                                                    "expr": {"type": "string"},
+                                                    "label": {"type": "string"},
+                                                },
+                                                "required": ["x", "expr"],
+                                            },
+                                        },
+                                        "areas": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "fromX": {"type": "number"},
+                                                    "toX": {"type": "number"},
+                                                    "expr": {"type": "string"},
+                                                    "label": {"type": "string"},
+                                                },
+                                                "required": ["fromX", "toX", "expr"],
+                                            },
+                                        },
+                                    },
+                                },
                                 "ctaLabel": {"type": "string"},
                                 "beats": {
                                     "type": "array",
